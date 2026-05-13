@@ -1,0 +1,12 @@
+[project]
+name = "coco-usecase-insights"
+version = "1.0.0"
+description = "CoCo Partner Use Case Intelligence Dashboard"
+requires-python = ">=3.11"
+dependencies = [
+    "streamlit>=1.35.0",
+    "pandas",
+    "plotly",
+    "snowflake-connector-python",
+    "snowflake-ml-python",
+]
