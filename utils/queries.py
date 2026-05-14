@@ -419,6 +419,155 @@ def get_source_breakdown(_conn, region=None):
     return _conn.query(query)
 
 @st.cache_data(ttl=timedelta(minutes=30))
+def get_use_case_type_patterns(_conn, region=None, source=None):
+    tf = _theater_filter(region)
+    sf = _source_filter(source or "")
+    query = f"""{USE_CASE_BASE}
+    SELECT 
+        TECHNICAL_USE_CASE,
+        COUNT(*) AS use_case_count,
+        SUM(USE_CASE_EACV) AS total_eacv,
+        COUNT(DISTINCT PARTNER_NAME) AS partner_count,
+        COUNT(CASE WHEN USE_CASE_STAGE IN ('4 - Use Case Won / Migration Plan', '5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed') THEN 1 END) AS won_plus,
+        LISTAGG(DISTINCT PARTNER_NAME, ', ') WITHIN GROUP (ORDER BY PARTNER_NAME) AS partners_involved
+    FROM use_cases
+    WHERE TECHNICAL_USE_CASE IS NOT NULL{tf}{sf}
+    GROUP BY TECHNICAL_USE_CASE
+    ORDER BY use_case_count DESC
+    LIMIT 15
+    """
+    return _conn.query(query)
+
+@st.cache_data(ttl=timedelta(minutes=30))
+def get_workload_patterns(_conn, region=None, source=None):
+    tf = _theater_filter(region)
+    sf = _source_filter(source or "")
+    query = f"""{USE_CASE_BASE}
+    SELECT 
+        WORKLOADS,
+        COUNT(*) AS use_case_count,
+        SUM(USE_CASE_EACV) AS total_eacv,
+        COUNT(DISTINCT PARTNER_NAME) AS partner_count
+    FROM use_cases
+    WHERE WORKLOADS IS NOT NULL AND TRIM(WORKLOADS) != ''{tf}{sf}
+    GROUP BY WORKLOADS
+    ORDER BY use_case_count DESC
+    LIMIT 15
+    """
+    return _conn.query(query)
+
+@st.cache_data(ttl=timedelta(minutes=30))
+def get_competitive_landscape(_conn, region=None, source=None):
+    tf = _theater_filter(region)
+    sf = _source_filter(source or "")
+    query = f"""{USE_CASE_BASE}
+    SELECT 
+        COMPETITORS,
+        COUNT(*) AS use_case_count,
+        SUM(USE_CASE_EACV) AS total_eacv,
+        COUNT(DISTINCT PARTNER_NAME) AS partner_count
+    FROM use_cases
+    WHERE COMPETITORS IS NOT NULL AND TRIM(COMPETITORS) != ''{tf}{sf}
+    GROUP BY COMPETITORS
+    ORDER BY use_case_count DESC
+    LIMIT 12
+    """
+    return _conn.query(query)
+
+@st.cache_data(ttl=timedelta(minutes=30))
+def get_comment_narratives(_conn, region=None, source=None):
+    tf = _theater_filter(region)
+    sf = _source_filter(source or "")
+    query = f"""{USE_CASE_BASE}
+    SELECT 
+        PARTNER_NAME, ACCOUNT_NAME, USE_CASE_NAME, USE_CASE_STAGE, USE_CASE_EACV,
+        TECHNICAL_USE_CASE, WORKLOADS, COMPETITORS,
+        SUBSTR(SE_COMMENTS, 1, 600) AS SE_COMMENTS_EXCERPT,
+        SUBSTR(PARTNER_COMMENTS, 1, 600) AS PARTNER_COMMENTS_EXCERPT,
+        SUBSTR(SPECIALIST_COMMENTS, 1, 400) AS SPECIALIST_COMMENTS_EXCERPT,
+        SUBSTR(MEDDPICC_IDENTIFY_PAIN, 1, 300) AS CUSTOMER_PAIN,
+        COCO_MENTION_SOURCE, DAYS_IN_CURRENT_STAGE
+    FROM use_cases
+    WHERE (SE_COMMENTS IS NOT NULL OR PARTNER_COMMENTS IS NOT NULL OR SPECIALIST_COMMENTS IS NOT NULL){tf}{sf}
+    ORDER BY USE_CASE_EACV DESC NULLS LAST
+    LIMIT 30
+    """
+    return _conn.query(query)
+
+@st.cache_data(ttl=timedelta(minutes=30))
+def get_partner_workload_cross(_conn, region=None, source=None):
+    tf = _theater_filter(region)
+    sf = _source_filter(source or "")
+    query = f"""{USE_CASE_BASE}
+    SELECT 
+        PARTNER_NAME,
+        COUNT(CASE WHEN WORKLOADS ILIKE '%AI%' THEN 1 END) AS ai_use_cases,
+        COUNT(CASE WHEN WORKLOADS ILIKE '%Data Engineering%' THEN 1 END) AS de_use_cases,
+        COUNT(CASE WHEN WORKLOADS ILIKE '%Analytics%' THEN 1 END) AS analytics_use_cases,
+        COUNT(CASE WHEN WORKLOADS ILIKE '%Platform%' THEN 1 END) AS platform_use_cases,
+        COUNT(CASE WHEN WORKLOADS ILIKE '%Applications%' THEN 1 END) AS apps_use_cases,
+        COUNT(*) AS total_use_cases,
+        SUM(USE_CASE_EACV) AS total_eacv
+    FROM use_cases
+    WHERE 1=1{tf}{sf}
+    GROUP BY PARTNER_NAME
+    ORDER BY total_eacv DESC NULLS LAST
+    LIMIT 15
+    """
+    return _conn.query(query)
+
+@st.cache_data(ttl=timedelta(minutes=30))
+def get_regional_themes(_conn, source=None):
+    sf = _source_filter(source or "")
+    query = f"""{USE_CASE_BASE}
+    SELECT 
+        CASE 
+            WHEN THEATER_NAME IN ('AMSExpansion', 'USMajors', 'AMSAcquisition') THEN 'NoAM'
+            WHEN THEATER_NAME = 'EMEA' THEN 'EMEA'
+            WHEN THEATER_NAME = 'APJ' THEN 'APJ'
+            ELSE 'Other'
+        END AS REGION,
+        TECHNICAL_USE_CASE,
+        WORKLOADS,
+        COMPETITORS,
+        COUNT(*) AS use_case_count,
+        SUM(USE_CASE_EACV) AS total_eacv,
+        COUNT(DISTINCT PARTNER_NAME) AS partner_count,
+        LISTAGG(DISTINCT PARTNER_NAME, ', ') WITHIN GROUP (ORDER BY PARTNER_NAME) AS partners_involved,
+        COUNT(CASE WHEN USE_CASE_STAGE IN ('4 - Use Case Won / Migration Plan', '5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed') THEN 1 END) AS won_plus,
+        COUNT(CASE WHEN USE_CASE_STAGE = '7 - Deployed' THEN 1 END) AS deployed_count
+    FROM use_cases
+    WHERE 1=1{sf}
+    GROUP BY REGION, TECHNICAL_USE_CASE, WORKLOADS, COMPETITORS
+    ORDER BY REGION, total_eacv DESC NULLS LAST
+    """
+    return _conn.query(query)
+
+@st.cache_data(ttl=timedelta(minutes=30))
+def get_regional_comment_narratives(_conn, target_region, source=None):
+    sf = _source_filter(source or "")
+    region_cond = ""
+    if target_region == "NoAM":
+        region_cond = " AND THEATER_NAME IN ('AMSExpansion', 'USMajors', 'AMSAcquisition')"
+    elif target_region == "EMEA":
+        region_cond = " AND THEATER_NAME = 'EMEA'"
+    elif target_region == "APJ":
+        region_cond = " AND THEATER_NAME = 'APJ'"
+    query = f"""{USE_CASE_BASE}
+    SELECT 
+        PARTNER_NAME, ACCOUNT_NAME, USE_CASE_NAME, USE_CASE_STAGE, USE_CASE_EACV,
+        TECHNICAL_USE_CASE, WORKLOADS, COMPETITORS,
+        SUBSTR(SE_COMMENTS, 1, 400) AS SE_COMMENTS_EXCERPT,
+        SUBSTR(PARTNER_COMMENTS, 1, 400) AS PARTNER_COMMENTS_EXCERPT,
+        COCO_MENTION_SOURCE
+    FROM use_cases
+    WHERE (SE_COMMENTS IS NOT NULL OR PARTNER_COMMENTS IS NOT NULL){sf}{region_cond}
+    ORDER BY USE_CASE_EACV DESC NULLS LAST
+    LIMIT 10
+    """
+    return _conn.query(query)
+
+@st.cache_data(ttl=timedelta(minutes=30))
 def get_by_account_gvp(_conn, region=None, source=None):
     tf = _theater_filter(region)
     sf = _source_filter(source or "")
