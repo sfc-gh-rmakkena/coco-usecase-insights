@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
-from snowflake.cortex import Complete
 from utils.queries import get_comments_with_context, get_distinct_partners
+from utils.cortex_helpers import cortex_complete
 
 conn = st.session_state.conn
 region = st.session_state.get("selected_region", "Global")
@@ -145,10 +145,8 @@ Use Cases:
     prompt = prompts[analysis_type]
     response_placeholder = st.empty()
     full_response = ""
-    stream = Complete("claude-sonnet-4-5", prompt, stream=True)
-    for chunk in stream:
-        full_response += chunk
-        response_placeholder.markdown(full_response + "▌")
+    response_placeholder.info("Generating...")
+    full_response = cortex_complete(conn, "claude-sonnet-4-5", prompt)
     response_placeholder.markdown(full_response)
 
 st.divider()
@@ -192,5 +190,5 @@ Source: {source} | Features: {feats[:200]}
 SE: {se[:600]}
 Partner: {pc[:600]}
 Specialist: {spec[:400]}"""
-            result = Complete("claude-sonnet-4-5", mini_prompt)
+            result = cortex_complete(conn, "claude-sonnet-4-5", mini_prompt)
             st.markdown(f"*{result}*")

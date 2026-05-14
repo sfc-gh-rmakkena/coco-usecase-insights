@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
-from snowflake.cortex import Complete
 from utils.queries import get_use_cases, get_distinct_partners, get_by_partner
+from utils.cortex_helpers import cortex_complete
 
 conn = st.session_state.conn
 region = st.session_state.get("selected_region", "Global")
@@ -203,10 +203,8 @@ if st.button("Generate AI Insights", type="primary", key="dd_ai_btn"):
     prompt = prompts[ai_mode]
     response_placeholder = st.empty()
     full_response = ""
-    stream = Complete("claude-sonnet-4-5", prompt, stream=True)
-    for chunk in stream:
-        full_response += chunk
-        response_placeholder.markdown(full_response + "▌")
+    response_placeholder.info("Generating...")
+    full_response = cortex_complete(conn, "claude-sonnet-4-5", prompt)
     response_placeholder.markdown(full_response)
 
 st.divider()

@@ -16,3 +16,4 @@ streamlit:
   additional_source_files:
     - utils/__init__.py
     - utils/queries.py
+    - utils/cortex_helpers.py

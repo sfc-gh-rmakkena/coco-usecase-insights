@@ -1,8 +1,8 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-from snowflake.cortex import Complete
 from utils.queries import get_use_cases, get_by_partner, get_by_stage, get_distinct_partners, get_summary_stats
+from utils.cortex_helpers import cortex_complete
 
 conn = st.session_state.conn
 region = st.session_state.get("selected_region", "Global")
@@ -161,10 +161,8 @@ def show_use_case_dialog(row):
 
     response_placeholder = st.empty()
     full_response = ""
-    stream = Complete("claude-sonnet-4-5", prompt, stream=True)
-    for chunk in stream:
-        full_response += chunk
-        response_placeholder.markdown(full_response + "▌")
+    response_placeholder.info("Generating...")
+    full_response = cortex_complete(conn, "claude-sonnet-4-5", prompt)
     response_placeholder.markdown(full_response)
 
     sfdc_url = f"https://snowforce.lightning.force.com/lightning/r/vh__Deliverable__c/{row.get('USE_CASE_ID', '')}/view"
