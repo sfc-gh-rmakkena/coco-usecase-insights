@@ -568,6 +568,62 @@ def get_regional_comment_narratives(_conn, target_region, source=None):
     return _conn.query(query)
 
 @st.cache_data(ttl=timedelta(minutes=30))
+def get_partner_coco_coverage(_conn, region=None):
+    tf = _theater_filter(region)
+    query = f"""
+    WITH hierarchy AS (
+        SELECT PARTNER_NAME, PARENT_PARTNER_NAME FROM {SCHEMA}.PARTNER_HIERARCHY
+    ),
+    all_ucs AS (
+        SELECT 
+            COALESCE(h.PARENT_PARTNER_NAME, 
+                COALESCE(
+                    NULLIF(ARRAY_TO_STRING(UC.IMPLEMENTATION_SERVICES_PARTNER, ', '), ''),
+                    NULLIF(ARRAY_TO_STRING(UC.CO_SELL_SERVICES_PARTNER, ', '), ''),
+                    NULLIF(UC.PARTNER_NAME, ''),
+                    ARRAY_TO_STRING(UC.USE_CASE_PARTNER, ', ')
+                )
+            ) AS PARTNER_NAME,
+            UC.USE_CASE_ID,
+            UC.USE_CASE_STAGE,
+            UC.USE_CASE_EACV,
+            UC.THEATER_NAME,
+            CASE 
+                WHEN UC.SE_COMMENTS ILIKE '%coco%' OR UC.SE_COMMENTS ILIKE '%cortex code%' 
+                     OR UC.PARTNER_COMMENTS ILIKE '%#coco%'
+                     OR UC.PRIORITIZED_FEATURES ILIKE '%AI - Cortex Code%' THEN TRUE
+                ELSE FALSE
+            END AS IS_COCO
+        FROM MDM.MDM_INTERFACES.DIM_USE_CASE UC
+        LEFT JOIN hierarchy h ON COALESCE(
+            NULLIF(ARRAY_TO_STRING(UC.IMPLEMENTATION_SERVICES_PARTNER, ', '), ''),
+            NULLIF(ARRAY_TO_STRING(UC.CO_SELL_SERVICES_PARTNER, ', '), ''),
+            NULLIF(UC.PARTNER_NAME, ''),
+            ARRAY_TO_STRING(UC.USE_CASE_PARTNER, ', ')
+        ) = h.PARTNER_NAME
+        WHERE UC.USE_CASE_STAGE IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan', 
+                                     '5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed')
+        AND (
+            (UC.USE_CASE_STAGE IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan') AND UC.DECISION_DATE > '2025-11-20')
+            OR (UC.USE_CASE_STAGE IN ('5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed') AND UC.GO_LIVE_DATE > '2025-11-20')
+        )
+    )
+    SELECT 
+        PARTNER_NAME,
+        COUNT(*) AS TOTAL_PARTNER_UCS,
+        COUNT(CASE WHEN IS_COCO THEN 1 END) AS COCO_UCS,
+        ROUND(COUNT(CASE WHEN IS_COCO THEN 1 END) * 100.0 / NULLIF(COUNT(*), 0), 1) AS COCO_PCT
+    FROM all_ucs
+    WHERE PARTNER_NAME IS NOT NULL AND TRIM(PARTNER_NAME) != ''
+    AND PARTNER_NAME NOT IN ('Sigma Computing, Inc.', 'Bloomberg Finance L.P. - DCP Account')
+    {tf}
+    GROUP BY PARTNER_NAME
+    HAVING COUNT(*) >= 1
+    ORDER BY TOTAL_PARTNER_UCS DESC
+    """
+    return _conn.query(query)
+
+@st.cache_data(ttl=timedelta(minutes=30))
 def get_by_account_gvp(_conn, region=None, source=None):
     tf = _theater_filter(region)
     sf = _source_filter(source or "")

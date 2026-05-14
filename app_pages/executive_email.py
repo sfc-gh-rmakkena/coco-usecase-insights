@@ -6,6 +6,7 @@ from utils.queries import (
     get_by_region, get_email_summary_data, get_use_case_type_patterns,
     get_workload_patterns, get_competitive_landscape, get_comment_narratives,
     get_partner_workload_cross, get_regional_themes, get_regional_comment_narratives,
+    get_partner_coco_coverage,
 )
 from utils.cortex_helpers import cortex_complete
 
@@ -39,6 +40,7 @@ with st.spinner("Loading data..."):
     comment_data = get_comment_narratives(conn, region=region, source=source_toggle)
     partner_workloads = get_partner_workload_cross(conn, region=region, source=source_toggle)
     regional_themes = get_regional_themes(conn, source=source_toggle)
+    coco_coverage = get_partner_coco_coverage(conn, region=region)
 
 if partner_filter and partner_filter != "All":
     partner_data = _apply_partner_filter(partner_data)
@@ -73,10 +75,23 @@ with st.expander("View Raw Metrics", expanded=False):
         if len(competitive_data) > 0:
             st.dataframe(competitive_data, hide_index=True, use_container_width=True)
 
+coverage_map = {}
+if len(coco_coverage) > 0:
+    for _, cv in coco_coverage.iterrows():
+        coverage_map[cv['PARTNER_NAME']] = {
+            'total': int(cv['TOTAL_PARTNER_UCS']),
+            'coco': int(cv['COCO_UCS']),
+            'pct': float(cv['COCO_PCT'] or 0)
+        }
+
 partner_ctx = ""
 for _, p in partner_data.head(15).iterrows():
     eacv = p.get('TOTAL_EACV', 0) or 0
-    partner_ctx += f"  {p['PARTNER_NAME']}: {int(p['USE_CASE_COUNT'])} UCs, ${eacv/1000:.0f}K, Active={int(p.get('ACTIVE_PIPELINE', 0))}, Won={int(p.get('WON', 0))}, Impl={int(p.get('IN_IMPL', 0))}, Deployed={int(p.get('DEPLOYED', 0))}\n"
+    cv = coverage_map.get(p['PARTNER_NAME'], {})
+    total_ucs = cv.get('total', '?')
+    coco_ucs = cv.get('coco', int(p['USE_CASE_COUNT']))
+    coco_pct = cv.get('pct', 0)
+    partner_ctx += f"  {p['PARTNER_NAME']}: CoCo={coco_ucs}/{total_ucs} ({coco_pct:.0f}%), ${eacv/1000:.0f}K, Active={int(p.get('ACTIVE_PIPELINE', 0))}, Won={int(p.get('WON', 0))}, Impl={int(p.get('IN_IMPL', 0))}, Deployed={int(p.get('DEPLOYED', 0))}\n"
 
 stage_ctx = ""
 for _, sg in stage_data.iterrows():
@@ -106,7 +121,10 @@ for _, comp in competitive_data.head(8).iterrows():
 partner_wl_ctx = ""
 for _, pw in partner_workloads.head(12).iterrows():
     eacv = pw.get('TOTAL_EACV', 0) or 0
-    partner_wl_ctx += f"  {pw['PARTNER_NAME']}: {int(pw['TOTAL_USE_CASES'])} UCs, ${eacv/1000:.0f}K | AI={int(pw['AI_USE_CASES'])}, DE={int(pw['DE_USE_CASES'])}, Analytics={int(pw['ANALYTICS_USE_CASES'])}, Platform={int(pw['PLATFORM_USE_CASES'])}, Apps={int(pw['APPS_USE_CASES'])}\n"
+    cv = coverage_map.get(pw['PARTNER_NAME'], {})
+    total_ucs = cv.get('total', '?')
+    coco_pct = cv.get('pct', 0)
+    partner_wl_ctx += f"  {pw['PARTNER_NAME']}: CoCo={int(pw['TOTAL_USE_CASES'])}/{total_ucs} ({coco_pct:.0f}%), ${eacv/1000:.0f}K | AI={int(pw['AI_USE_CASES'])}, DE={int(pw['DE_USE_CASES'])}, Analytics={int(pw['ANALYTICS_USE_CASES'])}, Platform={int(pw['PLATFORM_USE_CASES'])}, Apps={int(pw['APPS_USE_CASES'])}\n"
 
 comment_ctx = ""
 for _, cm in comment_data.head(10).iterrows():
@@ -198,8 +216,10 @@ One row per stage. Use $XK or $X.XM format.
 One row each for NoAM, EMEA, APJ. After the table, write ONE sentence per region describing the dominant theme.
 
 **TOP PARTNERS** (markdown table)
-| Partner | Use Cases | EACV | AI | DE | Analytics | Won+ | Phase |
+| Partner | Total UCs | CoCo UCs | CoCo% | EACV | AI | DE | Analytics | Won+ | Phase |
 - Show top 12 partners sorted by EACV
+- "Total UCs" = all partner use cases (stages 3-7), "CoCo UCs" = CoCo-attached subset, "CoCo%" = CoCo/Total
+- Target is 50% CoCo adoption per partner. Highlight partners above 50% as strong, below 20% as needs attention
 - "Phase" must be one of: Discovery, Building Momentum, Deploying at Scale
 - Base Phase on: Discovery if mostly stages 1-3, Building Momentum if mix of stages, Deploying at Scale if significant won/impl/deployed
 
