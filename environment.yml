@@ -6,3 +6,4 @@ dependencies:
   - plotly
 
   - pandas
+  - markdown

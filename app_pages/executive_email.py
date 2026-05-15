@@ -1,5 +1,8 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
+import urllib.parse
+import markdown
 from datetime import datetime
 from utils.queries import (
     get_summary_stats, get_by_partner, get_by_stage, get_source_breakdown,
@@ -9,6 +12,35 @@ from utils.queries import (
     get_partner_coco_coverage,
 )
 from utils.cortex_helpers import cortex_complete
+
+
+def name_to_email(name):
+    name = name.strip()
+    if '@' in name:
+        return name
+    parts = name.lower().split()
+    if len(parts) >= 2:
+        return f"{'.'.join(parts)}@snowflake.com"
+    elif len(parts) == 1:
+        return f"{parts[0]}@snowflake.com"
+    return name
+
+
+def md_to_html(md_text):
+    html_body = markdown.markdown(md_text, extensions=['tables'])
+    return f"""<html><head><style>
+    body {{ font-family: Arial, sans-serif; font-size: 14px; color: #333; line-height: 1.5; }}
+    table {{ border-collapse: collapse; width: 100%; margin: 12px 0; }}
+    th, td {{ border: 1px solid #ddd; padding: 8px 12px; text-align: left; }}
+    th {{ background-color: #29B5E8; color: white; font-weight: bold; }}
+    tr:nth-child(even) {{ background-color: #f9f9f9; }}
+    h2 {{ color: #29B5E8; margin-top: 20px; border-bottom: 2px solid #29B5E8; padding-bottom: 4px; }}
+    h3 {{ color: #29B5E8; }}
+    strong {{ color: #333; }}
+    ul {{ padding-left: 20px; }}
+    li {{ margin-bottom: 4px; }}
+</style></head><body>{html_body}</body></html>"""
+
 
 conn = st.session_state.conn
 region = st.session_state.get("selected_region", "Global")
@@ -185,7 +217,7 @@ WORKLOADS:
 COMPETITORS:
 {competitive_ctx}
 
-TOP PARTNERS (by EACV):
+TOP PARTNERS (by EACV, with CoCo coverage — target 50%):
 {partner_ctx}
 
 PARTNER WORKLOAD MIX:
@@ -198,50 +230,63 @@ COMMENT HIGHLIGHTS (Top 10 by EACV):
 st.markdown("---")
 st.subheader("Generate Email Summary")
 
-default_prompt = f"""Write an executive email for Snowflake's Partner SE team summarizing CoCo (Cortex Code) Use Case Intelligence. Follow this EXACT format with these 7 sections in order:
+current_user = "rithesh.makkena"
+try:
+    current_user = conn.query("SELECT CURRENT_USER()").iloc[0][0].lower()
+except Exception:
+    pass
 
-**EXECUTIVE SUMMARY** (2-3 sentences + bullets)
-- Lead with: "[X] use cases across [Y] partners driving $[Z]M pipeline with [W] deployed."
-- Second sentence: one-line narrative on dominant use case patterns and competitive displacement themes.
-- Bullet: "Top use case types: [top 3 types by count]"
-- Bullet: "Top partners by region: NoAM ([top 3]), EMEA ([top 3]), APJ ([top 3])"
-- Bullet: "Competitors displaced: [top 3 competitors by count]"
+recipients_input = st.text_area(
+    "To (one name per line, e.g. 'John Smith' → john.smith@snowflake.com)",
+    value="",
+    height=80,
+    placeholder="John Smith\nJane Doe\ncustom.email@partner.com",
+    key="email_recipients"
+)
 
-**PIPELINE OVERVIEW** (markdown table)
+default_prompt = f"""You are writing a polished executive briefing for Snowflake leadership on Cortex Code (CoCo) partner use case traction. This will be read by VPs and the CEO — keep it sharp, data-rich, and action-oriented.
+
+Follow this EXACT structure with 7 sections:
+
+## EXECUTIVE SUMMARY
+2-3 sentences maximum, then exactly 3 bullets.
+- Open with: "[X] CoCo use cases across [Y] partners representing $[Z]M in pipeline, with [W] deployed in production."
+- Second sentence: one crisp insight on the dominant pattern (e.g., what's working, what's accelerating).
+- Bullet 1: "**Leading use case types:** [top 3 by count]"
+- Bullet 2: "**Regional leaders:** NoAM ([top 3 partners]), EMEA ([top 3]), APJ ([top 3])"
+- Bullet 3: "**Competitive displacement:** [top 3 competitors by count]"
+
+## PIPELINE OVERVIEW
 | Stage | Count | EACV | Avg Days |
-One row per stage. Use $XK or $X.XM format.
 
-**REGIONAL BREAKDOWN** (markdown table + 1-sentence theme per region)
+## REGIONAL BREAKDOWN
 | Region | Use Cases | EACV | Partners | Top Types | Key Competitors |
-One row each for NoAM, EMEA, APJ. After the table, write ONE sentence per region describing the dominant theme.
+After the table, ONE sentence per region on its dominant theme.
 
-**TOP PARTNERS** (markdown table)
+## TOP PARTNERS
 | Partner | Total UCs | CoCo UCs | CoCo% | EACV | AI | DE | Analytics | Won+ | Phase |
-- Show top 12 partners sorted by EACV
-- "Total UCs" = all partner use cases (stages 3-7), "CoCo UCs" = CoCo-attached subset, "CoCo%" = CoCo/Total
-- Target is 50% CoCo adoption per partner. Highlight partners above 50% as strong, below 20% as needs attention
-- "Phase" must be one of: Discovery, Building Momentum, Deploying at Scale
-- Base Phase on: Discovery if mostly stages 1-3, Building Momentum if mix of stages, Deploying at Scale if significant won/impl/deployed
+- Top 12 by EACV. "Total UCs" = all partner use cases (stages 3-7). "CoCo%" = CoCo/Total.
+- Our target is **50% CoCo adoption** per partner. After the table, add ONE sentence calling out which partners are closest to 50% and which need enablement focus.
+- Phase: Discovery / Building Momentum / Deploying at Scale
 
-**USE CASE PATTERNS** (3-4 bullets)
-- Each bullet: pattern name + 1 sentence describing it with partner names and EACV
-- Example: "**Migration Acceleration** — Teradata/Oracle migrations represent $XM EACV led by Accenture and Deloitte."
+## USE CASE PATTERNS
+3-4 bullets. Each: **Pattern Name** — one sentence with partner names and EACV.
 
-**NOTABLE HIGHLIGHTS** (2-3 bullets)
-- Pull the most impactful quotes or observations from the comment data
-- Include partner name and account for context
+## NOTABLE WINS
+2-3 bullets. Cite specific partner + customer account + what happened. Focus on production deployments, competitive wins, or executive-level engagement.
 
-**DISCLAIMER**
-"**Disclaimer:** Use case data retrieved by searching coco/cortex code in SE comments, #coco in Partner Comments, or AI-Cortex Code feature flag. Numbers subject to change."
+## DISCLAIMER
+"**Disclaimer:** Use case data sourced from SE comments (coco/cortex code mentions), #coco in Partner Comments, and AI-Cortex Code feature flag. Pipeline figures are being confirmed by the PDM team and are subject to change. Detailed stats: http://go/cocopse"
 
-RULES:
-- Use markdown tables for ALL tabular data — no prose paragraphs for data
-- Keep executive summary to exactly 2-3 sentences + 3 bullets
-- Do NOT add extra sections, commentary, sign-off, greeting, or subject line beyond the 7 sections above
-- Do NOT prefix sections with "SECTION 1:", etc. — use only the heading name
-- Pipeline values: $0 when none, $XK for thousands, $X.XM for millions
-- Keep the ENTIRE email under 600 words
-- Format large numbers with commas"""
+FORMATTING RULES:
+- Markdown tables for ALL data — no narrative paragraphs for numbers
+- Executive summary: exactly 2-3 sentences + 3 bullets, nothing more
+- Section headings: ## format, no numbering
+- Currency: $X.XM for millions, $XK for thousands, $0 when zero
+- Numbers: use commas (e.g., 1,200)
+- Total length: under 600 words
+- Tone: confident, data-driven, executive-appropriate
+- No greeting, sign-off, subject line, or filler"""
 
 prompt_input = st.text_area(
     "Prompt",
@@ -256,20 +301,66 @@ if st.button("Generate Email Summary", type="primary", key="email_generate"):
 DATA:
 {data_context}
 
-Write the email:"""
+Write the executive briefing:"""
 
     response_placeholder = st.empty()
-    response_placeholder.info("Generating summary with Cortex Complete...")
+    response_placeholder.info("Generating executive briefing with Cortex Complete...")
     full_response = cortex_complete(conn, "claude-sonnet-4-5", full_prompt)
     response_placeholder.markdown(full_response)
 
+    st.success("Email generated successfully!")
     st.markdown("---")
-    st.download_button(
-        "Download as Markdown",
-        data=full_response,
-        file_name=f"coco_usecase_email_{datetime.now().strftime('%Y%m%d')}.md",
-        mime="text/markdown"
-    )
+
+    html_email = md_to_html(full_response)
+
+    to_lines = [l.strip() for l in recipients_input.strip().splitlines() if l.strip()] if recipients_input.strip() else []
+    to_emails = [name_to_email(n) for n in to_lines]
+    to_str = ','.join(to_emails)
+    subject_text = f"Cortex Code Use Case Intelligence - {datetime.now().strftime('%B %d, %Y')}"
+    subject = urllib.parse.quote(subject_text)
+    gmail_url = f"https://mail.google.com/mail/?view=cm&fs=1&to={to_str}&su={subject}"
+
+    st.info("**How to send:** Click **Copy Rich Text** below, then **Open in Gmail**, and paste (Ctrl+V / Cmd+V) into the email body. Tables will render with full formatting.")
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        escaped_html = html_email.replace('`', '\\`').replace('${', '\\${')
+        plain_text = full_response.replace(chr(96), '').replace('${', '')[:8000]
+        copy_js = f"""
+        <button onclick="copyRich()" id="copyBtn" style="
+            background-color: #29B5E8; color: white; border: none; padding: 8px 20px;
+            border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: 600;
+            width: 100%;">Copy Rich Text</button>
+        <script>
+        function copyRich() {{
+            const html = `{escaped_html}`;
+            const blob = new Blob([html], {{type: 'text/html'}});
+            const plainBlob = new Blob([`{plain_text}`], {{type: 'text/plain'}});
+            const item = new ClipboardItem({{
+                'text/html': blob,
+                'text/plain': plainBlob
+            }});
+            navigator.clipboard.write([item]).then(() => {{
+                document.getElementById('copyBtn').textContent = 'Copied!';
+                document.getElementById('copyBtn').style.backgroundColor = '#28a745';
+                setTimeout(() => {{
+                    document.getElementById('copyBtn').textContent = 'Copy Rich Text';
+                    document.getElementById('copyBtn').style.backgroundColor = '#29B5E8';
+                }}, 2000);
+            }});
+        }}
+        </script>
+        """
+        components.html(copy_js, height=45)
+    with col2:
+        st.link_button("Open in Gmail", gmail_url, type="primary")
+    with col3:
+        st.download_button(
+            label="Download as HTML",
+            data=html_email,
+            file_name=f"coco_usecase_briefing_{datetime.now().strftime('%Y%m%d')}.html",
+            mime="text/html"
+        )
 
 st.markdown("---")
 st.caption("Powered by Snowflake Cortex Complete | Data sourced from CoCo Use Case Intelligence")
