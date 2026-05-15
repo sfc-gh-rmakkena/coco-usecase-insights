@@ -48,6 +48,7 @@ page = st.navigation({
         st.Page("app_pages/trends.py", title="Trends & Aging", icon=":material/trending_up:"),
     ],
     "OKR & Reports": [
+        st.Page("app_pages/okr_summary.py", title="OKR: CoCo Coverage", icon=":material/dashboard:"),
         st.Page("app_pages/okr_adoption.py", title="OKR: CoCo Adoption", icon=":material/check_circle:"),
         st.Page("app_pages/executive_email.py", title="Executive Email", icon=":material/mail:"),
     ],
