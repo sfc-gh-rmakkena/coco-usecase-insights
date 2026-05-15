@@ -12,23 +12,34 @@ st.title(":material/check_circle: OKR: CoCo Adoption per Partner")
 st.caption(f"Track 50% CoCo attachment target for partner use cases (Stages 3-7) | Region: {region}")
 
 QUARTERS = {
-    "FY26 Q3 (Feb-Apr 2026)": ("2026-02-01", "2026-05-01"),
-    "FY26 Q4 (May-Jul 2026)": ("2026-05-01", "2026-08-01"),
-    "FY26 Q2 (Nov 2025-Jan 2026)": ("2025-11-01", "2026-02-01"),
-    "FY27 Q1 (Aug-Oct 2026)": ("2026-08-01", "2026-11-01"),
+    "FY26 Q1 (Feb-Apr 2025)": ("2025-02-01", "2025-05-01"),
+    "FY26 Q2 (May-Jul 2025)": ("2025-05-01", "2025-08-01"),
+    "FY26 Q3 (Aug-Oct 2025)": ("2025-08-01", "2025-11-01"),
+    "FY26 Q4 (Nov 2025-Jan 2026)": ("2025-11-01", "2026-02-01"),
+    "FY27 Q1 (Feb-Apr 2026)": ("2026-02-01", "2026-05-01"),
+    "FY27 Q2 (May-Jul 2026)": ("2026-05-01", "2026-08-01"),
+    "FY27 Q3 (Aug-Oct 2026)": ("2026-08-01", "2026-11-01"),
+    "FY27 Q4 (Nov 2026-Jan 2027)": ("2026-11-01", "2027-02-01"),
 }
 
 TARGET_PCT = 50
+CURRENT_QUARTER = "FY27 Q2 (May-Jul 2026)"
 
 f1, f2, f3 = st.columns([2, 1, 1])
 with f1:
-    selected_quarter = st.selectbox("Quarter", list(QUARTERS.keys()), key="okr_quarter")
+    selected_quarters = st.multiselect("Quarter(s)", list(QUARTERS.keys()), default=[CURRENT_QUARTER], key="okr_quarter")
 with f2:
     target = st.number_input("Target %", min_value=10, max_value=100, value=TARGET_PCT, step=5, key="okr_target")
 with f3:
     min_use_cases = st.number_input("Min Use Cases", min_value=1, max_value=20, value=2, step=1, key="okr_min_uc")
 
-q_start, q_end = QUARTERS[selected_quarter]
+if not selected_quarters:
+    st.info("Select at least one quarter.")
+    st.stop()
+
+q_ranges = [QUARTERS[q] for q in selected_quarters]
+q_start = min(r[0] for r in q_ranges)
+q_end = max(r[1] for r in q_ranges)
 summary = get_okr_partner_summary(conn, q_start, q_end, region=region)
 
 if len(summary) == 0:
@@ -211,5 +222,6 @@ else:
     st.success(f"All tracked partners meet the {target}% target!")
 
 st.divider()
-st.caption(f"OKR Target: {target}% of use cases in Stages 3-7 should have CoCo attached | Quarter: {selected_quarter} | Min UCs: {min_use_cases}")
+quarter_label = ', '.join(selected_quarters)
+st.caption(f"OKR Target: {target}% of use cases in Stages 3-7 should have CoCo attached | {quarter_label} | Min UCs: {min_use_cases}")
 st.caption("CoCo detection: SE Comments (coco/cortex code) OR Partner Comments (#coco) OR Feature Flag (AI - Cortex Code)")
