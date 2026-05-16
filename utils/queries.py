@@ -211,8 +211,10 @@ def get_okr_coco_adoption(_conn, quarter_start, quarter_end, region=None):
             END AS COCO_SOURCE
         FROM MDM.MDM_INTERFACES.DIM_USE_CASE UC
         WHERE UC.USE_CASE_STAGE IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan', '5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed')
-        AND UC.DECISION_DATE >= '{quarter_start}'
-        AND UC.DECISION_DATE < '{quarter_end}'
+        AND (
+            (UC.USE_CASE_STAGE IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan') AND UC.DECISION_DATE >= '{quarter_start}' AND UC.DECISION_DATE < '{quarter_end}')
+            OR (UC.USE_CASE_STAGE IN ('5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed') AND UC.GO_LIVE_DATE >= '{quarter_start}' AND UC.GO_LIVE_DATE < '{quarter_end}')
+        )
         {tf}
     )
     SELECT *
@@ -245,8 +247,10 @@ def get_okr_partner_summary(_conn, quarter_start, quarter_end, region=None):
             END AS IS_COCO_ATTACHED
         FROM MDM.MDM_INTERFACES.DIM_USE_CASE UC
         WHERE UC.USE_CASE_STAGE IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan', '5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed')
-        AND UC.DECISION_DATE >= '{quarter_start}'
-        AND UC.DECISION_DATE < '{quarter_end}'
+        AND (
+            (UC.USE_CASE_STAGE IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan') AND UC.DECISION_DATE >= '{quarter_start}' AND UC.DECISION_DATE < '{quarter_end}')
+            OR (UC.USE_CASE_STAGE IN ('5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed') AND UC.GO_LIVE_DATE >= '{quarter_start}' AND UC.GO_LIVE_DATE < '{quarter_end}')
+        )
         {tf}
     )
     SELECT 

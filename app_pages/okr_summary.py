@@ -208,7 +208,7 @@ with tab_detail:
                             x=row['STAGE_SHORT'], y=row['TOTAL_UCS'], text=f"{row['COCO_PCT']:.0f}%",
                             showarrow=False, yshift=12, font=dict(size=12, color='#29B5E8', weight='bold')
                         )
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, use_container_width=True, key=f"detail_chart_{partner_name}")
 
                     st.dataframe(
                         p_stages[['USE_CASE_STAGE', 'TOTAL_UCS', 'COCO_UCS', 'COCO_PCT', 'TOTAL_EACV', 'COCO_EACV']].rename(columns={
