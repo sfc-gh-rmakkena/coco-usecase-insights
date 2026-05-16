@@ -175,52 +175,33 @@ def get_by_technical_type(_conn, region=None, source=None):
     """
     return _conn.query(query)
 
+DT_OKR = f"{SCHEMA}.DT_OKR_USE_CASES"
+
 @st.cache_data(ttl=timedelta(minutes=30))
 def get_okr_coco_adoption(_conn, quarter_start, quarter_end, region=None):
     tf = _theater_filter(region)
     query = f"""
-    WITH all_partner_use_cases AS (
-        SELECT 
-            COALESCE(
-                NULLIF(ARRAY_TO_STRING(UC.IMPLEMENTATION_SERVICES_PARTNER, ', '), ''),
-                NULLIF(ARRAY_TO_STRING(UC.CO_SELL_SERVICES_PARTNER, ', '), ''),
-                NULLIF(UC.PARTNER_NAME, ''),
-                ARRAY_TO_STRING(UC.USE_CASE_PARTNER, ', ')
-            ) AS PARTNER_NAME,
-            UC.USE_CASE_ID,
-            UC.USE_CASE_NAME,
-            UC.ACCOUNT_NAME,
-            UC.USE_CASE_STAGE,
-            UC.USE_CASE_EACV,
-            UC.TECHNICAL_USE_CASE,
-            UC.THEATER_NAME,
-            UC.DECISION_DATE,
-            UC.GO_LIVE_DATE,
-            UC.DAYS_IN_STAGE,
-            CASE 
-                WHEN UC.SE_COMMENTS ILIKE '%coco%' OR UC.SE_COMMENTS ILIKE '%cortex code%' 
-                     OR UC.PARTNER_COMMENTS ILIKE '%#coco%'
-                     OR UC.PRIORITIZED_FEATURES ILIKE '%AI - Cortex Code%' THEN TRUE
-                ELSE FALSE
-            END AS IS_COCO_ATTACHED,
-            CASE 
-                WHEN UC.PARTNER_COMMENTS ILIKE '%#coco%' THEN 'PARTNER_COMMENTS'
-                WHEN UC.SE_COMMENTS ILIKE '%coco%' OR UC.SE_COMMENTS ILIKE '%cortex code%' THEN 'SE_COMMENTS'
-                WHEN UC.PRIORITIZED_FEATURES ILIKE '%AI - Cortex Code%' THEN 'FEATURE_FLAG'
-                ELSE NULL
-            END AS COCO_SOURCE
-        FROM MDM.MDM_INTERFACES.DIM_USE_CASE UC
-        WHERE UC.USE_CASE_STAGE IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan', '5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed')
-        AND (
-            (UC.USE_CASE_STAGE IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan') AND UC.DECISION_DATE >= '{quarter_start}' AND UC.DECISION_DATE < '{quarter_end}')
-            OR (UC.USE_CASE_STAGE IN ('5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed') AND UC.GO_LIVE_DATE >= '{quarter_start}' AND UC.GO_LIVE_DATE < '{quarter_end}')
-        )
-        {tf}
+    SELECT 
+        PARTNER_NAME,
+        USE_CASE_ID,
+        USE_CASE_NAME,
+        ACCOUNT_NAME,
+        USE_CASE_STAGE,
+        USE_CASE_EACV,
+        TECHNICAL_USE_CASE,
+        THEATER_NAME,
+        DECISION_DATE,
+        GO_LIVE_DATE,
+        DAYS_IN_STAGE,
+        IS_COCO AS IS_COCO_ATTACHED,
+        COCO_SOURCE
+    FROM {DT_OKR}
+    WHERE (
+        (USE_CASE_STAGE IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan') AND DECISION_DATE >= '{quarter_start}' AND DECISION_DATE < '{quarter_end}')
+        OR (USE_CASE_STAGE IN ('5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed') AND GO_LIVE_DATE >= '{quarter_start}' AND GO_LIVE_DATE < '{quarter_end}')
     )
-    SELECT *
-    FROM all_partner_use_cases
-    WHERE PARTNER_NAME IS NOT NULL AND TRIM(PARTNER_NAME) != ''
-    ORDER BY PARTNER_NAME, IS_COCO_ATTACHED DESC, USE_CASE_EACV DESC NULLS LAST
+    {tf}
+    ORDER BY PARTNER_NAME, IS_COCO DESC, USE_CASE_EACV DESC NULLS LAST
     """
     return _conn.query(query)
 
@@ -228,42 +209,21 @@ def get_okr_coco_adoption(_conn, quarter_start, quarter_end, region=None):
 def get_okr_partner_summary(_conn, quarter_start, quarter_end, region=None):
     tf = _theater_filter(region)
     query = f"""
-    WITH all_partner_use_cases AS (
-        SELECT 
-            COALESCE(
-                NULLIF(ARRAY_TO_STRING(UC.IMPLEMENTATION_SERVICES_PARTNER, ', '), ''),
-                NULLIF(ARRAY_TO_STRING(UC.CO_SELL_SERVICES_PARTNER, ', '), ''),
-                NULLIF(UC.PARTNER_NAME, ''),
-                ARRAY_TO_STRING(UC.USE_CASE_PARTNER, ', ')
-            ) AS PARTNER_NAME,
-            UC.USE_CASE_ID,
-            UC.USE_CASE_STAGE,
-            UC.USE_CASE_EACV,
-            CASE 
-                WHEN UC.SE_COMMENTS ILIKE '%coco%' OR UC.SE_COMMENTS ILIKE '%cortex code%' 
-                     OR UC.PARTNER_COMMENTS ILIKE '%#coco%'
-                     OR UC.PRIORITIZED_FEATURES ILIKE '%AI - Cortex Code%' THEN TRUE
-                ELSE FALSE
-            END AS IS_COCO_ATTACHED
-        FROM MDM.MDM_INTERFACES.DIM_USE_CASE UC
-        WHERE UC.USE_CASE_STAGE IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan', '5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed')
-        AND (
-            (UC.USE_CASE_STAGE IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan') AND UC.DECISION_DATE >= '{quarter_start}' AND UC.DECISION_DATE < '{quarter_end}')
-            OR (UC.USE_CASE_STAGE IN ('5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed') AND UC.GO_LIVE_DATE >= '{quarter_start}' AND UC.GO_LIVE_DATE < '{quarter_end}')
-        )
-        {tf}
-    )
     SELECT 
         PARTNER_NAME,
         COUNT(*) AS total_use_cases,
-        COUNT(CASE WHEN IS_COCO_ATTACHED THEN 1 END) AS coco_use_cases,
-        COUNT(*) - COUNT(CASE WHEN IS_COCO_ATTACHED THEN 1 END) AS non_coco_use_cases,
-        ROUND(COUNT(CASE WHEN IS_COCO_ATTACHED THEN 1 END) * 100.0 / COUNT(*), 1) AS coco_pct,
+        COUNT(CASE WHEN IS_COCO THEN 1 END) AS coco_use_cases,
+        COUNT(*) - COUNT(CASE WHEN IS_COCO THEN 1 END) AS non_coco_use_cases,
+        ROUND(COUNT(CASE WHEN IS_COCO THEN 1 END) * 100.0 / COUNT(*), 1) AS coco_pct,
         SUM(USE_CASE_EACV) AS total_eacv,
-        SUM(CASE WHEN IS_COCO_ATTACHED THEN USE_CASE_EACV ELSE 0 END) AS coco_eacv,
-        CASE WHEN COUNT(CASE WHEN IS_COCO_ATTACHED THEN 1 END) * 100.0 / COUNT(*) >= 50 THEN TRUE ELSE FALSE END AS MEETS_TARGET
-    FROM all_partner_use_cases
-    WHERE PARTNER_NAME IS NOT NULL AND TRIM(PARTNER_NAME) != ''
+        SUM(CASE WHEN IS_COCO THEN USE_CASE_EACV ELSE 0 END) AS coco_eacv,
+        CASE WHEN COUNT(CASE WHEN IS_COCO THEN 1 END) * 100.0 / COUNT(*) >= 50 THEN TRUE ELSE FALSE END AS MEETS_TARGET
+    FROM {DT_OKR}
+    WHERE (
+        (USE_CASE_STAGE IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan') AND DECISION_DATE >= '{quarter_start}' AND DECISION_DATE < '{quarter_end}')
+        OR (USE_CASE_STAGE IN ('5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed') AND GO_LIVE_DATE >= '{quarter_start}' AND GO_LIVE_DATE < '{quarter_end}')
+    )
+    {tf}
     GROUP BY PARTNER_NAME
     HAVING COUNT(*) >= 1
     ORDER BY total_use_cases DESC
@@ -575,51 +535,16 @@ def get_regional_comment_narratives(_conn, target_region, source=None):
 def get_partner_coco_coverage(_conn, region=None):
     tf = _theater_filter(region)
     query = f"""
-    WITH hierarchy AS (
-        SELECT PARTNER_NAME, PARENT_PARTNER_NAME FROM {SCHEMA}.PARTNER_HIERARCHY
-    ),
-    all_ucs AS (
-        SELECT 
-            COALESCE(h.PARENT_PARTNER_NAME, 
-                COALESCE(
-                    NULLIF(ARRAY_TO_STRING(UC.IMPLEMENTATION_SERVICES_PARTNER, ', '), ''),
-                    NULLIF(ARRAY_TO_STRING(UC.CO_SELL_SERVICES_PARTNER, ', '), ''),
-                    NULLIF(UC.PARTNER_NAME, ''),
-                    ARRAY_TO_STRING(UC.USE_CASE_PARTNER, ', ')
-                )
-            ) AS PARTNER_NAME,
-            UC.USE_CASE_ID,
-            UC.USE_CASE_STAGE,
-            UC.USE_CASE_EACV,
-            UC.THEATER_NAME,
-            CASE 
-                WHEN UC.SE_COMMENTS ILIKE '%coco%' OR UC.SE_COMMENTS ILIKE '%cortex code%' 
-                     OR UC.PARTNER_COMMENTS ILIKE '%#coco%'
-                     OR UC.PRIORITIZED_FEATURES ILIKE '%AI - Cortex Code%' THEN TRUE
-                ELSE FALSE
-            END AS IS_COCO
-        FROM MDM.MDM_INTERFACES.DIM_USE_CASE UC
-        LEFT JOIN hierarchy h ON COALESCE(
-            NULLIF(ARRAY_TO_STRING(UC.IMPLEMENTATION_SERVICES_PARTNER, ', '), ''),
-            NULLIF(ARRAY_TO_STRING(UC.CO_SELL_SERVICES_PARTNER, ', '), ''),
-            NULLIF(UC.PARTNER_NAME, ''),
-            ARRAY_TO_STRING(UC.USE_CASE_PARTNER, ', ')
-        ) = h.PARTNER_NAME
-        WHERE UC.USE_CASE_STAGE IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan', 
-                                     '5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed')
-        AND (
-            (UC.USE_CASE_STAGE IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan') AND UC.DECISION_DATE > '2025-11-20')
-            OR (UC.USE_CASE_STAGE IN ('5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed') AND UC.GO_LIVE_DATE > '2025-11-20')
-        )
-    )
     SELECT 
         PARTNER_NAME,
         COUNT(*) AS TOTAL_PARTNER_UCS,
         COUNT(CASE WHEN IS_COCO THEN 1 END) AS COCO_UCS,
         ROUND(COUNT(CASE WHEN IS_COCO THEN 1 END) * 100.0 / NULLIF(COUNT(*), 0), 1) AS COCO_PCT
-    FROM all_ucs
-    WHERE PARTNER_NAME IS NOT NULL AND TRIM(PARTNER_NAME) != ''
-    AND PARTNER_NAME NOT IN ('Sigma Computing, Inc.', 'Bloomberg Finance L.P. - DCP Account')
+    FROM {DT_OKR}
+    WHERE (
+        (USE_CASE_STAGE IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan') AND DECISION_DATE > '2025-11-20')
+        OR (USE_CASE_STAGE IN ('5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed') AND GO_LIVE_DATE > '2025-11-20')
+    )
     {tf}
     GROUP BY PARTNER_NAME
     HAVING COUNT(*) >= 1
@@ -631,43 +556,6 @@ def get_partner_coco_coverage(_conn, region=None):
 def get_okr_stage_breakdown(_conn, region=None):
     tf = _theater_filter(region)
     query = f"""
-    WITH hierarchy AS (
-        SELECT PARTNER_NAME, PARENT_PARTNER_NAME FROM {SCHEMA}.PARTNER_HIERARCHY
-    ),
-    all_ucs AS (
-        SELECT 
-            COALESCE(h.PARENT_PARTNER_NAME, 
-                COALESCE(
-                    NULLIF(ARRAY_TO_STRING(UC.IMPLEMENTATION_SERVICES_PARTNER, ', '), ''),
-                    NULLIF(ARRAY_TO_STRING(UC.CO_SELL_SERVICES_PARTNER, ', '), ''),
-                    NULLIF(UC.PARTNER_NAME, ''),
-                    ARRAY_TO_STRING(UC.USE_CASE_PARTNER, ', ')
-                )
-            ) AS PARTNER_NAME,
-            UC.USE_CASE_ID,
-            UC.USE_CASE_STAGE,
-            UC.USE_CASE_EACV,
-            UC.THEATER_NAME,
-            CASE 
-                WHEN UC.SE_COMMENTS ILIKE '%coco%' OR UC.SE_COMMENTS ILIKE '%cortex code%' 
-                     OR UC.PARTNER_COMMENTS ILIKE '%#coco%'
-                     OR UC.PRIORITIZED_FEATURES ILIKE '%AI - Cortex Code%' THEN TRUE
-                ELSE FALSE
-            END AS IS_COCO
-        FROM MDM.MDM_INTERFACES.DIM_USE_CASE UC
-        LEFT JOIN hierarchy h ON COALESCE(
-            NULLIF(ARRAY_TO_STRING(UC.IMPLEMENTATION_SERVICES_PARTNER, ', '), ''),
-            NULLIF(ARRAY_TO_STRING(UC.CO_SELL_SERVICES_PARTNER, ', '), ''),
-            NULLIF(UC.PARTNER_NAME, ''),
-            ARRAY_TO_STRING(UC.USE_CASE_PARTNER, ', ')
-        ) = h.PARTNER_NAME
-        WHERE UC.USE_CASE_STAGE IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan', 
-                                     '5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed')
-        AND (
-            (UC.USE_CASE_STAGE IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan') AND UC.DECISION_DATE > '2025-11-20')
-            OR (UC.USE_CASE_STAGE IN ('5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed') AND UC.GO_LIVE_DATE > '2025-11-20')
-        )
-    )
     SELECT 
         PARTNER_NAME,
         USE_CASE_STAGE,
@@ -676,9 +564,11 @@ def get_okr_stage_breakdown(_conn, region=None):
         ROUND(COUNT(CASE WHEN IS_COCO THEN 1 END) * 100.0 / NULLIF(COUNT(*), 0), 1) AS COCO_PCT,
         SUM(USE_CASE_EACV) AS TOTAL_EACV,
         SUM(CASE WHEN IS_COCO THEN USE_CASE_EACV ELSE 0 END) AS COCO_EACV
-    FROM all_ucs
-    WHERE PARTNER_NAME IS NOT NULL AND TRIM(PARTNER_NAME) != ''
-    AND PARTNER_NAME NOT IN ('Sigma Computing, Inc.', 'Bloomberg Finance L.P. - DCP Account')
+    FROM {DT_OKR}
+    WHERE (
+        (USE_CASE_STAGE IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan') AND DECISION_DATE > '2025-11-20')
+        OR (USE_CASE_STAGE IN ('5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed') AND GO_LIVE_DATE > '2025-11-20')
+    )
     {tf}
     GROUP BY PARTNER_NAME, USE_CASE_STAGE
     ORDER BY PARTNER_NAME, USE_CASE_STAGE

@@ -11,6 +11,7 @@ streamlit:
     - app_pages/deep_dive.py
     - app_pages/comments_intelligence.py
     - app_pages/trends.py
+    - app_pages/okr_summary.py
     - app_pages/okr_adoption.py
     - app_pages/executive_email.py
   additional_source_files:
