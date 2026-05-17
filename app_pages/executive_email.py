@@ -13,6 +13,19 @@ from utils.queries import (
 )
 from utils.cortex_helpers import cortex_complete
 
+MANAGED_PARTNERS = [
+    '7Rivers, Inc', 'Accenture', 'Aimpoint Digital', 'Apex Systems', 'Archetype Consulting',
+    'Ateko', 'Atrium', 'Blend360, LLC', 'BlueCloud Services Inc',
+    'Capgemini Technologies LLC', 'kipi.ai', 'CitiusTech Inc.',
+    'Cognizant Technology Solutions US Corp', 'Deloitte Consulting', 'EY',
+    'Hexaware Technologies', 'IBM', 'Icon Analytics', 'Infostrux Solutions Inc.',
+    'Infosys', 'KPMG LLP', 'LTIMindtree', 'Merkle', 'NTT DATA Group Corporation',
+    'OneSix', 'Perficient Inc.', 'Slalom, LLC.', 'Sparq Holdings, Inc.',
+    'Spaulding Ridge', 'Squadron Data Inc', 'Coastal',
+    'TEKsystems Global Services, LLC.', 'Tiger Analytics Inc.', 'Tredence Inc.',
+    'evolv Consulting', 'phData, Inc.'
+]
+
 
 def name_to_email(name):
     name = name.strip()
@@ -74,14 +87,56 @@ with st.spinner("Loading data..."):
     regional_themes = get_regional_themes(conn, source=source_toggle)
     coco_coverage = get_partner_coco_coverage(conn, region=region)
 
+    # Managed partner stage EACV breakdown
+    managed_partners_sql = "','".join(MANAGED_PARTNERS)
+    managed_stage_data = conn.query(f"""
+        SELECT 
+            CASE 
+                WHEN USE_CASE_STAGE IN ('1 - Discovery', '2 - Scoping', '3 - Technical / Business Validation') THEN 'Active Pipeline (1-3)'
+                WHEN USE_CASE_STAGE = '4 - Use Case Won / Migration Plan' THEN 'Won (4)'
+                WHEN USE_CASE_STAGE IN ('5 - Implementation In Progress', '6 - Implementation Complete') THEN 'Implementation (5-6)'
+                WHEN USE_CASE_STAGE = '7 - Deployed' THEN 'Deployed (7)'
+            END AS STAGE_GROUP,
+            COUNT(*) AS UC_COUNT,
+            COALESCE(SUM(USE_CASE_EACV), 0) AS TOTAL_EACV
+        FROM TEMP.COCO_PARTNER_ADOPTION.DT_OKR_USE_CASES
+        WHERE PARTNER_NAME IN ('{managed_partners_sql}')
+        AND IS_COCO = TRUE
+        AND (
+            (USE_CASE_STAGE IN ('1 - Discovery', '2 - Scoping', '3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan') AND DECISION_DATE > '2025-11-20')
+            OR (USE_CASE_STAGE IN ('5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed') AND GO_LIVE_DATE > '2025-11-20')
+        )
+        GROUP BY STAGE_GROUP
+        ORDER BY STAGE_GROUP
+    """)
+
 if partner_filter and partner_filter != "All":
     partner_data = _apply_partner_filter(partner_data)
     comment_data = _apply_partner_filter(comment_data)
     partner_workloads = _apply_partner_filter(partner_workloads)
 
+# Filter to managed partners only for executive email context
+partner_data = partner_data[partner_data['PARTNER_NAME'].isin(MANAGED_PARTNERS)]
+comment_data = comment_data[comment_data['PARTNER_NAME'].isin(MANAGED_PARTNERS)]
+partner_workloads = partner_workloads[partner_workloads['PARTNER_NAME'].isin(MANAGED_PARTNERS)]
+coco_coverage = coco_coverage[coco_coverage['PARTNER_NAME'].isin(MANAGED_PARTNERS)]
+if 'PARTNER_NAME' in regional_themes.columns:
+    regional_themes = regional_themes[regional_themes['PARTNER_NAME'].isin(MANAGED_PARTNERS)]
+
 if len(stats) == 0:
     st.warning("No data available.")
     st.stop()
+
+# Recompute headline stats from managed-partners-only data
+managed_total_ucs = int(partner_data['USE_CASE_COUNT'].sum())
+managed_total_partners = len(partner_data)
+managed_total_eacv = partner_data['TOTAL_EACV'].sum() or 0
+managed_active = int(partner_data['ACTIVE_PIPELINE'].sum())
+managed_won = int(partner_data['WON'].sum())
+managed_impl = int(partner_data['IN_IMPL'].sum())
+managed_deployed = int(partner_data['DEPLOYED'].sum())
+managed_inactive_partners = 35 - managed_total_partners
+managed_inactive_names = [p for p in MANAGED_PARTNERS if p not in partner_data['PARTNER_NAME'].values]
 
 s = stats.iloc[0]
 
@@ -126,9 +181,9 @@ for _, p in partner_data.head(15).iterrows():
     partner_ctx += f"  {p['PARTNER_NAME']}: CoCo={coco_ucs}/{total_ucs} ({coco_pct:.0f}%), ${eacv/1000:.0f}K, Active={int(p.get('ACTIVE_PIPELINE', 0))}, Won={int(p.get('WON', 0))}, Impl={int(p.get('IN_IMPL', 0))}, Deployed={int(p.get('DEPLOYED', 0))}\n"
 
 stage_ctx = ""
-for _, sg in stage_data.iterrows():
+for _, sg in managed_stage_data.iterrows():
     eacv = sg.get('TOTAL_EACV', 0) or 0
-    stage_ctx += f"  {sg['USE_CASE_STAGE']}: {int(sg['USE_CASE_COUNT'])} UCs, ${eacv/1000:.0f}K, Avg {int(sg.get('AVG_DAYS', 0) or 0)} days\n"
+    stage_ctx += f"  {sg['STAGE_GROUP']}: {int(sg['UC_COUNT'])} UCs, ${eacv/1_000_000:.1f}M\n"
 
 region_ctx = ""
 for _, rg in region_data.iterrows():
@@ -190,40 +245,29 @@ def _build_region_theme_ctx(df, region_name):
 
 
 data_context = f"""
-=== {source_toggle} Use Cases | {region} Region{' | Partner: ' + partner_filter if partner_filter and partner_filter != 'All' else ''} ===
+=== MANAGED PARTNERS ONLY (35) | {source_toggle} Use Cases | {region} Region ===
+NOTE: All numbers below are for the 35 managed partners ONLY, except REGIONAL BREAKDOWN which shows all partners.
 
-HEADLINE: {int(s['TOTAL_USE_CASES'])} UCs | {int(s['TOTAL_PARTNERS'])} Partners | {int(s['TOTAL_ACCOUNTS'])} Accounts | ${s['TOTAL_EACV']/1_000_000:.1f}M EACV
-Active(1-3): {int(s['ACTIVE_COUNT'])} (${s['ACTIVE_EACV']/1_000_000:.1f}M) | Won(4): {int(s['WON_COUNT'])} (${s['WON_EACV']/1_000_000:.1f}M) | Impl(5-6): {int(s['IMPL_COUNT'])} (${s['IMPL_EACV']/1_000_000:.1f}M) | Deployed(7): {int(s['DEPLOYED_COUNT'])} (${s['DEPLOYED_EACV']/1_000_000:.1f}M)
-PSE Confirmed: {int(s['PARTNER_CONFIRMED_COUNT'])} | Feature Flag: {int(s['FEATURE_FLAG_COUNT'])} | SE Comments: {int(s['SE_CONFIRMED_COUNT'])}
+GLOBAL REFERENCE (all partners, for context only): {int(s['TOTAL_USE_CASES'])} total CoCo UCs | {int(s['TOTAL_PARTNERS'])} partners | ${s['TOTAL_EACV']/1_000_000:.1f}M EACV
 
-REGIONAL:
-{region_ctx}
-NoAM:
-{_build_region_theme_ctx(regional_themes, "NoAM")}
-EMEA:
-{_build_region_theme_ctx(regional_themes, "EMEA")}
-APJ:
-{_build_region_theme_ctx(regional_themes, "APJ")}
+MANAGED PARTNERS HEADLINE: {managed_total_ucs} CoCo UCs | {managed_total_partners} Active Managed Partners | ${managed_total_eacv/1_000_000:.1f}M EACV
+Active(1-3): {managed_active} | Won(4): {managed_won} | Impl(5-6): {managed_impl} | Deployed(7): {managed_deployed}
+CoCo Active: {managed_total_partners} of 35 managed partners have CoCo activity
+No CoCo Activity ({managed_inactive_partners} partners): {', '.join(managed_inactive_names)}
 
-PIPELINE:
+PIPELINE (Managed Partners Only):
 {stage_ctx}
 
-USE CASE TYPES:
-{type_ctx}
+REGIONAL BREAKDOWN (All Partners — managed + unmanaged):
+{region_ctx}
 
-WORKLOADS:
-{workload_ctx}
-
-COMPETITORS:
-{competitive_ctx}
-
-TOP PARTNERS (by EACV, with CoCo coverage — target 50%):
+TOP PARTNERS (by EACV, managed partners only, with CoCo coverage — target 50%):
 {partner_ctx}
 
-PARTNER WORKLOAD MIX:
+PARTNER WORKLOAD MIX (managed partners only):
 {partner_wl_ctx}
 
-COMMENT HIGHLIGHTS (Top 10 by EACV):
+COMMENT HIGHLIGHTS (managed partners only, Top 10 by EACV):
 {comment_ctx}
 """
 
@@ -246,33 +290,53 @@ recipients_input = st.text_area(
 
 default_prompt = f"""You are writing a polished executive briefing for Snowflake leadership on Cortex Code (CoCo) partner use case traction. This will be read by VPs and the CEO — keep it sharp, data-rich, and action-oriented.
 
-Follow this EXACT structure with 7 sections:
+SCOPE: Focus on the 35 managed partners. Use MANAGED PARTNERS HEADLINE numbers for all sections EXCEPT Regional Breakdown.
+- The GLOBAL REFERENCE line is for context only — mention it once in the opening sentence.
+- REGIONAL BREAKDOWN uses all-partner data (managed + unmanaged) to show geographic traction.
+- ALL other sections (Pipeline, Top Partners, OKR, Patterns, Wins) use managed partners ONLY.
+
+Follow this EXACT structure with 8 sections:
 
 ## EXECUTIVE SUMMARY
-2-3 sentences maximum, then exactly 3 bullets.
-- Open with: "[X] CoCo use cases across [Y] partners representing $[Z]M in pipeline, with [W] deployed in production."
+2-3 sentences maximum, then exactly 6 bullets.
+- Open with: "[X] CoCo use cases across 35 managed partners representing $[Z]M in CoCo EACV, with [W] deployed in production. Global CoCo pipeline: [G] use cases across [A] partners worth $[T]M."
 - Second sentence: one crisp insight on the dominant pattern (e.g., what's working, what's accelerating).
 - Bullet 1: "**Leading use case types:** [top 3 by count]"
-- Bullet 2: "**Regional leaders:** NoAM ([top 3 partners]), EMEA ([top 3]), APJ ([top 3])"
-- Bullet 3: "**Competitive displacement:** [top 3 competitors by count]"
+- Bullet 2: "**Region leaders:** NoAM ([top 3 partners]), EMEA ([top 3]), APJ ([top 3])"
+- Bullet 3: "**Top Global SIs by EACV:** ([top 3 global partners by EACV])"
+- Bullet 4: "**Top Regional SIs by EACV:** ([top 3 regional managed partners by EACV])"
+- Bullet 5: "**Competitive displacement:** [top 3 competitors by count]"
+- Bullet 6: "**CoCo activity:** [X] of 35 managed partners active; [Y] with no CoCo activity: [list names]"
 
-## PIPELINE OVERVIEW
-| Stage | Count | EACV | Avg Days |
+PARTNER CLASSIFICATION:
+- Global SIs (7): EY, Deloitte Consulting, Accenture, Cognizant Technology Solutions US Corp, Capgemini Technologies LLC, kipi.ai, IBM, LTIMindtree
+- Regional Managed Partners (28): 7Rivers, Aimpoint Digital, Apex Systems, Archetype Consulting, Ateko, Atrium, Blend360, BlueCloud, CitiusTech, Coastal, Hexaware, Icon Analytics, Infostrux, Infosys, KPMG, Merkle, NTT DATA, OneSix, Perficient, Slalom, Sparq, Spaulding Ridge, Squadron Data, TEKsystems, Tiger Analytics, Tredence, evolv Consulting, phData
 
-## REGIONAL BREAKDOWN
-| Region | Use Cases | EACV | Partners | Top Types | Key Competitors |
+## OKR PROGRESS
+| Metric | Current | Target | Gap |
+- Show: CoCo use cases vs 50% target, CoCo adoption %, partners meeting 50%, CoCo EACV
+- After the table: ONE sentence on what it takes to close the gap (how many more CoCo UCs needed, which partners have the biggest gaps)
+- Call out partners already meeting 50% target
+- Use MANAGED PARTNERS data only
+
+## MANAGED PARTNER PIPELINE OVERVIEW
+| Stage | Count | EACV |
+- Use MANAGED PARTNERS pipeline data only
+
+## REGIONAL BREAKDOWN (ALL PARTNERS — managed + unmanaged)
+| Region | Use Cases | EACV | Partners |
 After the table, ONE sentence per region on its dominant theme.
+- This is the ONLY section that uses all-partner data
 
-## TOP PARTNERS
-| Partner | Total UCs | CoCo UCs | CoCo% | EACV | AI | DE | Analytics | Won+ | Phase |
+## TOP PARTNERS (managed partners only)
+| Partner | Total UCs | CoCo UCs | CoCo% | EACV | AI | DE | Analytics |
 - Top 12 by EACV. "Total UCs" = all partner use cases (stages 3-7). "CoCo%" = CoCo/Total.
 - Our target is **50% CoCo adoption** per partner. After the table, add ONE sentence calling out which partners are closest to 50% and which need enablement focus.
-- Phase: Discovery / Building Momentum / Deploying at Scale
 
-## USE CASE PATTERNS
+## USE CASE PATTERNS (managed partners only)
 3-4 bullets. Each: **Pattern Name** — one sentence with partner names and EACV.
 
-## NOTABLE WINS
+## NOTABLE WINS (managed partners only)
 2-3 bullets. Cite specific partner + customer account + what happened. Focus on production deployments, competitive wins, or executive-level engagement.
 
 ## DISCLAIMER
@@ -280,7 +344,7 @@ After the table, ONE sentence per region on its dominant theme.
 
 FORMATTING RULES:
 - Markdown tables for ALL data — no narrative paragraphs for numbers
-- Executive summary: exactly 2-3 sentences + 3 bullets, nothing more
+- Executive summary: exactly 2-3 sentences + 6 bullets, nothing more
 - Section headings: ## format, no numbering
 - Currency: $X.XM for millions, $XK for thousands, $0 when zero
 - Numbers: use commas (e.g., 1,200)
