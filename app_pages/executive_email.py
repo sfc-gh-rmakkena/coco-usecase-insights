@@ -87,12 +87,15 @@ with st.spinner("Loading data..."):
     regional_themes = get_regional_themes(conn, source=source_toggle)
     coco_coverage = get_partner_coco_coverage(conn, region=region)
 
-    # Managed partner stage EACV breakdown
+    # Managed partner stage EACV breakdown — Q2 ONLY (May 1 - Jul 31, 2026)
     managed_partners_sql = "','".join(MANAGED_PARTNERS)
+    Q2_START = '2026-05-01'
+    Q2_END = '2026-07-31'
+
     managed_stage_data = conn.query(f"""
         SELECT 
             CASE 
-                WHEN USE_CASE_STAGE IN ('1 - Discovery', '2 - Scoping', '3 - Technical / Business Validation') THEN 'Active Pipeline (1-3)'
+                WHEN USE_CASE_STAGE IN ('3 - Technical / Business Validation') THEN 'Validation (3)'
                 WHEN USE_CASE_STAGE = '4 - Use Case Won / Migration Plan' THEN 'Won (4)'
                 WHEN USE_CASE_STAGE IN ('5 - Implementation In Progress', '6 - Implementation Complete') THEN 'Implementation (5-6)'
                 WHEN USE_CASE_STAGE = '7 - Deployed' THEN 'Deployed (7)'
@@ -101,13 +104,110 @@ with st.spinner("Loading data..."):
             COALESCE(SUM(USE_CASE_EACV), 0) AS TOTAL_EACV
         FROM TEMP.COCO_PARTNER_ADOPTION.DT_OKR_USE_CASES
         WHERE PARTNER_NAME IN ('{managed_partners_sql}')
-        AND IS_COCO = TRUE
+        AND USE_CASE_STAGE IN ('3 - Technical / Business Validation','4 - Use Case Won / Migration Plan','5 - Implementation In Progress','6 - Implementation Complete','7 - Deployed')
         AND (
-            (USE_CASE_STAGE IN ('1 - Discovery', '2 - Scoping', '3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan') AND DECISION_DATE > '2025-11-20')
-            OR (USE_CASE_STAGE IN ('5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed') AND GO_LIVE_DATE > '2025-11-20')
+            (USE_CASE_STAGE IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan') AND DECISION_DATE >= '{Q2_START}' AND DECISION_DATE <= '{Q2_END}')
+            OR (USE_CASE_STAGE IN ('5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed') AND GO_LIVE_DATE >= '{Q2_START}' AND GO_LIVE_DATE <= '{Q2_END}')
         )
         GROUP BY STAGE_GROUP
         ORDER BY STAGE_GROUP
+    """)
+
+    # Q2 headline stats for managed partners (all UCs + CoCo UCs)
+    managed_q2_stats = conn.query(f"""
+        SELECT 
+            COUNT(*) AS TOTAL_UCS,
+            SUM(CASE WHEN IS_COCO THEN 1 ELSE 0 END) AS COCO_UCS,
+            COALESCE(SUM(USE_CASE_EACV), 0) AS TOTAL_EACV,
+            COALESCE(SUM(CASE WHEN IS_COCO THEN USE_CASE_EACV ELSE 0 END), 0) AS COCO_EACV,
+            COUNT(DISTINCT PARTNER_NAME) AS ACTIVE_PARTNERS,
+            SUM(CASE WHEN USE_CASE_STAGE = '7 - Deployed' AND IS_COCO THEN 1 ELSE 0 END) AS COCO_DEPLOYED
+        FROM TEMP.COCO_PARTNER_ADOPTION.DT_OKR_USE_CASES
+        WHERE PARTNER_NAME IN ('{managed_partners_sql}')
+        AND USE_CASE_STAGE IN ('3 - Technical / Business Validation','4 - Use Case Won / Migration Plan','5 - Implementation In Progress','6 - Implementation Complete','7 - Deployed')
+        AND (
+            (USE_CASE_STAGE IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan') AND DECISION_DATE >= '{Q2_START}' AND DECISION_DATE <= '{Q2_END}')
+            OR (USE_CASE_STAGE IN ('5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed') AND GO_LIVE_DATE >= '{Q2_START}' AND GO_LIVE_DATE <= '{Q2_END}')
+        )
+    """)
+
+    # Q2 CoCo coverage by region for managed partners
+    managed_q2_regional = conn.query(f"""
+        SELECT 
+            CASE 
+                WHEN THEATER_NAME IN ('AMSExpansion', 'USMajors', 'AMSAcquisition', 'USPubSec') THEN 'NoAM'
+                WHEN THEATER_NAME = 'EMEA' THEN 'EMEA'
+                WHEN THEATER_NAME = 'APJ' THEN 'APJ'
+                ELSE 'Other'
+            END AS REGION,
+            COUNT(*) AS TOTAL_UCS,
+            SUM(CASE WHEN IS_COCO THEN 1 ELSE 0 END) AS COCO_UCS,
+            ROUND(SUM(CASE WHEN IS_COCO THEN 1 ELSE 0 END) * 100.0 / NULLIF(COUNT(*), 0), 1) AS COCO_PCT,
+            COUNT(DISTINCT PARTNER_NAME) AS PARTNER_COUNT,
+            ROUND(AVG(
+                CASE WHEN IS_COCO THEN 1.0 ELSE 0.0 END
+            ) * 100.0, 1) AS AVG_COCO_PCT_PER_UC
+        FROM TEMP.COCO_PARTNER_ADOPTION.DT_OKR_USE_CASES
+        WHERE PARTNER_NAME IN ('{managed_partners_sql}')
+        AND USE_CASE_STAGE IN ('3 - Technical / Business Validation','4 - Use Case Won / Migration Plan','5 - Implementation In Progress','6 - Implementation Complete','7 - Deployed')
+        AND (
+            (USE_CASE_STAGE IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan') AND DECISION_DATE >= '{Q2_START}' AND DECISION_DATE <= '{Q2_END}')
+            OR (USE_CASE_STAGE IN ('5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed') AND GO_LIVE_DATE >= '{Q2_START}' AND GO_LIVE_DATE <= '{Q2_END}')
+        )
+        GROUP BY REGION
+        ORDER BY TOTAL_UCS DESC
+    """)
+
+    # Compute avg CoCo % per partner per region
+    managed_q2_partner_avg = conn.query(f"""
+        WITH partner_stats AS (
+            SELECT 
+                CASE 
+                    WHEN THEATER_NAME IN ('AMSExpansion', 'USMajors', 'AMSAcquisition', 'USPubSec') THEN 'NoAM'
+                    WHEN THEATER_NAME = 'EMEA' THEN 'EMEA'
+                    WHEN THEATER_NAME = 'APJ' THEN 'APJ'
+                    ELSE 'Other'
+                END AS REGION,
+                PARTNER_NAME,
+                COUNT(*) AS TOTAL_UCS,
+                SUM(CASE WHEN IS_COCO THEN 1 ELSE 0 END) AS COCO_UCS,
+                ROUND(SUM(CASE WHEN IS_COCO THEN 1 ELSE 0 END) * 100.0 / NULLIF(COUNT(*), 0), 1) AS COCO_PCT
+            FROM TEMP.COCO_PARTNER_ADOPTION.DT_OKR_USE_CASES
+            WHERE PARTNER_NAME IN ('{managed_partners_sql}')
+            AND USE_CASE_STAGE IN ('3 - Technical / Business Validation','4 - Use Case Won / Migration Plan','5 - Implementation In Progress','6 - Implementation Complete','7 - Deployed')
+            AND (
+                (USE_CASE_STAGE IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan') AND DECISION_DATE >= '{Q2_START}' AND DECISION_DATE <= '{Q2_END}')
+                OR (USE_CASE_STAGE IN ('5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed') AND GO_LIVE_DATE >= '{Q2_START}' AND GO_LIVE_DATE <= '{Q2_END}')
+            )
+            GROUP BY REGION, PARTNER_NAME
+        )
+        SELECT REGION, ROUND(AVG(COCO_PCT), 1) AS AVG_COCO_PCT_PER_PARTNER
+        FROM partner_stats
+        GROUP BY REGION
+        ORDER BY AVG_COCO_PCT_PER_PARTNER DESC
+    """)
+
+    # Q2 Top Partners: per-partner breakdown with workload mix
+    managed_q2_partners = conn.query(f"""
+        SELECT 
+            PARTNER_NAME,
+            COUNT(*) AS TOTAL_UCS,
+            SUM(CASE WHEN IS_COCO THEN 1 ELSE 0 END) AS COCO_UCS,
+            ROUND(SUM(CASE WHEN IS_COCO THEN 1 ELSE 0 END) * 100.0 / NULLIF(COUNT(*), 0), 0) AS COCO_PCT,
+            COALESCE(SUM(USE_CASE_EACV), 0) AS TOTAL_EACV,
+            SUM(CASE WHEN TECHNICAL_USE_CASE LIKE '%AI%' THEN 1 ELSE 0 END) AS AI,
+            SUM(CASE WHEN TECHNICAL_USE_CASE LIKE '%DE:%' THEN 1 ELSE 0 END) AS DE,
+            SUM(CASE WHEN TECHNICAL_USE_CASE LIKE '%Analytics%' THEN 1 ELSE 0 END) AS ANALYTICS
+        FROM TEMP.COCO_PARTNER_ADOPTION.DT_OKR_USE_CASES
+        WHERE PARTNER_NAME IN ('{managed_partners_sql}')
+        AND USE_CASE_STAGE IN ('3 - Technical / Business Validation','4 - Use Case Won / Migration Plan','5 - Implementation In Progress','6 - Implementation Complete','7 - Deployed')
+        AND (
+            (USE_CASE_STAGE IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan') AND DECISION_DATE >= '{Q2_START}' AND DECISION_DATE <= '{Q2_END}')
+            OR (USE_CASE_STAGE IN ('5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed') AND GO_LIVE_DATE >= '{Q2_START}' AND GO_LIVE_DATE <= '{Q2_END}')
+        )
+        GROUP BY PARTNER_NAME
+        ORDER BY TOTAL_EACV DESC
+        LIMIT 15
     """)
 
 if partner_filter and partner_filter != "All":
@@ -127,14 +227,15 @@ if len(stats) == 0:
     st.warning("No data available.")
     st.stop()
 
-# Recompute headline stats from managed-partners-only data
-managed_total_ucs = int(partner_data['USE_CASE_COUNT'].sum())
-managed_total_partners = len(partner_data)
-managed_total_eacv = partner_data['TOTAL_EACV'].sum() or 0
-managed_active = int(partner_data['ACTIVE_PIPELINE'].sum())
-managed_won = int(partner_data['WON'].sum())
-managed_impl = int(partner_data['IN_IMPL'].sum())
-managed_deployed = int(partner_data['DEPLOYED'].sum())
+# Recompute headline stats from Q2 managed partner data
+q2 = managed_q2_stats.iloc[0]
+managed_total_ucs = int(q2['TOTAL_UCS'])
+managed_coco_ucs = int(q2['COCO_UCS'])
+managed_total_eacv = q2['TOTAL_EACV'] or 0
+managed_coco_eacv = q2['COCO_EACV'] or 0
+managed_total_partners = int(q2['ACTIVE_PARTNERS'])
+managed_coco_deployed = int(q2['COCO_DEPLOYED'])
+managed_coco_pct = round(managed_coco_ucs * 100.0 / managed_total_ucs, 1) if managed_total_ucs > 0 else 0
 managed_inactive_partners = 35 - managed_total_partners
 managed_inactive_names = [p for p in MANAGED_PARTNERS if p not in partner_data['PARTNER_NAME'].values]
 
@@ -172,13 +273,9 @@ if len(coco_coverage) > 0:
         }
 
 partner_ctx = ""
-for _, p in partner_data.head(15).iterrows():
+for _, p in managed_q2_partners.iterrows():
     eacv = p.get('TOTAL_EACV', 0) or 0
-    cv = coverage_map.get(p['PARTNER_NAME'], {})
-    total_ucs = cv.get('total', '?')
-    coco_ucs = cv.get('coco', int(p['USE_CASE_COUNT']))
-    coco_pct = cv.get('pct', 0)
-    partner_ctx += f"  {p['PARTNER_NAME']}: CoCo={coco_ucs}/{total_ucs} ({coco_pct:.0f}%), ${eacv/1000:.0f}K, Active={int(p.get('ACTIVE_PIPELINE', 0))}, Won={int(p.get('WON', 0))}, Impl={int(p.get('IN_IMPL', 0))}, Deployed={int(p.get('DEPLOYED', 0))}\n"
+    partner_ctx += f"  {p['PARTNER_NAME']}: {int(p['TOTAL_UCS'])} UCs, {int(p['COCO_UCS'])} CoCo ({int(p['COCO_PCT'])}%), ${eacv/1000:.0f}K, AI={int(p['AI'])}, DE={int(p['DE'])}, Analytics={int(p['ANALYTICS'])}\n"
 
 stage_ctx = ""
 for _, sg in managed_stage_data.iterrows():
@@ -243,22 +340,36 @@ def _build_region_theme_ctx(df, region_name):
         ctx += f"    Competitors: {comps}\n"
     return ctx
 
+# Build Q2 regional CoCo coverage context
+partner_avg_map = {}
+if len(managed_q2_partner_avg) > 0:
+    for _, row in managed_q2_partner_avg.iterrows():
+        partner_avg_map[row['REGION']] = row['AVG_COCO_PCT_PER_PARTNER']
+
+regional_coco_ctx = ""
+for _, rg in managed_q2_regional.iterrows():
+    avg_pct = partner_avg_map.get(rg['REGION'], 0)
+    regional_coco_ctx += f"  {rg['REGION']}: {int(rg['TOTAL_UCS'])} total UCs, {int(rg['COCO_UCS'])} CoCo, {rg['COCO_PCT']}% overall, {int(rg['PARTNER_COUNT'])} partners, {avg_pct}% avg/partner\n"
+
 
 data_context = f"""
-=== MANAGED PARTNERS ONLY (35) | {source_toggle} Use Cases | {region} Region ===
-NOTE: All numbers below are for the 35 managed partners ONLY, except REGIONAL BREAKDOWN which shows all partners.
+=== Q2 (May-Jul 2026) | MANAGED PARTNERS ONLY (35) | Stages 3-7 ===
+NOTE: All numbers are Q2 only (May 1 - Jul 31, 2026) for the 35 managed partners, except REGIONAL BREAKDOWN which shows all partners.
 
-GLOBAL REFERENCE (all partners, for context only): {int(s['TOTAL_USE_CASES'])} total CoCo UCs | {int(s['TOTAL_PARTNERS'])} partners | ${s['TOTAL_EACV']/1_000_000:.1f}M EACV
+GLOBAL REFERENCE (all partners, all stages, OKR window — for context only): {int(s['TOTAL_USE_CASES'])} total CoCo UCs | {int(s['TOTAL_PARTNERS'])} partners | ${s['TOTAL_EACV']/1_000_000:.1f}M EACV
 
-MANAGED PARTNERS HEADLINE: {managed_total_ucs} CoCo UCs | {managed_total_partners} Active Managed Partners | ${managed_total_eacv/1_000_000:.1f}M EACV
-Active(1-3): {managed_active} | Won(4): {managed_won} | Impl(5-6): {managed_impl} | Deployed(7): {managed_deployed}
-CoCo Active: {managed_total_partners} of 35 managed partners have CoCo activity
-No CoCo Activity ({managed_inactive_partners} partners): {', '.join(managed_inactive_names)}
+MANAGED PARTNERS Q2 HEADLINE: {managed_total_ucs} total UCs | {managed_coco_ucs} CoCo UCs ({managed_coco_pct}%) | {managed_total_partners} Active Partners | ${managed_total_eacv/1_000_000:.1f}M total EACV | ${managed_coco_eacv/1_000_000:.1f}M CoCo EACV | {managed_coco_deployed} CoCo deployed
+CoCo Active: {managed_total_partners} of 35 managed partners have Q2 activity
+No Q2 Activity ({managed_inactive_partners} partners): {', '.join(managed_inactive_names)}
 
-PIPELINE (Managed Partners Only):
+MANAGED PARTNER COCO COVERAGE (Q2, by region):
+  Overall: {managed_total_ucs} total UCs, {managed_coco_ucs} CoCo, {managed_coco_pct}%
+{regional_coco_ctx}
+
+PIPELINE (Managed Partners, Q2, all UCs):
 {stage_ctx}
 
-REGIONAL BREAKDOWN (All Partners — managed + unmanaged):
+REGIONAL BREAKDOWN (Managed and Unmanaged):
 {region_ctx}
 
 TOP PARTNERS (by EACV, managed partners only, with CoCo coverage — target 50%):
@@ -295,7 +406,7 @@ SCOPE: Focus on the 35 managed partners. Use MANAGED PARTNERS HEADLINE numbers f
 - REGIONAL BREAKDOWN uses all-partner data (managed + unmanaged) to show geographic traction.
 - ALL other sections (Pipeline, Top Partners, OKR, Patterns, Wins) use managed partners ONLY.
 
-Follow this EXACT structure with 8 sections:
+Follow this EXACT structure with 9 sections:
 
 ## EXECUTIVE SUMMARY
 2-3 sentences maximum, then exactly 6 bullets.
@@ -323,7 +434,14 @@ PARTNER CLASSIFICATION:
 | Stage | Count | EACV |
 - Use MANAGED PARTNERS pipeline data only
 
-## REGIONAL BREAKDOWN (ALL PARTNERS — managed + unmanaged)
+## MANAGED PARTNER COCO COVERAGE
+| Scope | Total UCs | CoCo UCs | CoCo % | Partners | Avg CoCo %/Partner |
+- Show overall managed partner CoCo adoption rate and per-region breakdown (NoAM, EMEA, APJ)
+- "Total UCs" = all use cases (CoCo + non-CoCo) for managed partners in Q2
+- "Avg CoCo %/Partner" = average of each partner's individual CoCo %, not the aggregate
+- After table: ONE sentence on which region has strongest/weakest CoCo penetration
+
+## REGIONAL BREAKDOWN (Managed and Unmanaged)
 | Region | Use Cases | EACV | Partners |
 After the table, ONE sentence per region on its dominant theme.
 - This is the ONLY section that uses all-partner data
