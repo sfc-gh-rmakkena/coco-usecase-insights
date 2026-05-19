@@ -2,30 +2,34 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 from utils.queries import get_partner_coco_coverage, get_okr_stage_breakdown
+from utils import resolve_partner_filter
 
 conn = st.session_state.conn
 region = st.session_state.get("selected_region", "Global")
-partner_filter = st.session_state.get("selected_partner", "All")
+selected_partners = st.session_state.get("selected_partners", [])
+start_date = st.session_state.get("okr_start_date")
+end_date = st.session_state.get("okr_end_date")
 
 st.title(":material/dashboard: OKR: CoCo Coverage Dashboard")
-st.caption(f"Track CoCo adoption toward 50% target across partner use cases (Stages 3-7) | Region: {region}")
+st.caption(f"Track CoCo adoption toward 50% target across partner use cases (Stages 3-7) | Region: {region} | {start_date} to {end_date}")
 
 TARGET_PCT = 50
 
 with st.spinner("Loading CoCo coverage data..."):
-    coverage = get_partner_coco_coverage(conn, region=region)
-    stage_breakdown = get_okr_stage_breakdown(conn, region=region)
+    coverage = get_partner_coco_coverage(conn, region=region, start_date=str(start_date), end_date=str(end_date))
+    stage_breakdown = get_okr_stage_breakdown(conn, region=region, start_date=str(start_date), end_date=str(end_date))
 
 if len(coverage) == 0:
     st.warning("No data available for the selected filters.")
     st.stop()
 
-if partner_filter and partner_filter != "All":
-    coverage = coverage[coverage['PARTNER_NAME'].str.contains(partner_filter, case=False, na=False)]
-    stage_breakdown = stage_breakdown[stage_breakdown['PARTNER_NAME'].str.contains(partner_filter, case=False, na=False)]
+if selected_partners:
+    partner_names = resolve_partner_filter(selected_partners)
+    coverage = coverage[coverage['PARTNER_NAME'].isin(partner_names)]
+    stage_breakdown = stage_breakdown[stage_breakdown['PARTNER_NAME'].isin(partner_names)]
 
 if len(coverage) == 0:
-    st.info(f"No data for partner: {partner_filter}")
+    st.info(f"No data for selected partners.")
     st.stop()
 
 tab_summary, tab_detail = st.tabs(["Summary", "Detail"])

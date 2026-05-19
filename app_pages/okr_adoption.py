@@ -4,32 +4,40 @@ import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime, date
 from utils.queries import get_okr_partner_summary, get_okr_coco_adoption
+from utils import resolve_partner_filter
 
 conn = st.session_state.conn
 region = st.session_state.get("selected_region", "Global")
+selected_partners = st.session_state.get("selected_partners", [])
+start_date = st.session_state.get("okr_start_date", date(2026, 5, 1))
+end_date = st.session_state.get("okr_end_date", date(2026, 7, 31))
 
 st.title(":material/check_circle: OKR: CoCo Adoption per Partner")
-st.caption(f"Track 50% CoCo attachment target for partner use cases (Stages 3-7) | Region: {region}")
+st.caption(f"Track 50% CoCo attachment target for partner use cases (Stages 3-7) | Region: {region} | {start_date} to {end_date}")
 
 TARGET_PCT = 50
 
-f1, f2, f3, f4 = st.columns([1, 1, 1, 1])
+f1, f2 = st.columns([1, 1])
 with f1:
-    start_date = st.date_input("Start Date", value=date(2025, 11, 20), key="okr_start_date")
-with f2:
-    end_date = st.date_input("End Date", value=date.today(), key="okr_end_date")
-with f3:
     target = st.number_input("Target %", min_value=10, max_value=100, value=TARGET_PCT, step=5, key="okr_target")
-with f4:
+with f2:
     min_use_cases = st.number_input("Min Use Cases", min_value=1, max_value=20, value=2, step=1, key="okr_min_uc")
 
-q_start = start_date.strftime('%Y-%m-%d')
-q_end = end_date.strftime('%Y-%m-%d')
+q_start = str(start_date)
+q_end = str(end_date)
 summary = get_okr_partner_summary(conn, q_start, q_end, region=region)
 
 if len(summary) == 0:
     st.info("No use cases found for the selected date range.")
     st.stop()
+
+# Apply sidebar partner filter
+if selected_partners:
+    partner_names = resolve_partner_filter(selected_partners)
+    summary = summary[summary['PARTNER_NAME'].isin(partner_names)]
+    if len(summary) == 0:
+        st.info(f"No data for selected partners.")
+        st.stop()
 
 summary['MEETS_TARGET'] = summary['COCO_PCT'] >= target
 filtered = summary[summary['TOTAL_USE_CASES'] >= min_use_cases].copy()

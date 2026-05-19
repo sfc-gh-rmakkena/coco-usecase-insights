@@ -197,8 +197,8 @@ def get_okr_coco_adoption(_conn, quarter_start, quarter_end, region=None):
         COCO_SOURCE
     FROM {DT_OKR}
     WHERE (
-        (USE_CASE_STAGE IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan') AND DECISION_DATE >= '{quarter_start}' AND DECISION_DATE < '{quarter_end}')
-        OR (USE_CASE_STAGE IN ('5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed') AND GO_LIVE_DATE >= '{quarter_start}' AND GO_LIVE_DATE < '{quarter_end}')
+        (USE_CASE_STAGE IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan') AND DECISION_DATE >= '{quarter_start}' AND DECISION_DATE <= '{quarter_end}')
+        OR (USE_CASE_STAGE IN ('5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed') AND GO_LIVE_DATE >= '{quarter_start}' AND GO_LIVE_DATE <= '{quarter_end}')
     )
     {tf}
     ORDER BY PARTNER_NAME, IS_COCO DESC, USE_CASE_EACV DESC NULLS LAST
@@ -220,8 +220,8 @@ def get_okr_partner_summary(_conn, quarter_start, quarter_end, region=None):
         CASE WHEN COUNT(CASE WHEN IS_COCO THEN 1 END) * 100.0 / COUNT(*) >= 50 THEN TRUE ELSE FALSE END AS MEETS_TARGET
     FROM {DT_OKR}
     WHERE (
-        (USE_CASE_STAGE IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan') AND DECISION_DATE >= '{quarter_start}' AND DECISION_DATE < '{quarter_end}')
-        OR (USE_CASE_STAGE IN ('5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed') AND GO_LIVE_DATE >= '{quarter_start}' AND GO_LIVE_DATE < '{quarter_end}')
+        (USE_CASE_STAGE IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan') AND DECISION_DATE >= '{quarter_start}' AND DECISION_DATE <= '{quarter_end}')
+        OR (USE_CASE_STAGE IN ('5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed') AND GO_LIVE_DATE >= '{quarter_start}' AND GO_LIVE_DATE <= '{quarter_end}')
     )
     {tf}
     GROUP BY PARTNER_NAME
@@ -532,8 +532,18 @@ def get_regional_comment_narratives(_conn, target_region, source=None):
     return _conn.query(query)
 
 @st.cache_data(ttl=timedelta(minutes=30))
-def get_partner_coco_coverage(_conn, region=None):
+def get_partner_coco_coverage(_conn, region=None, start_date=None, end_date=None):
     tf = _theater_filter(region)
+    if start_date and end_date:
+        date_filter = f"""(
+            (USE_CASE_STAGE IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan') AND DECISION_DATE >= '{start_date}' AND DECISION_DATE <= '{end_date}')
+            OR (USE_CASE_STAGE IN ('5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed') AND GO_LIVE_DATE >= '{start_date}' AND GO_LIVE_DATE <= '{end_date}')
+        )"""
+    else:
+        date_filter = """(
+            (USE_CASE_STAGE IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan') AND DECISION_DATE > '2025-11-20')
+            OR (USE_CASE_STAGE IN ('5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed') AND GO_LIVE_DATE > '2025-11-20')
+        )"""
     query = f"""
     SELECT 
         PARTNER_NAME,
@@ -541,10 +551,7 @@ def get_partner_coco_coverage(_conn, region=None):
         COUNT(CASE WHEN IS_COCO THEN 1 END) AS COCO_UCS,
         ROUND(COUNT(CASE WHEN IS_COCO THEN 1 END) * 100.0 / NULLIF(COUNT(*), 0), 1) AS COCO_PCT
     FROM {DT_OKR}
-    WHERE (
-        (USE_CASE_STAGE IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan') AND DECISION_DATE > '2025-11-20')
-        OR (USE_CASE_STAGE IN ('5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed') AND GO_LIVE_DATE > '2025-11-20')
-    )
+    WHERE {date_filter}
     {tf}
     GROUP BY PARTNER_NAME
     HAVING COUNT(*) >= 1
@@ -553,8 +560,18 @@ def get_partner_coco_coverage(_conn, region=None):
     return _conn.query(query)
 
 @st.cache_data(ttl=timedelta(minutes=30))
-def get_okr_stage_breakdown(_conn, region=None):
+def get_okr_stage_breakdown(_conn, region=None, start_date=None, end_date=None):
     tf = _theater_filter(region)
+    if start_date and end_date:
+        date_filter = f"""(
+            (USE_CASE_STAGE IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan') AND DECISION_DATE >= '{start_date}' AND DECISION_DATE <= '{end_date}')
+            OR (USE_CASE_STAGE IN ('5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed') AND GO_LIVE_DATE >= '{start_date}' AND GO_LIVE_DATE <= '{end_date}')
+        )"""
+    else:
+        date_filter = """(
+            (USE_CASE_STAGE IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan') AND DECISION_DATE > '2025-11-20')
+            OR (USE_CASE_STAGE IN ('5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed') AND GO_LIVE_DATE > '2025-11-20')
+        )"""
     query = f"""
     SELECT 
         PARTNER_NAME,
@@ -565,10 +582,7 @@ def get_okr_stage_breakdown(_conn, region=None):
         SUM(USE_CASE_EACV) AS TOTAL_EACV,
         SUM(CASE WHEN IS_COCO THEN USE_CASE_EACV ELSE 0 END) AS COCO_EACV
     FROM {DT_OKR}
-    WHERE (
-        (USE_CASE_STAGE IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan') AND DECISION_DATE > '2025-11-20')
-        OR (USE_CASE_STAGE IN ('5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed') AND GO_LIVE_DATE > '2025-11-20')
-    )
+    WHERE {date_filter}
     {tf}
     GROUP BY PARTNER_NAME, USE_CASE_STAGE
     ORDER BY PARTNER_NAME, USE_CASE_STAGE

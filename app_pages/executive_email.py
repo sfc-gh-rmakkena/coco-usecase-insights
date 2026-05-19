@@ -14,16 +14,15 @@ from utils.queries import (
 from utils.cortex_helpers import cortex_complete
 
 MANAGED_PARTNERS = [
-    '7Rivers, Inc', 'Accenture', 'Aimpoint Digital', 'Apex Systems', 'Archetype Consulting',
-    'Ateko', 'Atrium', 'Blend360, LLC', 'BlueCloud Services Inc',
-    'Capgemini Technologies LLC', 'kipi.ai', 'CitiusTech Inc.',
-    'Cognizant Technology Solutions US Corp', 'Deloitte Consulting', 'EY',
-    'Hexaware Technologies', 'IBM', 'Icon Analytics', 'Infostrux Solutions Inc.',
-    'Infosys', 'KPMG LLP', 'LTIMindtree', 'Merkle', 'NTT DATA Group Corporation',
-    'OneSix', 'Perficient Inc.', 'Slalom, LLC.', 'Sparq Holdings, Inc.',
-    'Spaulding Ridge', 'Squadron Data Inc', 'Coastal',
-    'TEKsystems Global Services, LLC.', 'Tiger Analytics Inc.', 'Tredence Inc.',
-    'evolv Consulting', 'phData, Inc.'
+    # Global SIs
+    'Accenture', 'Capgemini Technologies LLC',
+    'Cognizant Technology Solutions US Corp', 'Deloitte Consulting', 'EY', 'Ernst & Young (EY)',
+    'IBM',
+    # Regional Managed Partners
+    '7Rivers, Inc', 'Aimpoint Digital', 'BlueCloud Services Inc', 'kipi.ai',
+    'evolv Consulting', 'Infostrux Solutions Inc.', 'Infosys', 'KPMG LLP',
+    'LTIMindtree', 'NTT DATA Group Corporation', 'phData, Inc.',
+    'Slalom, LLC.', 'Squadron Data Inc', 'Tredence Inc.'
 ]
 
 
@@ -57,20 +56,23 @@ def md_to_html(md_text):
 
 conn = st.session_state.conn
 region = st.session_state.get("selected_region", "Global")
-partner_filter = st.session_state.get("selected_partner", "All")
+selected_partners = st.session_state.get("selected_partners", [])
 
 st.title(":material/mail: Executive Email Summary")
 filter_label = f"Region: {region}"
-if partner_filter and partner_filter != "All":
-    filter_label += f" | Partner: {partner_filter}"
+if selected_partners:
+    filter_label += f" | Partners: {', '.join(selected_partners)}"
 st.caption(f"AI-generated weekly summary for CoCo Use Case Intelligence | {filter_label}")
 
 source_toggle = st.segmented_control("Use Case View", ["Overall", "PSE Confirmed", "Feature Flag"], default="Overall", key="email_source")
 st.caption(f"Filters active: {source_toggle} use cases • {region} region")
 
 def _apply_partner_filter(df, col='PARTNER_NAME'):
-    if partner_filter and partner_filter != "All" and col in df.columns:
-        return df[df[col].str.contains(partner_filter, case=False, na=False)]
+    """Filter DataFrame by sidebar multiselect partners."""
+    if selected_partners and col in df.columns:
+        from utils import resolve_partner_filter
+        names = resolve_partner_filter(selected_partners)
+        return df[df[col].isin(names)]
     return df
 
 with st.spinner("Loading data..."):
@@ -210,11 +212,7 @@ with st.spinner("Loading data..."):
         LIMIT 15
     """)
 
-if partner_filter and partner_filter != "All":
-    partner_data = _apply_partner_filter(partner_data)
-    comment_data = _apply_partner_filter(comment_data)
-    partner_workloads = _apply_partner_filter(partner_workloads)
-
+# Executive email always uses MANAGED_PARTNERS list, ignoring sidebar partner filter
 # Filter to managed partners only for executive email context
 partner_data = partner_data[partner_data['PARTNER_NAME'].isin(MANAGED_PARTNERS)]
 comment_data = comment_data[comment_data['PARTNER_NAME'].isin(MANAGED_PARTNERS)]
@@ -353,13 +351,20 @@ for _, rg in managed_q2_regional.iterrows():
 
 
 data_context = f"""
-=== Q2 (May-Jul 2026) | MANAGED PARTNERS ONLY (35) | Stages 3-7 ===
-NOTE: All numbers are Q2 only (May 1 - Jul 31, 2026) for the 35 managed partners, except REGIONAL BREAKDOWN which shows all partners.
+=== Q2 (May-Jul 2026) | MANAGED PARTNERS ONLY (20) | Stages 3-7 ===
+NOTE: All numbers are Q2 only (May 1 - Jul 31, 2026) for the 20 managed partners, except REGIONAL BREAKDOWN which shows all partners.
 
 GLOBAL REFERENCE (all partners, all stages, OKR window — for context only): {int(s['TOTAL_USE_CASES'])} total CoCo UCs | {int(s['TOTAL_PARTNERS'])} partners | ${s['TOTAL_EACV']/1_000_000:.1f}M EACV
 
-MANAGED PARTNERS Q2 HEADLINE: {managed_total_ucs} total UCs | {managed_coco_ucs} CoCo UCs ({managed_coco_pct}%) | {managed_total_partners} Active Partners | ${managed_total_eacv/1_000_000:.1f}M total EACV | ${managed_coco_eacv/1_000_000:.1f}M CoCo EACV | {managed_coco_deployed} CoCo deployed
-CoCo Active: {managed_total_partners} of 35 managed partners have Q2 activity
+MANAGED PARTNERS Q2 HEADLINE:
+  CoCo Use Cases: {managed_coco_ucs} (THIS is the CoCo number for the opening sentence)
+  Total Pipeline (CoCo + non-CoCo): {managed_total_ucs} use cases
+  CoCo Adoption: {managed_coco_pct}%
+  Active Partners: {managed_total_partners}
+  Total EACV: ${managed_total_eacv/1_000_000:.1f}M
+  CoCo EACV: ${managed_coco_eacv/1_000_000:.1f}M
+  CoCo Deployed: {managed_coco_deployed}
+CoCo Active: {managed_total_partners} of 20 managed partners have Q2 activity
 No Q2 Activity ({managed_inactive_partners} partners): {', '.join(managed_inactive_names)}
 
 MANAGED PARTNER COCO COVERAGE (Q2, by region):
@@ -401,7 +406,7 @@ recipients_input = st.text_area(
 
 default_prompt = f"""You are writing a polished executive briefing for Snowflake leadership on Cortex Code (CoCo) partner use case traction. This will be read by VPs and the CEO — keep it sharp, data-rich, and action-oriented.
 
-SCOPE: Focus on the 35 managed partners. Use MANAGED PARTNERS HEADLINE numbers for all sections EXCEPT Regional Breakdown.
+SCOPE: Focus on the 20 managed partners. Use MANAGED PARTNERS HEADLINE numbers for all sections EXCEPT Regional Breakdown.
 - The GLOBAL REFERENCE line is for context only — mention it once in the opening sentence.
 - REGIONAL BREAKDOWN uses all-partner data (managed + unmanaged) to show geographic traction.
 - ALL other sections (Pipeline, Top Partners, OKR, Patterns, Wins) use managed partners ONLY.
@@ -410,22 +415,23 @@ Follow this EXACT structure with 9 sections:
 
 ## EXECUTIVE SUMMARY
 2-3 sentences maximum, then exactly 6 bullets.
-- Open with: "[X] CoCo use cases across 35 managed partners representing $[Z]M in CoCo EACV, with [W] deployed in production. Global CoCo pipeline: [G] use cases across [A] partners worth $[T]M."
+- Open with: "[X] CoCo use cases across 20 managed partners representing $[Z]M in CoCo EACV, with [W] deployed in production. Global CoCo pipeline: [G] use cases across [A] partners worth $[T]M."
 - Second sentence: one crisp insight on the dominant pattern (e.g., what's working, what's accelerating).
 - Bullet 1: "**Leading use case types:** [top 3 by count]"
 - Bullet 2: "**Region leaders:** NoAM ([top 3 partners]), EMEA ([top 3]), APJ ([top 3])"
 - Bullet 3: "**Top Global SIs by EACV:** ([top 3 global partners by EACV])"
 - Bullet 4: "**Top Regional SIs by EACV:** ([top 3 regional managed partners by EACV])"
 - Bullet 5: "**Competitive displacement:** [top 3 competitors by count]"
-- Bullet 6: "**CoCo activity:** [X] of 35 managed partners active; [Y] with no CoCo activity: [list names]"
+- Bullet 6: "**CoCo activity:** [X] of 20 managed partners active; [Y] with no CoCo activity: [list names]"
 
 PARTNER CLASSIFICATION:
-- Global SIs (7): EY, Deloitte Consulting, Accenture, Cognizant Technology Solutions US Corp, Capgemini Technologies LLC, kipi.ai, IBM, LTIMindtree
-- Regional Managed Partners (28): 7Rivers, Aimpoint Digital, Apex Systems, Archetype Consulting, Ateko, Atrium, Blend360, BlueCloud, CitiusTech, Coastal, Hexaware, Icon Analytics, Infostrux, Infosys, KPMG, Merkle, NTT DATA, OneSix, Perficient, Slalom, Sparq, Spaulding Ridge, Squadron Data, TEKsystems, Tiger Analytics, Tredence, evolv Consulting, phData
+- Global SIs (6): EY, Deloitte Consulting, Accenture, Cognizant Technology Solutions US Corp, Capgemini Technologies LLC, IBM
+- Regional Managed Partners (15): 7Rivers, Aimpoint Digital, BlueCloud, kipi.ai, evolv Consulting, Infostrux, Infosys, KPMG, LTIMindtree, NTT DATA, phData, Slalom, Squadron Data, Tredence
 
 ## OKR PROGRESS
 | Metric | Current | Target | Gap |
 - Show: CoCo use cases vs 50% target, CoCo adoption %, partners meeting 50%, CoCo EACV
+- For CoCo EACV row: put "-" in Target and Gap columns (no target for EACV)
 - After the table: ONE sentence on what it takes to close the gap (how many more CoCo UCs needed, which partners have the biggest gaps)
 - Call out partners already meeting 50% target
 - Use MANAGED PARTNERS data only
