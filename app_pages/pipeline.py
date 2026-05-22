@@ -6,9 +6,12 @@ from utils.cortex_helpers import cortex_complete
 
 conn = st.session_state.conn
 region = st.session_state.get("selected_region", "Global")
+start_date = str(st.session_state.get("okr_start_date", "2026-05-01"))
+end_date = str(st.session_state.get("okr_end_date", "2026-07-31"))
 
 st.title(":material/filter_alt: Use Case Pipeline & Funnel")
-st.caption(f"Explore the full CoCo use case pipeline with filters | Region: {region}")
+st.caption(f"Explore the full CoCo use case pipeline with filters | Region: {region} | {start_date} to {end_date}")
+st.caption(":material/info: Partner filter not applied on this page — use the page-level dropdown below")
 
 source_toggle = st.segmented_control("Source", ["Overall", "PSE Confirmed", "Feature Flag"], default="Overall", key="pipeline_source")
 
@@ -27,7 +30,7 @@ with f3:
     sort_by = st.selectbox("Sort by", ["EACV (High to Low)", "Days in Stage (High)", "Partner Name", "Stage"], key="pipe_sort")
 
 stage_filter = selected_stages if selected_stages else None
-df = get_use_cases(conn, partner=selected_partner, stage=stage_filter, region=region, source=source_toggle)
+df = get_use_cases(conn, partner=selected_partner, stage=stage_filter, region=region, source=source_toggle, start_date=start_date, end_date=end_date)
 
 if len(df) == 0:
     st.info("No use cases found with the selected filters.")

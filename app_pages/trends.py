@@ -6,14 +6,17 @@ from utils.queries import get_aging_analysis, get_stalled_use_cases, get_weekly_
 
 conn = st.session_state.conn
 region = st.session_state.get("selected_region", "Global")
+start_date = str(st.session_state.get("okr_start_date", "2026-05-01"))
+end_date = str(st.session_state.get("okr_end_date", "2026-07-31"))
 
 st.title(":material/trending_up: Use Case Trends & Aging")
-st.caption(f"Track velocity, aging, and stalled use cases | Region: {region}")
+st.caption(f"Track velocity, aging, and stalled use cases | Region: {region} | {start_date} to {end_date}")
+st.caption(":material/info: Partner filter not applied on this page — showing all partners")
 
 tab_trends, tab_aging, tab_stalled = st.tabs(["Weekly Trends", "Aging Analysis", "Stalled Use Cases"])
 
 with tab_trends:
-    weekly = get_weekly_use_case_metrics(conn, region=region)
+    weekly = get_weekly_use_case_metrics(conn, region=region, start_date=start_date, end_date=end_date)
     if len(weekly) > 0:
         c1, c2 = st.columns(2)
         with c1:
@@ -63,7 +66,7 @@ with tab_trends:
         st.info("No weekly trend data available yet.")
 
 with tab_aging:
-    aging = get_aging_analysis(conn, region=region)
+    aging = get_aging_analysis(conn, region=region, start_date=start_date, end_date=end_date)
     if len(aging) > 0:
         bucket_order = ['0-14 days', '15-30 days', '31-60 days', '61-90 days', '90+ days']
         aging['AGING_BUCKET'] = pd.Categorical(aging['AGING_BUCKET'], categories=bucket_order, ordered=True)
@@ -108,7 +111,7 @@ with tab_aging:
 
 with tab_stalled:
     threshold = st.slider("Stalled threshold (days)", 30, 120, 60, 10, key="stall_thresh")
-    stalled = get_stalled_use_cases(conn, days_threshold=threshold, region=region)
+    stalled = get_stalled_use_cases(conn, days_threshold=threshold, region=region, start_date=start_date, end_date=end_date)
 
     if len(stalled) > 0:
         st.warning(f"{len(stalled)} use cases have been in their current stage for {threshold}+ days")
@@ -146,7 +149,7 @@ with tab_stalled:
 st.divider()
 
 st.subheader("Partner Velocity Comparison")
-partner_data = get_by_partner(conn, region=region)
+partner_data = get_by_partner(conn, region=region, start_date=start_date, end_date=end_date)
 if len(partner_data) > 0:
     partner_data['WIN_RATE'] = (partner_data['WON_COUNT'] + partner_data['DEPLOYED_COUNT']) / partner_data['USE_CASE_COUNT'] * 100
     fig = px.scatter(

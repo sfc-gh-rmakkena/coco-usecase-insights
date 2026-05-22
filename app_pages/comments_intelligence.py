@@ -5,9 +5,12 @@ from utils.cortex_helpers import cortex_complete
 
 conn = st.session_state.conn
 region = st.session_state.get("selected_region", "Global")
+start_date = str(st.session_state.get("okr_start_date", "2026-05-01"))
+end_date = str(st.session_state.get("okr_end_date", "2026-07-31"))
 
 st.title(":material/smart_toy: Comments & AI Insights")
 st.caption(f"AI-powered analysis of SE, Partner, and Specialist comments across all use cases | Region: {region}")
+st.caption(":material/info: Partner filter not applied on this page — use the page-level dropdown below")
 
 f1, f2, f3 = st.columns(3)
 with f1:
@@ -25,7 +28,7 @@ with f3:
     ], key="ci_analysis_type")
 
 source = source_filter if source_filter != "All" else None
-df = get_comments_with_context(conn, region=region, source=source, limit=100)
+df = get_comments_with_context(conn, region=region, source=source, limit=100, start_date=start_date, end_date=end_date)
 
 if selected_partner and selected_partner != "All":
     df = df[df['PARTNER_NAME'].str.contains(selected_partner, case=False, na=False)]

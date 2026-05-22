@@ -9,7 +9,7 @@ from utils.queries import (
     get_by_region, get_email_summary_data, get_use_case_type_patterns,
     get_workload_patterns, get_competitive_landscape, get_comment_narratives,
     get_partner_workload_cross, get_regional_themes, get_regional_comment_narratives,
-    get_partner_coco_coverage,
+    get_partner_coco_coverage, get_partner_credit_consumption, get_adoption_overview,
 )
 from utils.cortex_helpers import cortex_complete
 
@@ -88,13 +88,27 @@ with st.spinner("Loading data..."):
     partner_workloads = get_partner_workload_cross(conn, region=region, source=source_toggle)
     regional_themes = get_regional_themes(conn, source=source_toggle)
     coco_coverage = get_partner_coco_coverage(conn, region=region)
+    global_overview = get_adoption_overview(conn, '2026-05-01', '2026-07-31')
 
     # Managed partner stage EACV breakdown — Q2 ONLY (May 1 - Jul 31, 2026)
     managed_partners_sql = "','".join(MANAGED_PARTNERS)
     Q2_START = '2026-05-01'
     Q2_END = '2026-07-31'
 
+    # CoCo-active accounts CTE (reusable across queries)
+    COCO_ACCOUNTS_CTE = f"""
+        coco_active_accounts AS (
+            SELECT DISTINCT UPPER(salesforce_account_name) AS ACCOUNT_NAME_UPPER
+            FROM snowscience.llm.cortex_code_user_day_fact
+            WHERE ds >= '{Q2_START}' AND snowflake_account_type = 'Customer' AND total_daily_requests > 0
+        )
+    """
+
+    # Q2 Credit consumption for managed partners
+    credit_data = get_partner_credit_consumption(conn, MANAGED_PARTNERS, Q2_START, Q2_END)
+
     managed_stage_data = conn.query(f"""
+        WITH {COCO_ACCOUNTS_CTE}
         SELECT 
             CASE 
                 WHEN USE_CASE_STAGE IN ('3 - Technical / Business Validation') THEN 'Validation (3)'
@@ -104,37 +118,40 @@ with st.spinner("Loading data..."):
             END AS STAGE_GROUP,
             COUNT(*) AS UC_COUNT,
             COALESCE(SUM(USE_CASE_EACV), 0) AS TOTAL_EACV
-        FROM TEMP.COCO_PARTNER_ADOPTION.DT_OKR_USE_CASES
-        WHERE PARTNER_NAME IN ('{managed_partners_sql}')
-        AND USE_CASE_STAGE IN ('3 - Technical / Business Validation','4 - Use Case Won / Migration Plan','5 - Implementation In Progress','6 - Implementation Complete','7 - Deployed')
+        FROM TEMP.COCO_PARTNER_ADOPTION.DT_OKR_USE_CASES uc
+        WHERE uc.PARTNER_NAME IN ('{managed_partners_sql}')
+        AND uc.USE_CASE_STAGE IN ('3 - Technical / Business Validation','4 - Use Case Won / Migration Plan','5 - Implementation In Progress','6 - Implementation Complete','7 - Deployed')
         AND (
-            (USE_CASE_STAGE IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan') AND DECISION_DATE >= '{Q2_START}' AND DECISION_DATE <= '{Q2_END}')
-            OR (USE_CASE_STAGE IN ('5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed') AND GO_LIVE_DATE >= '{Q2_START}' AND GO_LIVE_DATE <= '{Q2_END}')
+            (uc.USE_CASE_STAGE IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan') AND uc.DECISION_DATE >= '{Q2_START}' AND uc.DECISION_DATE <= '{Q2_END}')
+            OR (uc.USE_CASE_STAGE IN ('5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed') AND uc.GO_LIVE_DATE >= '{Q2_START}' AND uc.GO_LIVE_DATE <= '{Q2_END}')
         )
         GROUP BY STAGE_GROUP
         ORDER BY STAGE_GROUP
     """)
 
-    # Q2 headline stats for managed partners (all UCs + CoCo UCs)
+    # Q2 headline stats for managed partners (all UCs + CoCo UCs with account-level attribution)
     managed_q2_stats = conn.query(f"""
+        WITH {COCO_ACCOUNTS_CTE}
         SELECT 
             COUNT(*) AS TOTAL_UCS,
-            SUM(CASE WHEN IS_COCO THEN 1 ELSE 0 END) AS COCO_UCS,
+            SUM(CASE WHEN uc.IS_COCO OR caa.ACCOUNT_NAME_UPPER IS NOT NULL THEN 1 ELSE 0 END) AS COCO_UCS,
             COALESCE(SUM(USE_CASE_EACV), 0) AS TOTAL_EACV,
-            COALESCE(SUM(CASE WHEN IS_COCO THEN USE_CASE_EACV ELSE 0 END), 0) AS COCO_EACV,
-            COUNT(DISTINCT PARTNER_NAME) AS ACTIVE_PARTNERS,
-            SUM(CASE WHEN USE_CASE_STAGE = '7 - Deployed' AND IS_COCO THEN 1 ELSE 0 END) AS COCO_DEPLOYED
-        FROM TEMP.COCO_PARTNER_ADOPTION.DT_OKR_USE_CASES
-        WHERE PARTNER_NAME IN ('{managed_partners_sql}')
-        AND USE_CASE_STAGE IN ('3 - Technical / Business Validation','4 - Use Case Won / Migration Plan','5 - Implementation In Progress','6 - Implementation Complete','7 - Deployed')
+            COALESCE(SUM(CASE WHEN uc.IS_COCO OR caa.ACCOUNT_NAME_UPPER IS NOT NULL THEN USE_CASE_EACV ELSE 0 END), 0) AS COCO_EACV,
+            COUNT(DISTINCT uc.PARTNER_NAME) AS ACTIVE_PARTNERS,
+            SUM(CASE WHEN uc.USE_CASE_STAGE = '7 - Deployed' AND (uc.IS_COCO OR caa.ACCOUNT_NAME_UPPER IS NOT NULL) THEN 1 ELSE 0 END) AS COCO_DEPLOYED
+        FROM TEMP.COCO_PARTNER_ADOPTION.DT_OKR_USE_CASES uc
+        LEFT JOIN coco_active_accounts caa ON UPPER(uc.ACCOUNT_NAME) = caa.ACCOUNT_NAME_UPPER
+        WHERE uc.PARTNER_NAME IN ('{managed_partners_sql}')
+        AND uc.USE_CASE_STAGE IN ('3 - Technical / Business Validation','4 - Use Case Won / Migration Plan','5 - Implementation In Progress','6 - Implementation Complete','7 - Deployed')
         AND (
-            (USE_CASE_STAGE IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan') AND DECISION_DATE >= '{Q2_START}' AND DECISION_DATE <= '{Q2_END}')
-            OR (USE_CASE_STAGE IN ('5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed') AND GO_LIVE_DATE >= '{Q2_START}' AND GO_LIVE_DATE <= '{Q2_END}')
+            (uc.USE_CASE_STAGE IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan') AND uc.DECISION_DATE >= '{Q2_START}' AND uc.DECISION_DATE <= '{Q2_END}')
+            OR (uc.USE_CASE_STAGE IN ('5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed') AND uc.GO_LIVE_DATE >= '{Q2_START}' AND uc.GO_LIVE_DATE <= '{Q2_END}')
         )
     """)
 
-    # Q2 CoCo coverage by region for managed partners
+    # Q2 CoCo coverage by region for managed partners (with account-level attribution)
     managed_q2_regional = conn.query(f"""
+        WITH {COCO_ACCOUNTS_CTE}
         SELECT 
             CASE 
                 WHEN THEATER_NAME IN ('AMSExpansion', 'USMajors', 'AMSAcquisition', 'USPubSec') THEN 'NoAM'
@@ -143,18 +160,16 @@ with st.spinner("Loading data..."):
                 ELSE 'Other'
             END AS REGION,
             COUNT(*) AS TOTAL_UCS,
-            SUM(CASE WHEN IS_COCO THEN 1 ELSE 0 END) AS COCO_UCS,
-            ROUND(SUM(CASE WHEN IS_COCO THEN 1 ELSE 0 END) * 100.0 / NULLIF(COUNT(*), 0), 1) AS COCO_PCT,
-            COUNT(DISTINCT PARTNER_NAME) AS PARTNER_COUNT,
-            ROUND(AVG(
-                CASE WHEN IS_COCO THEN 1.0 ELSE 0.0 END
-            ) * 100.0, 1) AS AVG_COCO_PCT_PER_UC
-        FROM TEMP.COCO_PARTNER_ADOPTION.DT_OKR_USE_CASES
-        WHERE PARTNER_NAME IN ('{managed_partners_sql}')
-        AND USE_CASE_STAGE IN ('3 - Technical / Business Validation','4 - Use Case Won / Migration Plan','5 - Implementation In Progress','6 - Implementation Complete','7 - Deployed')
+            SUM(CASE WHEN uc.IS_COCO OR caa.ACCOUNT_NAME_UPPER IS NOT NULL THEN 1 ELSE 0 END) AS COCO_UCS,
+            ROUND(SUM(CASE WHEN uc.IS_COCO OR caa.ACCOUNT_NAME_UPPER IS NOT NULL THEN 1 ELSE 0 END) * 100.0 / NULLIF(COUNT(*), 0), 1) AS COCO_PCT,
+            COUNT(DISTINCT uc.PARTNER_NAME) AS PARTNER_COUNT
+        FROM TEMP.COCO_PARTNER_ADOPTION.DT_OKR_USE_CASES uc
+        LEFT JOIN coco_active_accounts caa ON UPPER(uc.ACCOUNT_NAME) = caa.ACCOUNT_NAME_UPPER
+        WHERE uc.PARTNER_NAME IN ('{managed_partners_sql}')
+        AND uc.USE_CASE_STAGE IN ('3 - Technical / Business Validation','4 - Use Case Won / Migration Plan','5 - Implementation In Progress','6 - Implementation Complete','7 - Deployed')
         AND (
-            (USE_CASE_STAGE IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan') AND DECISION_DATE >= '{Q2_START}' AND DECISION_DATE <= '{Q2_END}')
-            OR (USE_CASE_STAGE IN ('5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed') AND GO_LIVE_DATE >= '{Q2_START}' AND GO_LIVE_DATE <= '{Q2_END}')
+            (uc.USE_CASE_STAGE IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan') AND uc.DECISION_DATE >= '{Q2_START}' AND uc.DECISION_DATE <= '{Q2_END}')
+            OR (uc.USE_CASE_STAGE IN ('5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed') AND uc.GO_LIVE_DATE >= '{Q2_START}' AND uc.GO_LIVE_DATE <= '{Q2_END}')
         )
         GROUP BY REGION
         ORDER BY TOTAL_UCS DESC
@@ -189,25 +204,27 @@ with st.spinner("Loading data..."):
         ORDER BY AVG_COCO_PCT_PER_PARTNER DESC
     """)
 
-    # Q2 Top Partners: per-partner breakdown with workload mix
+    # Q2 Top Partners: per-partner breakdown with workload mix (with account-level attribution)
     managed_q2_partners = conn.query(f"""
+        WITH {COCO_ACCOUNTS_CTE}
         SELECT 
-            PARTNER_NAME,
+            uc.PARTNER_NAME,
             COUNT(*) AS TOTAL_UCS,
-            SUM(CASE WHEN IS_COCO THEN 1 ELSE 0 END) AS COCO_UCS,
-            ROUND(SUM(CASE WHEN IS_COCO THEN 1 ELSE 0 END) * 100.0 / NULLIF(COUNT(*), 0), 0) AS COCO_PCT,
-            COALESCE(SUM(USE_CASE_EACV), 0) AS TOTAL_EACV,
-            SUM(CASE WHEN TECHNICAL_USE_CASE LIKE '%AI%' THEN 1 ELSE 0 END) AS AI,
-            SUM(CASE WHEN TECHNICAL_USE_CASE LIKE '%DE:%' THEN 1 ELSE 0 END) AS DE,
-            SUM(CASE WHEN TECHNICAL_USE_CASE LIKE '%Analytics%' THEN 1 ELSE 0 END) AS ANALYTICS
-        FROM TEMP.COCO_PARTNER_ADOPTION.DT_OKR_USE_CASES
-        WHERE PARTNER_NAME IN ('{managed_partners_sql}')
-        AND USE_CASE_STAGE IN ('3 - Technical / Business Validation','4 - Use Case Won / Migration Plan','5 - Implementation In Progress','6 - Implementation Complete','7 - Deployed')
+            SUM(CASE WHEN uc.IS_COCO OR caa.ACCOUNT_NAME_UPPER IS NOT NULL THEN 1 ELSE 0 END) AS COCO_UCS,
+            ROUND(SUM(CASE WHEN uc.IS_COCO OR caa.ACCOUNT_NAME_UPPER IS NOT NULL THEN 1 ELSE 0 END) * 100.0 / NULLIF(COUNT(*), 0), 0) AS COCO_PCT,
+            COALESCE(SUM(uc.USE_CASE_EACV), 0) AS TOTAL_EACV,
+            SUM(CASE WHEN uc.TECHNICAL_USE_CASE LIKE '%AI%' THEN 1 ELSE 0 END) AS AI,
+            SUM(CASE WHEN uc.TECHNICAL_USE_CASE LIKE '%DE:%' THEN 1 ELSE 0 END) AS DE,
+            SUM(CASE WHEN uc.TECHNICAL_USE_CASE LIKE '%Analytics%' THEN 1 ELSE 0 END) AS ANALYTICS
+        FROM TEMP.COCO_PARTNER_ADOPTION.DT_OKR_USE_CASES uc
+        LEFT JOIN coco_active_accounts caa ON UPPER(uc.ACCOUNT_NAME) = caa.ACCOUNT_NAME_UPPER
+        WHERE uc.PARTNER_NAME IN ('{managed_partners_sql}')
+        AND uc.USE_CASE_STAGE IN ('3 - Technical / Business Validation','4 - Use Case Won / Migration Plan','5 - Implementation In Progress','6 - Implementation Complete','7 - Deployed')
         AND (
-            (USE_CASE_STAGE IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan') AND DECISION_DATE >= '{Q2_START}' AND DECISION_DATE <= '{Q2_END}')
-            OR (USE_CASE_STAGE IN ('5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed') AND GO_LIVE_DATE >= '{Q2_START}' AND GO_LIVE_DATE <= '{Q2_END}')
+            (uc.USE_CASE_STAGE IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan') AND uc.DECISION_DATE >= '{Q2_START}' AND uc.DECISION_DATE <= '{Q2_END}')
+            OR (uc.USE_CASE_STAGE IN ('5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed') AND uc.GO_LIVE_DATE >= '{Q2_START}' AND uc.GO_LIVE_DATE <= '{Q2_END}')
         )
-        GROUP BY PARTNER_NAME
+        GROUP BY uc.PARTNER_NAME
         ORDER BY TOTAL_EACV DESC
         LIMIT 15
     """)
@@ -238,6 +255,7 @@ managed_inactive_partners = 35 - managed_total_partners
 managed_inactive_names = [p for p in MANAGED_PARTNERS if p not in partner_data['PARTNER_NAME'].values]
 
 s = stats.iloc[0]
+go = global_overview.iloc[0]
 
 st.subheader("Data Summary")
 with st.expander("View Raw Metrics", expanded=False):
@@ -349,12 +367,19 @@ for _, rg in managed_q2_regional.iterrows():
     avg_pct = partner_avg_map.get(rg['REGION'], 0)
     regional_coco_ctx += f"  {rg['REGION']}: {int(rg['TOTAL_UCS'])} total UCs, {int(rg['COCO_UCS'])} CoCo, {rg['COCO_PCT']}% overall, {int(rg['PARTNER_COUNT'])} partners, {avg_pct}% avg/partner\n"
 
+# Build credit consumption context
+credit_ctx = ""
+if len(credit_data) > 0:
+    for _, cr in credit_data.head(12).iterrows():
+        wow = f"{cr['WOW_PCT']:+.1f}%" if pd.notna(cr['WOW_PCT']) else "N/A"
+        credit_ctx += f"  {cr['PARTNER_NAME']}: Q2 Total=${cr['Q2_TOTAL_CREDITS']:,.0f}, Accounts={int(cr['COCO_CUSTOMER_ACCOUNTS'])}, Active Days={int(cr['ACTIVE_DAYS'])}, WoW={wow}\n"
+
 
 data_context = f"""
 === Q2 (May-Jul 2026) | MANAGED PARTNERS ONLY (20) | Stages 3-7 ===
 NOTE: All numbers are Q2 only (May 1 - Jul 31, 2026) for the 20 managed partners, except REGIONAL BREAKDOWN which shows all partners.
 
-GLOBAL REFERENCE (all partners, all stages, OKR window — for context only): {int(s['TOTAL_USE_CASES'])} total CoCo UCs | {int(s['TOTAL_PARTNERS'])} partners | ${s['TOTAL_EACV']/1_000_000:.1f}M EACV
+GLOBAL REFERENCE (all partners, Q2, Stages 3-7, with account-level attribution): {int(go['COCO_USE_CASES'])} CoCo UCs | {int(go['TOTAL_PARTNERS'])} partners | ${go['TOTAL_EACV']/1_000_000:.1f}M EACV | {go['COCO_PCT']}% CoCo adoption
 
 MANAGED PARTNERS Q2 HEADLINE:
   CoCo Use Cases: {managed_coco_ucs} (THIS is the CoCo number for the opening sentence)
@@ -373,6 +398,9 @@ MANAGED PARTNER COCO COVERAGE (Q2, by region):
 
 PIPELINE (Managed Partners, Q2, all UCs):
 {stage_ctx}
+
+COCO CREDIT CONSUMPTION (Q2, managed partners):
+{credit_ctx}
 
 REGIONAL BREAKDOWN (Managed and Unmanaged):
 {region_ctx}

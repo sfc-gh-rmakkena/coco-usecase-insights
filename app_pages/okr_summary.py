@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
-from utils.queries import get_partner_coco_coverage, get_okr_stage_breakdown
+from utils.queries import get_partner_coco_coverage, get_okr_stage_breakdown, get_partner_credit_consumption
 from utils import resolve_partner_filter
 
 conn = st.session_state.conn
@@ -18,6 +18,7 @@ TARGET_PCT = 50
 with st.spinner("Loading CoCo coverage data..."):
     coverage = get_partner_coco_coverage(conn, region=region, start_date=str(start_date), end_date=str(end_date))
     stage_breakdown = get_okr_stage_breakdown(conn, region=region, start_date=str(start_date), end_date=str(end_date))
+    credit_data = get_partner_credit_consumption(conn, coverage['PARTNER_NAME'].tolist(), str(start_date), str(end_date))
 
 if len(coverage) == 0:
     st.warning("No data available for the selected filters.")
@@ -27,6 +28,7 @@ if selected_partners:
     partner_names = resolve_partner_filter(selected_partners)
     coverage = coverage[coverage['PARTNER_NAME'].isin(partner_names)]
     stage_breakdown = stage_breakdown[stage_breakdown['PARTNER_NAME'].isin(partner_names)]
+    credit_data = credit_data[credit_data['PARTNER_NAME'].isin(partner_names)] if len(credit_data) > 0 else credit_data
 
 if len(coverage) == 0:
     st.info(f"No data for selected partners.")
@@ -76,22 +78,70 @@ with tab_summary:
         st.plotly_chart(fig, use_container_width=True)
 
     with pie_col:
-        st.subheader("Use Case Split")
-        fig = go.Figure(data=[go.Pie(
-            labels=['CoCo Attached', 'Not CoCo'],
-            values=[total_coco_ucs, total_all_ucs - total_coco_ucs],
-            marker_colors=['#29B5E8', '#e0e0e0'],
-            hole=0.5,
-            textinfo='label+value+percent'
-        )])
-        fig.update_layout(height=300)
-        st.plotly_chart(fig, use_container_width=True)
+        st.subheader("Use Case Split by Attribution")
+        # Get source breakdown — filtered by same partners/region as coverage table
+        sd = str(start_date)
+        ed = str(end_date)
+        tf = ""
+        if region == "NoAM":
+            tf = " AND uc.THEATER_NAME IN ('AMSExpansion', 'USMajors', 'AMSAcquisition')"
+        elif region == "EMEA":
+            tf = " AND uc.THEATER_NAME = 'EMEA'"
+        elif region == "APJ":
+            tf = " AND uc.THEATER_NAME = 'APJ'"
+        
+        # Filter to same partners as coverage table
+        partner_list = coverage['PARTNER_NAME'].tolist()
+        if partner_list:
+            partners_sql = "','".join(partner_list)
+            pf = f" AND uc.PARTNER_NAME IN ('{partners_sql}')"
+        else:
+            pf = ""
+        
+        source_query = f"""
+        WITH coco_active_accounts AS (
+            SELECT DISTINCT UPPER(salesforce_account_name) AS ACCOUNT_NAME_UPPER
+            FROM snowscience.llm.cortex_code_user_day_fact
+            WHERE ds >= '{sd}' AND snowflake_account_type = 'Customer' AND total_daily_requests > 0
+        )
+        SELECT 
+            SUM(CASE WHEN uc.IS_COCO AND uc.COCO_SOURCE = 'SE_COMMENTS' THEN 1 ELSE 0 END) AS SE_COMMENTS,
+            SUM(CASE WHEN uc.IS_COCO AND uc.COCO_SOURCE = 'PARTNER_COMMENTS' THEN 1 ELSE 0 END) AS PSE_COMMENTS,
+            SUM(CASE WHEN uc.IS_COCO AND uc.COCO_SOURCE = 'FEATURE_FLAG' THEN 1 ELSE 0 END) AS FEATURE_FLAG,
+            SUM(CASE WHEN NOT uc.IS_COCO AND caa.ACCOUNT_NAME_UPPER IS NOT NULL THEN 1 ELSE 0 END) AS ACCOUNT_ADOPTION,
+            SUM(CASE WHEN NOT uc.IS_COCO AND caa.ACCOUNT_NAME_UPPER IS NULL THEN 1 ELSE 0 END) AS NOT_COCO
+        FROM TEMP.COCO_PARTNER_ADOPTION.DT_OKR_USE_CASES uc
+        LEFT JOIN coco_active_accounts caa ON UPPER(uc.ACCOUNT_NAME) = caa.ACCOUNT_NAME_UPPER
+        WHERE (
+            (uc.USE_CASE_STAGE IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan') AND uc.DECISION_DATE >= '{sd}' AND uc.DECISION_DATE <= '{ed}')
+            OR (uc.USE_CASE_STAGE IN ('5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed') AND uc.GO_LIVE_DATE >= '{sd}' AND uc.GO_LIVE_DATE <= '{ed}')
+        ){tf}{pf}
+        """
+        source_split = conn.query(source_query)
+        if len(source_split) > 0:
+            ss = source_split.iloc[0]
+            labels = ['Account Adoption', 'SE Comments', 'PSE Comments', 'Feature Flag', 'Not CoCo']
+            values = [int(ss['ACCOUNT_ADOPTION']), int(ss['SE_COMMENTS']), int(ss['PSE_COMMENTS']), int(ss['FEATURE_FLAG']), int(ss['NOT_COCO'])]
+            colors = ['#3498db', '#2ecc71', '#f39c12', '#9b59b6', '#e0e0e0']
+            # Remove zero values
+            filtered = [(l, v, c) for l, v, c in zip(labels, values, colors) if v > 0]
+            fig = go.Figure(data=[go.Pie(
+                labels=[f[0] for f in filtered],
+                values=[f[1] for f in filtered],
+                marker_colors=[f[2] for f in filtered],
+                hole=0.5,
+                textinfo='label+value+percent'
+            )])
+            fig.update_layout(height=300)
+            st.plotly_chart(fig, use_container_width=True)
 
     st.divider()
     st.subheader("CoCo % by Stage Breakdown")
 
     if len(stage_breakdown) > 0:
-        stage_agg = stage_breakdown.groupby('USE_CASE_STAGE').agg({
+        # Filter stage_breakdown to only partners in coverage (ensures consistency)
+        stage_breakdown_filtered = stage_breakdown[stage_breakdown['PARTNER_NAME'].isin(coverage['PARTNER_NAME'].tolist())]
+        stage_agg = stage_breakdown_filtered.groupby('USE_CASE_STAGE').agg({
             'TOTAL_UCS': 'sum', 'COCO_UCS': 'sum', 'TOTAL_EACV': 'sum', 'COCO_EACV': 'sum'
         }).reset_index()
         stage_agg['COCO_PCT'] = (stage_agg['COCO_UCS'] * 100.0 / stage_agg['TOTAL_UCS'].replace(0, pd.NA)).round(1).fillna(0)
@@ -132,103 +182,164 @@ with tab_summary:
     st.divider()
     st.subheader("Partner Summary Table")
 
+    # Get per-partner attribution breakdown
+    sd = str(start_date)
+    ed = str(end_date)
+    partner_list = coverage['PARTNER_NAME'].tolist()
+    if partner_list:
+        partners_sql = "','".join(partner_list)
+        attribution_query = f"""
+        WITH coco_active_accounts AS (
+            SELECT DISTINCT UPPER(salesforce_account_name) AS ACCOUNT_NAME_UPPER
+            FROM snowscience.llm.cortex_code_user_day_fact
+            WHERE ds >= '{sd}' AND snowflake_account_type = 'Customer' AND total_daily_requests > 0
+        )
+        SELECT 
+            uc.PARTNER_NAME,
+            SUM(CASE WHEN caa.ACCOUNT_NAME_UPPER IS NOT NULL THEN 1 ELSE 0 END) AS ACCOUNT_LEVEL_COCO_USAGE,
+            SUM(CASE WHEN uc.IS_COCO AND uc.COCO_SOURCE = 'SE_COMMENTS' THEN 1 ELSE 0 END) AS SE_COMMENTS,
+            SUM(CASE WHEN uc.IS_COCO AND uc.COCO_SOURCE = 'PARTNER_COMMENTS' THEN 1 ELSE 0 END) AS PSE_COMMENTS,
+            SUM(CASE WHEN uc.IS_COCO AND uc.COCO_SOURCE = 'FEATURE_FLAG' THEN 1 ELSE 0 END) AS FEATURE_FLAG
+        FROM TEMP.COCO_PARTNER_ADOPTION.DT_OKR_USE_CASES uc
+        LEFT JOIN coco_active_accounts caa ON UPPER(uc.ACCOUNT_NAME) = caa.ACCOUNT_NAME_UPPER
+        WHERE uc.PARTNER_NAME IN ('{partners_sql}')
+        AND (
+            (uc.USE_CASE_STAGE IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan') AND uc.DECISION_DATE >= '{sd}' AND uc.DECISION_DATE <= '{ed}')
+            OR (uc.USE_CASE_STAGE IN ('5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed') AND uc.GO_LIVE_DATE >= '{sd}' AND uc.GO_LIVE_DATE <= '{ed}')
+        )
+        GROUP BY uc.PARTNER_NAME
+        """
+        attribution_data = conn.query(attribution_query)
+    else:
+        attribution_data = pd.DataFrame()
+
     display = coverage.copy()
     display['MEETS_TARGET'] = display['COCO_PCT'] >= TARGET_PCT
     display['GAP'] = display.apply(
         lambda r: max(0, int((TARGET_PCT / 100.0 * r['TOTAL_PARTNER_UCS']) - r['COCO_UCS'] + 0.999)), axis=1
     )
+
+    # Merge attribution columns
+    if len(attribution_data) > 0:
+        display = display.merge(attribution_data, on='PARTNER_NAME', how='left')
+        display[['ACCOUNT_LEVEL_COCO_USAGE', 'SE_COMMENTS', 'PSE_COMMENTS', 'FEATURE_FLAG']] = display[['ACCOUNT_LEVEL_COCO_USAGE', 'SE_COMMENTS', 'PSE_COMMENTS', 'FEATURE_FLAG']].fillna(0).astype(int)
+    else:
+        display['ACCOUNT_LEVEL_COCO_USAGE'] = 0
+        display['SE_COMMENTS'] = 0
+        display['PSE_COMMENTS'] = 0
+        display['FEATURE_FLAG'] = 0
+
     display = display.sort_values('COCO_PCT', ascending=False)
 
     st.dataframe(
-        display[['PARTNER_NAME', 'TOTAL_PARTNER_UCS', 'COCO_UCS', 'COCO_PCT', 'MEETS_TARGET', 'GAP']],
+        display[['PARTNER_NAME', 'TOTAL_PARTNER_UCS', 'COCO_UCS', 'COCO_PCT', 'ACCOUNT_LEVEL_COCO_USAGE', 'SE_COMMENTS', 'PSE_COMMENTS', 'FEATURE_FLAG', 'MEETS_TARGET', 'GAP']],
         column_config={
             'PARTNER_NAME': st.column_config.TextColumn("Partner", width="medium"),
             'TOTAL_PARTNER_UCS': st.column_config.NumberColumn("Total UCs", format="%d"),
             'COCO_UCS': st.column_config.NumberColumn("CoCo UCs", format="%d"),
             'COCO_PCT': st.column_config.ProgressColumn("CoCo %", min_value=0, max_value=100, format="%.1f%%"),
+            'ACCOUNT_LEVEL_COCO_USAGE': st.column_config.NumberColumn("Account Level CoCo Usage", format="%d", help="Use cases on accounts with CoCo product consumption"),
+            'SE_COMMENTS': st.column_config.NumberColumn("SE Comments", format="%d", help="SE wrote coco/cortex code in comments"),
+            'PSE_COMMENTS': st.column_config.NumberColumn("PSE Comments", format="%d", help="Partner wrote #coco in comments"),
+            'FEATURE_FLAG': st.column_config.NumberColumn("Feature Flag", format="%d", help="AI - Cortex Code in Prioritized Features"),
             'MEETS_TARGET': st.column_config.CheckboxColumn(f"≥{TARGET_PCT}%"),
             'GAP': st.column_config.NumberColumn("UCs to Target", help="Additional CoCo UCs needed to reach 50%"),
         },
         hide_index=True, use_container_width=True, height=500
     )
+    st.caption("Note: Attribution columns may overlap — a use case can have both account-level usage AND comments.")
+
+    st.divider()
+    st.subheader("CoCo Credit Consumption (Q2)")
+    if len(credit_data) > 0:
+        credit_display = credit_data.copy()
+        credit_display['Q2_TOTAL_CREDITS'] = credit_display['Q2_TOTAL_CREDITS'].apply(lambda x: f"${x:,.0f}" if x else "$0")
+        credit_display['WOW_PCT'] = credit_display['WOW_PCT'].apply(lambda x: f"{x:+.1f}%" if pd.notna(x) else "N/A")
+        st.dataframe(
+            credit_display[['PARTNER_NAME', 'COCO_CUSTOMER_ACCOUNTS', 'Q2_TOTAL_CREDITS', 'WOW_PCT', 'ACTIVE_DAYS']],
+            column_config={
+                'PARTNER_NAME': st.column_config.TextColumn("Partner", width="medium"),
+                'COCO_CUSTOMER_ACCOUNTS': st.column_config.NumberColumn("Customer Accounts", format="%d"),
+                'Q2_TOTAL_CREDITS': st.column_config.TextColumn("Q2 Total Credits"),
+                'WOW_PCT': st.column_config.TextColumn("WoW %"),
+                'ACTIVE_DAYS': st.column_config.NumberColumn("Active Days", format="%d"),
+            },
+            hide_index=True, use_container_width=True
+        )
+    else:
+        st.info("No credit consumption data available.")
 
 with tab_detail:
     st.subheader("Partner-by-Partner CoCo Breakdown")
 
-    detail_sorted = coverage.sort_values('TOTAL_PARTNER_UCS', ascending=False)
-    partner_list = detail_sorted['PARTNER_NAME'].tolist()
-    partner_options = [f"{p} ({int(detail_sorted[detail_sorted['PARTNER_NAME']==p].iloc[0]['COCO_UCS'])}/{int(detail_sorted[detail_sorted['PARTNER_NAME']==p].iloc[0]['TOTAL_PARTNER_UCS'])} CoCo)" for p in partner_list]
-
-    selected_partners = st.multiselect(
-        "Select Partners to View",
-        options=partner_list,
-        default=partner_list[:10],
-        key="okr_detail_partners",
-        help="Pick partners to see their stage-by-stage CoCo breakdown"
-    )
-
     if not selected_partners:
-        st.info("Select one or more partners above to view their detail.")
+        st.info("Select partners from the sidebar to view their CoCo breakdown.")
     else:
-        for partner_name in selected_partners:
-            p_row = coverage[coverage['PARTNER_NAME'] == partner_name].iloc[0]
-            total = int(p_row['TOTAL_PARTNER_UCS'])
-            coco = int(p_row['COCO_UCS'])
-            pct = float(p_row['COCO_PCT'] or 0)
-            gap = max(0, int((TARGET_PCT / 100.0 * total) - coco + 0.999))
+        detail_sorted = coverage.sort_values('TOTAL_PARTNER_UCS', ascending=False)
+        partner_list = detail_sorted['PARTNER_NAME'].tolist()
 
-            if pct >= TARGET_PCT:
-                status_icon = ":material/check_circle:"
-            elif pct >= TARGET_PCT * 0.6:
-                status_icon = ":material/warning:"
-            else:
-                status_icon = ":material/cancel:"
+        if not partner_list:
+            st.info("No partners found for the selected filters.")
+        else:
+            for partner_name in partner_list:
+                p_row = coverage[coverage['PARTNER_NAME'] == partner_name].iloc[0]
+                total = int(p_row['TOTAL_PARTNER_UCS'])
+                coco = int(p_row['COCO_UCS'])
+                pct = float(p_row['COCO_PCT'] or 0)
+                gap = max(0, int((TARGET_PCT / 100.0 * total) - coco + 0.999))
 
-            with st.expander(f"{status_icon} **{partner_name}** — {coco}/{total} CoCo ({pct:.0f}%) | Gap: {gap} UCs", expanded=True):
-                mc1, mc2, mc3, mc4 = st.columns(4)
-                mc1.metric("Total UCs", total)
-                mc2.metric("CoCo UCs", coco)
-                mc3.metric("CoCo %", f"{pct:.1f}%", f"{'MET' if pct >= TARGET_PCT else f'{gap} UCs needed'}")
-                mc4.metric("Non-CoCo", total - coco)
-
-                p_stages = stage_breakdown[stage_breakdown['PARTNER_NAME'] == partner_name].copy()
-                if len(p_stages) > 0:
-                    p_stages['STAGE_SHORT'] = p_stages['USE_CASE_STAGE'].str.replace(r'^\d+ - ', '', regex=True)
-                    p_stages['NON_COCO'] = p_stages['TOTAL_UCS'] - p_stages['COCO_UCS']
-                    p_stages = p_stages.sort_values('USE_CASE_STAGE')
-
-                    fig = go.Figure()
-                    fig.add_trace(go.Bar(
-                        name='CoCo', x=p_stages['STAGE_SHORT'], y=p_stages['COCO_UCS'],
-                        marker_color='#29B5E8', text=p_stages['COCO_UCS'], textposition='inside'
-                    ))
-                    fig.add_trace(go.Bar(
-                        name='Non-CoCo', x=p_stages['STAGE_SHORT'], y=p_stages['NON_COCO'],
-                        marker_color='#e0e0e0', text=p_stages['NON_COCO'], textposition='inside'
-                    ))
-                    fig.update_layout(barmode='stack', height=250, showlegend=True, legend=dict(orientation='h', y=1.15))
-                    for _, row in p_stages.iterrows():
-                        fig.add_annotation(
-                            x=row['STAGE_SHORT'], y=row['TOTAL_UCS'], text=f"{row['COCO_PCT']:.0f}%",
-                            showarrow=False, yshift=12, font=dict(size=12, color='#29B5E8', weight='bold')
-                        )
-                    st.plotly_chart(fig, use_container_width=True, key=f"detail_chart_{partner_name}")
-
-                    st.dataframe(
-                        p_stages[['USE_CASE_STAGE', 'TOTAL_UCS', 'COCO_UCS', 'COCO_PCT', 'TOTAL_EACV', 'COCO_EACV']].rename(columns={
-                            'USE_CASE_STAGE': 'Stage', 'TOTAL_UCS': 'Total UCs', 'COCO_UCS': 'CoCo UCs',
-                            'COCO_PCT': 'CoCo %', 'TOTAL_EACV': 'Total EACV', 'COCO_EACV': 'CoCo EACV'
-                        }),
-                        column_config={
-                            'CoCo %': st.column_config.ProgressColumn(min_value=0, max_value=100, format="%.1f%%"),
-                            'Total EACV': st.column_config.NumberColumn(format="$%.0f"),
-                            'CoCo EACV': st.column_config.NumberColumn(format="$%.0f"),
-                        },
-                        hide_index=True, use_container_width=True
-                    )
+                if pct >= TARGET_PCT:
+                    status_icon = ":material/check_circle:"
+                elif pct >= TARGET_PCT * 0.6:
+                    status_icon = ":material/warning:"
                 else:
-                    st.info("No stage-level data available.")
+                    status_icon = ":material/cancel:"
+
+                with st.expander(f"{status_icon} **{partner_name}** — {coco}/{total} CoCo ({pct:.0f}%) | Gap: {gap} UCs", expanded=True):
+                    mc1, mc2, mc3, mc4 = st.columns(4)
+                    mc1.metric("Total UCs", total)
+                    mc2.metric("CoCo UCs", coco)
+                    mc3.metric("CoCo %", f"{pct:.1f}%", f"{'MET' if pct >= TARGET_PCT else f'{gap} UCs needed'}")
+                    mc4.metric("Non-CoCo", total - coco)
+
+                    p_stages = stage_breakdown[stage_breakdown['PARTNER_NAME'] == partner_name].copy()
+                    if len(p_stages) > 0:
+                        p_stages['STAGE_SHORT'] = p_stages['USE_CASE_STAGE'].str.replace(r'^\d+ - ', '', regex=True)
+                        p_stages['NON_COCO'] = p_stages['TOTAL_UCS'] - p_stages['COCO_UCS']
+                        p_stages = p_stages.sort_values('USE_CASE_STAGE')
+
+                        fig = go.Figure()
+                        fig.add_trace(go.Bar(
+                            name='CoCo', x=p_stages['STAGE_SHORT'], y=p_stages['COCO_UCS'],
+                            marker_color='#29B5E8', text=p_stages['COCO_UCS'], textposition='inside'
+                        ))
+                        fig.add_trace(go.Bar(
+                            name='Non-CoCo', x=p_stages['STAGE_SHORT'], y=p_stages['NON_COCO'],
+                            marker_color='#e0e0e0', text=p_stages['NON_COCO'], textposition='inside'
+                        ))
+                        fig.update_layout(barmode='stack', height=250, showlegend=True, legend=dict(orientation='h', y=1.15))
+                        for _, row in p_stages.iterrows():
+                            fig.add_annotation(
+                                x=row['STAGE_SHORT'], y=row['TOTAL_UCS'], text=f"{row['COCO_PCT']:.0f}%",
+                                showarrow=False, yshift=12, font=dict(size=12, color='#29B5E8', weight='bold')
+                            )
+                        st.plotly_chart(fig, use_container_width=True, key=f"detail_chart_{partner_name}")
+
+                        st.dataframe(
+                            p_stages[['USE_CASE_STAGE', 'TOTAL_UCS', 'COCO_UCS', 'COCO_PCT', 'TOTAL_EACV', 'COCO_EACV']].rename(columns={
+                                'USE_CASE_STAGE': 'Stage', 'TOTAL_UCS': 'Total UCs', 'COCO_UCS': 'CoCo UCs',
+                                'COCO_PCT': 'CoCo %', 'TOTAL_EACV': 'Total EACV', 'COCO_EACV': 'CoCo EACV'
+                            }),
+                            column_config={
+                                'CoCo %': st.column_config.ProgressColumn(min_value=0, max_value=100, format="%.1f%%"),
+                                'Total EACV': st.column_config.NumberColumn(format="$%.0f"),
+                                'CoCo EACV': st.column_config.NumberColumn(format="$%.0f"),
+                            },
+                            hide_index=True, use_container_width=True
+                        )
+                    else:
+                        st.info("No stage-level data available.")
 
 st.divider()
 st.caption(f"Target: {TARGET_PCT}% of partner use cases (Stages 3-7) with CoCo attached | Region: {region}")
-st.caption("CoCo detection: SE Comments (coco/cortex code) OR Partner Comments (#coco) OR Feature Flag (AI - Cortex Code)")
+st.caption("CoCo detection: SE Comments (coco/cortex code) OR Partner Comments (#coco) OR Feature Flag (AI - Cortex Code) OR CoCo Account Level Usage")

@@ -3,7 +3,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime, date
-from utils.queries import get_okr_partner_summary, get_okr_coco_adoption
+from utils.queries import get_okr_partner_summary, get_okr_coco_adoption, get_partner_credit_consumption
 from utils import resolve_partner_filter
 
 conn = st.session_state.conn
@@ -26,6 +26,7 @@ with f2:
 q_start = str(start_date)
 q_end = str(end_date)
 summary = get_okr_partner_summary(conn, q_start, q_end, region=region)
+credit_data = get_partner_credit_consumption(conn, summary['PARTNER_NAME'].tolist(), q_start)
 
 if len(summary) == 0:
     st.info("No use cases found for the selected date range.")
@@ -64,15 +65,40 @@ col1, col2 = st.columns(2)
 
 with col1:
     st.subheader("CoCo Adoption Distribution")
+    st.caption("Each bar = number of partners at that CoCo adoption level. Red line = 50% target.")
+    
+    # Color bars based on target
+    colors = ['#2ecc71' if x >= target else '#e74c3c' for x in filtered['COCO_PCT']]
+    
     fig = go.Figure()
     fig.add_trace(go.Histogram(
-        x=filtered['COCO_PCT'], nbinsx=20,
-        marker_color='#3498db', name='Partners'
+        x=filtered['COCO_PCT'], nbinsx=10,
+        marker_color='#3498db', 
+        name='Partners',
+        hovertemplate='CoCo %: %{x:.0f}%<br>Partners: %{y}<extra></extra>'
     ))
-    fig.add_vline(x=target, line_dash="dash", line_color="red", annotation_text=f"Target: {target}%")
+    fig.add_vline(x=target, line_dash="dash", line_color="red", 
+                  annotation_text=f"OKR Target: {target}%",
+                  annotation_position="top right",
+                  annotation_font_size=12,
+                  annotation_font_color="red")
     fig.update_layout(
-        height=350, xaxis_title="CoCo Attachment %", yaxis_title="# Partners",
-        showlegend=False
+        height=350, 
+        xaxis_title="Partner CoCo Adoption Rate (%)", 
+        yaxis_title="Number of Partners",
+        xaxis=dict(range=[0, 105], dtick=10, ticksuffix='%'),
+        showlegend=False,
+        bargap=0.1
+    )
+    fig.add_annotation(
+        x=25, y=0.9, xref='x', yref='paper',
+        text="Below Target", showarrow=False,
+        font=dict(size=11, color='#e74c3c')
+    )
+    fig.add_annotation(
+        x=75, y=0.9, xref='x', yref='paper',
+        text="Meeting Target", showarrow=False,
+        font=dict(size=11, color='#2ecc71')
     )
     st.plotly_chart(fig, use_container_width=True)
 
@@ -99,14 +125,7 @@ st.subheader("Partner Scorecard")
 
 filtered_sorted = filtered.sort_values('COCO_PCT', ascending=False)
 
-def color_pct(val):
-    if val >= target:
-        return 'background-color: rgba(46, 204, 113, 0.3)'
-    elif val >= target * 0.6:
-        return 'background-color: rgba(243, 156, 18, 0.3)'
-    return 'background-color: rgba(231, 76, 60, 0.3)'
-
-display_df = filtered_sorted[['PARTNER_NAME', 'TOTAL_USE_CASES', 'COCO_USE_CASES', 'NON_COCO_USE_CASES', 'COCO_PCT', 'TOTAL_EACV', 'COCO_EACV', 'MEETS_TARGET']].copy()
+display_df = filtered_sorted[['PARTNER_NAME', 'TOTAL_USE_CASES', 'COCO_USE_CASES', 'NON_COCO_USE_CASES', 'TOTAL_EACV', 'COCO_EACV', 'MEETS_TARGET']].copy()
 display_df['TOTAL_EACV'] = display_df['TOTAL_EACV'].apply(lambda x: f"${(x or 0)/1000:.0f}K" if (x or 0) < 1_000_000 else f"${(x or 0)/1_000_000:.1f}M")
 display_df['COCO_EACV'] = display_df['COCO_EACV'].apply(lambda x: f"${(x or 0)/1000:.0f}K" if (x or 0) < 1_000_000 else f"${(x or 0)/1_000_000:.1f}M")
 display_df['GAP'] = filtered_sorted.apply(
@@ -122,7 +141,6 @@ st.dataframe(
         "TOTAL_USE_CASES": st.column_config.NumberColumn("Total UCs", format="%d"),
         "COCO_USE_CASES": st.column_config.NumberColumn("CoCo UCs", format="%d"),
         "NON_COCO_USE_CASES": st.column_config.NumberColumn("Non-CoCo", format="%d"),
-        "COCO_PCT": st.column_config.ProgressColumn("CoCo %", min_value=0, max_value=100, format="%.1f%%"),
         "TOTAL_EACV": st.column_config.TextColumn("Total EACV"),
         "COCO_EACV": st.column_config.TextColumn("CoCo EACV"),
         "MEETS_TARGET": st.column_config.CheckboxColumn(f">={target}%"),
@@ -145,18 +163,23 @@ if selected_partner:
         p_stats = filtered_sorted[filtered_sorted['PARTNER_NAME'] == selected_partner].iloc[0]
         coco_pct = p_stats['COCO_PCT']
 
-        c1, c2, c3, c4 = st.columns(4)
+        c1, c2, c3, c4, c5 = st.columns(5)
         c1.metric("Total Use Cases", int(p_stats['TOTAL_USE_CASES']))
         c2.metric("CoCo Attached", int(p_stats['COCO_USE_CASES']))
         c3.metric("CoCo %", f"{coco_pct:.1f}%", f"{'MET' if coco_pct >= target else 'BELOW'} {target}% target")
         gap = max(0, int((target / 100.0 * p_stats['TOTAL_USE_CASES']) - p_stats['COCO_USE_CASES'] + 0.999))
         c4.metric("UCs Needed for Target", gap if gap > 0 else "0 (Met!)")
+        # Account-only: CoCo attached but no comments/flag (COCO_SOURCE is NULL)
+        account_only = int(partner_detail[(partner_detail['IS_COCO_ATTACHED'] == True) & (partner_detail['COCO_SOURCE'].isna())].shape[0])
+        c5.metric("CoCo Attribution- Account Level Usage", account_only, help="CoCo via customer account usage, no SE/PSE comments")
 
-        fig = go.Figure()
-        fig.add_trace(go.Bar(name='CoCo', x=['Use Cases'], y=[int(p_stats['COCO_USE_CASES'])], marker_color='#2ecc71'))
-        fig.add_trace(go.Bar(name='Non-CoCo', x=['Use Cases'], y=[int(p_stats['NON_COCO_USE_CASES'])], marker_color='#e74c3c'))
-        fig.update_layout(barmode='stack', height=200, showlegend=True)
-        st.plotly_chart(fig, use_container_width=True)
+        # Credit consumption for selected partner
+        partner_credits = credit_data[credit_data['PARTNER_NAME'] == selected_partner] if len(credit_data) > 0 else pd.DataFrame()
+        if len(partner_credits) > 0:
+            pc = partner_credits.iloc[0]
+            cr1, cr2 = st.columns(2)
+            cr1.metric("Q2 Total Credits", f"${pc['Q2_TOTAL_CREDITS']:,.0f}" if pd.notna(pc['Q2_TOTAL_CREDITS']) else "N/A")
+            cr2.metric("WoW", f"{pc['WOW_PCT']:+.1f}%" if pd.notna(pc['WOW_PCT']) else "N/A")
 
         coco_ucs = partner_detail[partner_detail['IS_COCO_ATTACHED'] == True]
         non_coco_ucs = partner_detail[partner_detail['IS_COCO_ATTACHED'] == False]
@@ -166,27 +189,31 @@ if selected_partner:
             f"Non-CoCo ({len(non_coco_ucs)}) - Opportunities"
         ])
 
-        uc_cols = ['USE_CASE_NAME', 'ACCOUNT_NAME', 'USE_CASE_STAGE', 'USE_CASE_EACV', 'TECHNICAL_USE_CASE']
+        uc_cols = ['USE_CASE_NAME', 'ACCOUNT_NAME', 'USE_CASE_STAGE', 'USE_CASE_EACV', 'TECHNICAL_USE_CASE', 'ATTRIBUTION_FLAGS']
         uc_config = {
             "USE_CASE_NAME": st.column_config.TextColumn("Use Case", width="large"),
-            "ACCOUNT_NAME": st.column_config.TextColumn("Account"),
-            "USE_CASE_STAGE": st.column_config.TextColumn("Stage"),
-            "USE_CASE_EACV": st.column_config.NumberColumn("EACV", format="$%.0f"),
-            "TECHNICAL_USE_CASE": st.column_config.TextColumn("Technical Type"),
+            "ACCOUNT_NAME": st.column_config.TextColumn("Account", width="medium"),
+            "USE_CASE_STAGE": st.column_config.TextColumn("Stage", width="small"),
+            "USE_CASE_EACV": st.column_config.NumberColumn("EACV", format="$%.0f", width="small"),
+            "TECHNICAL_USE_CASE": st.column_config.TextColumn("Technical Type", width="medium"),
+            "ATTRIBUTION_FLAGS": st.column_config.TextColumn("CoCo Source", width="medium"),
         }
 
         with tab_coco:
             if len(coco_ucs) > 0:
-                coco_display = coco_ucs[uc_cols + ['COCO_SOURCE']].copy()
+                coco_display = coco_ucs[uc_cols].copy()
+                coco_display['USE_CASE_STAGE'] = coco_display['USE_CASE_STAGE'].str.extract(r'^(\d+)').iloc[:, 0]
                 st.dataframe(coco_display, hide_index=True, use_container_width=True,
-                           column_config={**uc_config, "COCO_SOURCE": st.column_config.TextColumn("Source")})
+                           column_config=uc_config)
             else:
                 st.info("No CoCo-attached use cases.")
 
         with tab_noncoco:
             if len(non_coco_ucs) > 0:
                 st.warning(f"These {len(non_coco_ucs)} use cases do NOT have CoCo attached. Adding CoCo to these would help reach the {target}% target.")
-                st.dataframe(non_coco_ucs[uc_cols], hide_index=True, use_container_width=True, column_config=uc_config)
+                noncoco_display = non_coco_ucs[uc_cols].copy()
+                noncoco_display['USE_CASE_STAGE'] = noncoco_display['USE_CASE_STAGE'].str.extract(r'^(\d+)').iloc[:, 0]
+                st.dataframe(noncoco_display, hide_index=True, use_container_width=True, column_config=uc_config)
             else:
                 st.success("All use cases have CoCo attached!")
 
@@ -216,4 +243,4 @@ else:
 
 st.divider()
 st.caption(f"OKR Target: {target}% of use cases in Stages 3-7 should have CoCo attached | {start_date} to {end_date} | Min UCs: {min_use_cases}")
-st.caption("CoCo detection: SE Comments (coco/cortex code) OR Partner Comments (#coco) OR Feature Flag (AI - Cortex Code)")
+st.caption("CoCo detection: SE Comments (coco/cortex code) OR Partner Comments (#coco) OR Feature Flag (AI - Cortex Code) OR CoCo Account Level Usage")
