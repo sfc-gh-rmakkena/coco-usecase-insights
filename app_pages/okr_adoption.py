@@ -3,7 +3,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime, date
-from utils.queries import get_okr_partner_summary, get_okr_coco_adoption, get_partner_credit_consumption
+from utils.queries import get_okr_partner_summary, get_okr_coco_adoption, get_partner_credit_consumption, get_usecase_confidence_scores, get_bulk_confidence_scores
 from utils import resolve_partner_filter
 
 conn = st.session_state.conn
@@ -11,6 +11,9 @@ region = st.session_state.get("selected_region", "Global")
 selected_partners = st.session_state.get("selected_partners", [])
 start_date = st.session_state.get("okr_start_date", date(2026, 5, 1))
 end_date = st.session_state.get("okr_end_date", date(2026, 7, 31))
+include_account_coco = st.session_state.get("include_account_coco", "Yes") == "Yes"
+confidence_filter = st.session_state.get("confidence_filter", ["High"])
+confidence = 'High' if confidence_filter == ['High'] else ('Medium' if confidence_filter else None)
 
 st.title(":material/check_circle: OKR: CoCo Adoption per Partner")
 st.caption(f"Track 50% CoCo attachment target for partner use cases (Stages 3-7) | Region: {region} | {start_date} to {end_date}")
@@ -25,20 +28,67 @@ with f2:
 
 q_start = str(start_date)
 q_end = str(end_date)
-summary = get_okr_partner_summary(conn, q_start, q_end, region=region)
-credit_data = get_partner_credit_consumption(conn, summary['PARTNER_NAME'].tolist(), q_start)
 
-if len(summary) == 0:
+# Get base summary for partner list and totals
+base_summary = get_okr_partner_summary(conn, q_start, q_end, region=region, include_account_coco=False, confidence=None)
+credit_data = get_partner_credit_consumption(conn, base_summary['PARTNER_NAME'].tolist(), q_start)
+
+if len(base_summary) == 0:
     st.info("No use cases found for the selected date range.")
     st.stop()
 
 # Apply sidebar partner filter
 if selected_partners:
     partner_names = resolve_partner_filter(selected_partners)
-    summary = summary[summary['PARTNER_NAME'].isin(partner_names)]
-    if len(summary) == 0:
+    base_summary = base_summary[base_summary['PARTNER_NAME'].isin(partner_names)]
+    if len(base_summary) == 0:
         st.info(f"No data for selected partners.")
         st.stop()
+
+# Compute CoCo using full confidence scoring when account-level is enabled
+if include_account_coco:
+    bulk_conf = get_bulk_confidence_scores(conn, base_summary['PARTNER_NAME'].tolist(), q_start, q_end)
+    if len(bulk_conf) > 0:
+        # Apply region filter in Python (bulk_conf includes THEATER_NAME via uc.*)
+        if region and region != 'Global':
+            region_theaters = {
+                'NoAM': ['AMSExpansion', 'USMajors', 'AMSAcquisition'],
+                'EMEA': ['EMEA'], 'APJ': ['APJ']
+            }
+            bulk_conf = bulk_conf[bulk_conf['THEATER_NAME'].isin(region_theaters.get(region, []))]
+
+        # CoCo = IS_COCO (comments/flag always) OR account-level at selected confidence
+        # confidence_filter=['High'] → only High scoring use cases count for account-level
+        # confidence_filter=['High','Medium'] → High or Medium count
+        # confidence_filter=[] → all bands except No Signal (has product usage)
+        bands = confidence_filter if confidence_filter else ['High', 'Medium', 'Low']
+        bulk_conf['IS_COCO_FINAL'] = (
+            (bulk_conf['IS_COCO'] == True) |
+            (bulk_conf['CONFIDENCE_BAND'].isin(bands))
+        )
+
+        # Recompute per-partner summary
+        coco_eacv = bulk_conf[bulk_conf['IS_COCO_FINAL']].groupby('PARTNER_NAME')['USE_CASE_EACV'].sum().reset_index()
+        coco_eacv.columns = ['PARTNER_NAME', 'COCO_EACV']
+        summary = bulk_conf.groupby('PARTNER_NAME').agg(
+            TOTAL_USE_CASES=('USE_CASE_ID', 'count'),
+            COCO_USE_CASES=('IS_COCO_FINAL', 'sum'),
+            TOTAL_EACV=('USE_CASE_EACV', 'sum'),
+        ).reset_index()
+        summary = summary.merge(coco_eacv, on='PARTNER_NAME', how='left')
+        summary['COCO_EACV'] = summary['COCO_EACV'].fillna(0)
+        summary['NON_COCO_USE_CASES'] = summary['TOTAL_USE_CASES'] - summary['COCO_USE_CASES']
+        summary['COCO_PCT'] = round(summary['COCO_USE_CASES'] * 100.0 / summary['TOTAL_USE_CASES'].replace(0, float('nan')), 1).fillna(0)
+        # Count account-level use cases at the selected confidence bands
+        high_conf_coco = int(bulk_conf['CONFIDENCE_BAND'].isin(bands).sum())
+    else:
+        summary = base_summary
+        bulk_conf = pd.DataFrame()
+        high_conf_coco = 0
+else:
+    summary = base_summary
+    bulk_conf = pd.DataFrame()
+    high_conf_coco = 0
 
 summary['MEETS_TARGET'] = summary['COCO_PCT'] >= target
 filtered = summary[summary['TOTAL_USE_CASES'] >= min_use_cases].copy()
@@ -51,13 +101,18 @@ not_meeting = total_partners - meeting_target
 overall_coco = filtered['COCO_USE_CASES'].sum()
 overall_total = filtered['TOTAL_USE_CASES'].sum()
 overall_pct = round(overall_coco * 100.0 / overall_total, 1) if overall_total > 0 else 0
+high_conf_pct = round(high_conf_coco * 100.0 / overall_total, 1) if overall_total > 0 else 0
 
-c1, c2, c3, c4, c5 = st.columns(5)
+c1, c2, c3, c4, c5, c6 = st.columns(6)
 c1.metric("Partners Tracked", total_partners)
 c2.metric(f"Meeting {target}%", int(meeting_target), f"{round(meeting_target*100/total_partners)}%" if total_partners else "0%")
 c3.metric(f"Below {target}%", int(not_meeting), delta_color="inverse")
-c4.metric("Overall CoCo %", f"{overall_pct}%", f"{int(overall_coco)}/{int(overall_total)} UCs")
-c5.metric("Total EACV", f"${filtered['TOTAL_EACV'].sum()/1_000_000:.1f}M")
+conf_desc = 'High' if confidence_filter == ['High'] else 'High + Medium' if confidence_filter else 'All account-level'
+c4.metric("Overall CoCo %", f"{overall_pct}%", f"{int(overall_coco)}/{int(overall_total)} UCs",
+    help=f"SE/PSE/Flag always + Account Level at {conf_desc} confidence (full scoring)")
+c5.metric(f"Account Level CoCo ({conf_desc})", f"{high_conf_pct}%", f"{high_conf_coco}/{int(overall_total)} UCs",
+    help=f"Use cases where account confidence band is {conf_desc} (S1+S2+S3+S4 scoring)")
+c6.metric("Total EACV", f"${filtered['TOTAL_EACV'].sum()/1_000_000:.1f}M")
 
 st.divider()
 
@@ -156,10 +211,36 @@ partner_list = filtered_sorted['PARTNER_NAME'].tolist()
 selected_partner = st.selectbox("Select Partner", partner_list, key="okr_partner_select")
 
 if selected_partner:
-    detail = get_okr_coco_adoption(conn, q_start, q_end, region=region)
+    detail = get_okr_coco_adoption(conn, q_start, q_end, region=region, include_account_coco=include_account_coco, confidence=confidence)
     partner_detail = detail[detail['PARTNER_NAME'] == selected_partner]
 
     if len(partner_detail) > 0:
+        # Override IS_COCO_ATTACHED using full confidence scoring (same as summary metrics)
+        if include_account_coco:
+            conf_scores = get_usecase_confidence_scores(conn, selected_partner, q_start, q_end)
+            if len(conf_scores) > 0:
+                partner_detail = partner_detail.copy()
+                conf_map = conf_scores[['USE_CASE_ID', 'CONFIDENCE_BAND']].set_index('USE_CASE_ID')
+                partner_detail['CONFIDENCE_BAND'] = partner_detail['USE_CASE_ID'].map(conf_map['CONFIDENCE_BAND'])
+                bands = confidence_filter if confidence_filter else ['High', 'Medium', 'Low']
+                is_flag = partner_detail['COCO_SOURCE'].notna()
+                has_conf = partner_detail['CONFIDENCE_BAND'].isin(bands)
+                partner_detail['IS_COCO_ATTACHED'] = is_flag | has_conf
+
+                def _rebuild_flags(row):
+                    parts = []
+                    band = row.get('CONFIDENCE_BAND')
+                    if pd.notna(band) and band in bands:
+                        parts.append(f"Account ({band})")
+                    if row['COCO_SOURCE'] == 'SE_COMMENTS':
+                        parts.append('SE Comments')
+                    elif row['COCO_SOURCE'] == 'PARTNER_COMMENTS':
+                        parts.append('PSE Comments')
+                    elif row['COCO_SOURCE'] == 'FEATURE_FLAG':
+                        parts.append('Feature Flag')
+                    return ' | '.join(parts)
+                partner_detail['ATTRIBUTION_FLAGS'] = partner_detail.apply(_rebuild_flags, axis=1)
+
         p_stats = filtered_sorted[filtered_sorted['PARTNER_NAME'] == selected_partner].iloc[0]
         coco_pct = p_stats['COCO_PCT']
 
@@ -184,9 +265,10 @@ if selected_partner:
         coco_ucs = partner_detail[partner_detail['IS_COCO_ATTACHED'] == True]
         non_coco_ucs = partner_detail[partner_detail['IS_COCO_ATTACHED'] == False]
 
-        tab_coco, tab_noncoco = st.tabs([
+        tab_coco, tab_noncoco, tab_confidence = st.tabs([
             f"CoCo Attached ({len(coco_ucs)})",
-            f"Non-CoCo ({len(non_coco_ucs)}) - Opportunities"
+            f"Non-CoCo ({len(non_coco_ucs)}) - Opportunities",
+            "Confidence Scoring"
         ])
 
         uc_cols = ['USE_CASE_NAME', 'ACCOUNT_NAME', 'USE_CASE_STAGE', 'USE_CASE_EACV', 'TECHNICAL_USE_CASE', 'ATTRIBUTION_FLAGS']
@@ -216,6 +298,41 @@ if selected_partner:
                 st.dataframe(noncoco_display, hide_index=True, use_container_width=True, column_config=uc_config)
             else:
                 st.success("All use cases have CoCo attached!")
+
+        with tab_confidence:
+            confidence_data = get_usecase_confidence_scores(conn, selected_partner, q_start, q_end)
+            if len(confidence_data) > 0:
+                # Summary metrics (always show ALL bands regardless of sidebar filter)
+                high = int((confidence_data['CONFIDENCE_BAND'] == 'High').sum())
+                medium = int((confidence_data['CONFIDENCE_BAND'] == 'Medium').sum())
+                low = int((confidence_data['CONFIDENCE_BAND'] == 'Low').sum())
+                no_signal = int((confidence_data['CONFIDENCE_BAND'] == 'No Signal').sum())
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric("High", high, help="Score 75-100")
+                m2.metric("Medium", medium, help="Score 40-74")
+                m3.metric("Low", low, help="Score 1-39")
+                m4.metric("No Signal", no_signal, help="Score 0")
+
+                conf_cols = ['ACCOUNT_NAME', 'TECHNICAL_USE_CASE', 'WORKLOAD_CATEGORY', 'RELEVANT_SKILL_INVOCATIONS', 'RELEVANT_CUSTOM_SKILLS', 'TOOLS_INVOKED', 'ACTIVE_DAYS', 'DISTINCT_USERS', 'TOTAL_SCORE', 'CONFIDENCE_BAND']
+                st.dataframe(
+                    confidence_data[conf_cols],
+                    column_config={
+                        'ACCOUNT_NAME': st.column_config.TextColumn("Account", width="medium"),
+                        'TECHNICAL_USE_CASE': st.column_config.TextColumn("Technical Type", width="medium"),
+                        'WORKLOAD_CATEGORY': st.column_config.TextColumn("Workload", width="small"),
+                        'RELEVANT_SKILL_INVOCATIONS': st.column_config.NumberColumn("Bundled Skills", format="%d", help="Relevant bundled skill invocations for this workload"),
+                        'RELEVANT_CUSTOM_SKILLS': st.column_config.NumberColumn("Custom Skills", format="%d", help="Workload-relevant custom skills (keyword matched)"),
+                        'TOOLS_INVOKED': st.column_config.NumberColumn("Tools", format="%d", help="Total tool invocations"),
+                        'ACTIVE_DAYS': st.column_config.NumberColumn("Active Days", format="%d"),
+                        'DISTINCT_USERS': st.column_config.NumberColumn("Users", format="%d"),
+                        'TOTAL_SCORE': st.column_config.ProgressColumn("Score", min_value=0, max_value=100, format="%d"),
+                        'CONFIDENCE_BAND': st.column_config.TextColumn("Band"),
+                    },
+                    hide_index=True, use_container_width=True, height=500
+                )
+                st.caption("Scoring: S1 Relevant Bundled Skills (30pts) + S2 Relevant Custom Skills (35pts) + S3 Tools (20pts) + S4 Skill Intensity per Day (15pts)")
+            else:
+                st.info("No confidence scoring data available.")
 
 st.divider()
 

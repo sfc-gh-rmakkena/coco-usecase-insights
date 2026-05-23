@@ -1,7 +1,7 @@
 import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
-from utils.queries import get_adoption_overview, get_adoption_by_partner, get_adoption_by_stage, get_adoption_by_region, get_by_technical_type, get_by_account_gvp
+from utils.queries import get_adoption_overview, get_adoption_by_partner, get_adoption_by_stage, get_adoption_by_region, get_by_technical_type, get_by_account_gvp, get_bulk_confidence_scores
 from utils import resolve_partner_filter
 
 conn = st.session_state.conn
@@ -9,6 +9,9 @@ region = st.session_state.get("selected_region", "Global")
 selected_partners = st.session_state.get("selected_partners", [])
 start_date = str(st.session_state.get("okr_start_date", "2026-05-01"))
 end_date = str(st.session_state.get("okr_end_date", "2026-07-31"))
+include_account_coco = st.session_state.get("include_account_coco", "Yes") == "Yes"
+confidence_filter = st.session_state.get("confidence_filter", ["High"])
+confidence = 'High' if confidence_filter == ['High'] else ('Medium' if confidence_filter else None)
 
 st.title(":material/monitoring: CoCo Use Case Adoption Overview")
 st.caption(f"High-level metrics across all partner CoCo use cases | Region: {region} | {start_date} to {end_date}")
@@ -40,17 +43,59 @@ with st.expander(":material/info: How Use Cases Are Retrieved", expanded=False):
     3. **Use case-level (Comments):** SE writes "coco"/"cortex code" OR partner writes "#coco"
     """)
 
-stats = get_adoption_overview(conn, start_date=start_date, end_date=end_date, region=region, partners=resolve_partner_filter(selected_partners) if selected_partners else None)
+import pandas as pd
+
+# Get base stats (total counts, EACV, stage info) — always use IS_COCO only for base
+stats = get_adoption_overview(conn, start_date=start_date, end_date=end_date, region=region,
+    partners=resolve_partner_filter(selected_partners) if selected_partners else None,
+    include_account_coco=False, confidence=None)
 if len(stats) == 0:
     st.warning("No data available.")
     st.stop()
 
 s = stats.iloc[0]
 
+bulk_conf = pd.DataFrame()
+account_level_count = 0
+
+# Override CoCo count with full confidence scoring when account-level is enabled
+if include_account_coco and selected_partners:
+    partner_names = resolve_partner_filter(selected_partners)
+    bulk_conf = get_bulk_confidence_scores(conn, partner_names, start_date, end_date)
+    if len(bulk_conf) > 0:
+        if region and region != 'Global':
+            region_theaters = {'NoAM': ['AMSExpansion', 'USMajors', 'AMSAcquisition'], 'EMEA': ['EMEA'], 'APJ': ['APJ']}
+            bulk_conf = bulk_conf[bulk_conf['THEATER_NAME'].isin(region_theaters.get(region, []))]
+        bands = confidence_filter if confidence_filter else ['High', 'Medium', 'Low']
+        bulk_conf['IS_COCO_FINAL'] = (bulk_conf['IS_COCO'] == True) | (bulk_conf['CONFIDENCE_BAND'].isin(bands))
+        coco_count = int(bulk_conf['IS_COCO_FINAL'].sum())
+        total_count = len(bulk_conf)
+        coco_pct = round(coco_count * 100.0 / total_count, 1) if total_count > 0 else 0
+        coco_uc_display = f"{coco_count} ({coco_pct}%)"
+        account_level_count = int(bulk_conf['CONFIDENCE_BAND'].isin(bands).sum())
+    else:
+        bulk_conf = pd.DataFrame()
+        coco_uc_display = f"{int(s['COCO_USE_CASES'])} ({s['COCO_PCT']}%)"
+        coco_count = int(s['COCO_USE_CASES'])
+        coco_pct = float(s['COCO_PCT'] or 0)
+elif include_account_coco:
+    # No partner filter — use CTE proxy (full scoring across all partners is too slow)
+    stats_full = get_adoption_overview(conn, start_date=start_date, end_date=end_date, region=region,
+        partners=None, include_account_coco=True, confidence=confidence)
+    s_full = stats_full.iloc[0] if len(stats_full) > 0 else s
+    coco_count = int(s_full['COCO_USE_CASES'])
+    coco_pct = float(s_full['COCO_PCT'])
+    coco_uc_display = f"{coco_count} ({coco_pct}%)"
+    account_level_count = int(s_full['ACCOUNT_LEVEL_COUNT'])
+else:
+    coco_count = int(s['COCO_USE_CASES'])
+    coco_pct = float(s['COCO_PCT'] or 0)
+    coco_uc_display = f"{coco_count} ({coco_pct}%)"
+
 c1, c2, c3, c4, c5 = st.columns(5)
 c1.metric("Total Use Cases", int(s['TOTAL_USE_CASES']), f"{int(s['TOTAL_PARTNERS'])} partners")
 c2.metric("Total EACV", f"${s['TOTAL_EACV']/1_000_000:.1f}M" if s['TOTAL_EACV'] else "$0")
-c3.metric("CoCo Use Cases", int(s['COCO_USE_CASES']), f"{s['COCO_PCT']}%")
+c3.metric("CoCo Use Cases", coco_count, coco_uc_display)
 c4.metric("Avg Days in Stage", f"{s['AVG_DAYS_IN_STAGE']:.0f}" if s['AVG_DAYS_IN_STAGE'] else "N/A")
 c5.metric("Accounts Engaged", int(s['TOTAL_ACCOUNTS']))
 
@@ -59,8 +104,8 @@ st.divider()
 # OKR Progress Visual
 st.subheader("OKR Progress: 50% CoCo Adoption Target")
 target_pct = 50
-current_pct = float(s['COCO_PCT'] or 0)
-coco_ucs = int(s['COCO_USE_CASES'])
+current_pct = coco_pct if include_account_coco else float(s['COCO_PCT'] or 0)
+coco_ucs = coco_count
 total_ucs = int(s['TOTAL_USE_CASES'])
 target_ucs = int(total_ucs * 0.5)
 gap_ucs = max(0, target_ucs - coco_ucs)
@@ -109,19 +154,20 @@ st.divider()
 
 st.subheader("CoCo Detection Source Breakdown")
 src_col1, src_col2 = st.columns([1, 1])
+conf_desc = 'High' if confidence_filter == ['High'] else 'High + Medium' if confidence_filter else 'All account-level'
 with src_col1:
     st.metric(":material/chat: SE Comments", int(s['SE_CONFIRMED_COUNT']))
     st.metric(":material/handshake: Partner Comments", int(s['PARTNER_CONFIRMED_COUNT']))
 with src_col2:
     st.metric(":material/flag: Feature Flag", int(s['FEATURE_FLAG_COUNT']))
-    st.metric(":material/cloud: Account-Level Usage", int(s['ACCOUNT_LEVEL_COUNT']))
+    st.metric(f":material/cloud: Account-Level ({conf_desc})", account_level_count)
 st.divider()
 
 col1, col2 = st.columns(2)
 
 with col1:
     st.subheader("Pipeline by Stage")
-    stage_data = get_adoption_by_stage(conn, start_date=start_date, end_date=end_date, region=region)
+    stage_data = get_adoption_by_stage(conn, start_date=start_date, end_date=end_date, region=region, include_account_coco=include_account_coco, confidence=confidence)
     if len(stage_data) > 0:
         fig = px.bar(
             stage_data, x='USE_CASE_STAGE', y='TOTAL_EACV',
@@ -136,7 +182,7 @@ with col1:
 
 with col2:
     st.subheader("EACV by Region")
-    region_data = get_adoption_by_region(conn, start_date=start_date, end_date=end_date)
+    region_data = get_adoption_by_region(conn, start_date=start_date, end_date=end_date, include_account_coco=include_account_coco, confidence=confidence)
     if len(region_data) > 0:
         fig = px.pie(
             region_data, values='TOTAL_EACV', names='REGION', hole=0.4,
@@ -151,7 +197,7 @@ col1, col2 = st.columns(2)
 
 with col1:
     st.subheader("Top Partners by EACV")
-    partner_data = get_adoption_by_partner(conn, start_date=start_date, end_date=end_date, region=region)
+    partner_data = get_adoption_by_partner(conn, start_date=start_date, end_date=end_date, region=region, include_account_coco=include_account_coco, confidence=confidence)
     if selected_partners and 'PARTNER_NAME' in partner_data.columns:
         partner_names = resolve_partner_filter(selected_partners)
         partner_data = partner_data[partner_data['PARTNER_NAME'].isin(partner_names)]

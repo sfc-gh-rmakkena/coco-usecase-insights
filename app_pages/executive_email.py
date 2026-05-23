@@ -10,6 +10,7 @@ from utils.queries import (
     get_workload_patterns, get_competitive_landscape, get_comment_narratives,
     get_partner_workload_cross, get_regional_themes, get_regional_comment_narratives,
     get_partner_coco_coverage, get_partner_credit_consumption, get_adoption_overview,
+    get_bulk_confidence_scores,
 )
 from utils.cortex_helpers import cortex_complete
 
@@ -87,28 +88,18 @@ with st.spinner("Loading data..."):
     comment_data = get_comment_narratives(conn, region=region, source=source_toggle)
     partner_workloads = get_partner_workload_cross(conn, region=region, source=source_toggle)
     regional_themes = get_regional_themes(conn, source=source_toggle)
-    coco_coverage = get_partner_coco_coverage(conn, region=region)
-    global_overview = get_adoption_overview(conn, '2026-05-01', '2026-07-31')
+    coco_coverage = get_partner_coco_coverage(conn, region=region, include_account_coco=False, confidence=None)
+    global_overview = get_adoption_overview(conn, '2026-05-01', '2026-07-31', include_account_coco=True, confidence='High')
 
     # Managed partner stage EACV breakdown — Q2 ONLY (May 1 - Jul 31, 2026)
     managed_partners_sql = "','".join(MANAGED_PARTNERS)
     Q2_START = '2026-05-01'
     Q2_END = '2026-07-31'
 
-    # CoCo-active accounts CTE (reusable across queries)
-    COCO_ACCOUNTS_CTE = f"""
-        coco_active_accounts AS (
-            SELECT DISTINCT UPPER(salesforce_account_name) AS ACCOUNT_NAME_UPPER
-            FROM snowscience.llm.cortex_code_user_day_fact
-            WHERE ds >= '{Q2_START}' AND snowflake_account_type = 'Customer' AND total_daily_requests > 0
-        )
-    """
-
     # Q2 Credit consumption for managed partners
     credit_data = get_partner_credit_consumption(conn, MANAGED_PARTNERS, Q2_START, Q2_END)
 
     managed_stage_data = conn.query(f"""
-        WITH {COCO_ACCOUNTS_CTE}
         SELECT 
             CASE 
                 WHEN USE_CASE_STAGE IN ('3 - Technical / Business Validation') THEN 'Validation (3)'
@@ -129,105 +120,80 @@ with st.spinner("Loading data..."):
         ORDER BY STAGE_GROUP
     """)
 
-    # Q2 headline stats for managed partners (all UCs + CoCo UCs with account-level attribution)
-    managed_q2_stats = conn.query(f"""
-        WITH {COCO_ACCOUNTS_CTE}
-        SELECT 
-            COUNT(*) AS TOTAL_UCS,
-            SUM(CASE WHEN uc.IS_COCO OR caa.ACCOUNT_NAME_UPPER IS NOT NULL THEN 1 ELSE 0 END) AS COCO_UCS,
-            COALESCE(SUM(USE_CASE_EACV), 0) AS TOTAL_EACV,
-            COALESCE(SUM(CASE WHEN uc.IS_COCO OR caa.ACCOUNT_NAME_UPPER IS NOT NULL THEN USE_CASE_EACV ELSE 0 END), 0) AS COCO_EACV,
-            COUNT(DISTINCT uc.PARTNER_NAME) AS ACTIVE_PARTNERS,
-            SUM(CASE WHEN uc.USE_CASE_STAGE = '7 - Deployed' AND (uc.IS_COCO OR caa.ACCOUNT_NAME_UPPER IS NOT NULL) THEN 1 ELSE 0 END) AS COCO_DEPLOYED
-        FROM TEMP.COCO_PARTNER_ADOPTION.DT_OKR_USE_CASES uc
-        LEFT JOIN coco_active_accounts caa ON UPPER(uc.ACCOUNT_NAME) = caa.ACCOUNT_NAME_UPPER
-        WHERE uc.PARTNER_NAME IN ('{managed_partners_sql}')
-        AND uc.USE_CASE_STAGE IN ('3 - Technical / Business Validation','4 - Use Case Won / Migration Plan','5 - Implementation In Progress','6 - Implementation Complete','7 - Deployed')
-        AND (
-            (uc.USE_CASE_STAGE IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan') AND uc.DECISION_DATE >= '{Q2_START}' AND uc.DECISION_DATE <= '{Q2_END}')
-            OR (uc.USE_CASE_STAGE IN ('5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed') AND uc.GO_LIVE_DATE >= '{Q2_START}' AND uc.GO_LIVE_DATE <= '{Q2_END}')
-        )
-    """)
+    # Fetch per-use-case confidence scores for all managed partners (High confidence = score >= 75)
+    # Executive email always uses: account-level CoCo ON, High confidence only
+    _EMAIL_BANDS = ['High']
+    managed_bulk_conf = get_bulk_confidence_scores(conn, MANAGED_PARTNERS, Q2_START, Q2_END)
 
-    # Q2 CoCo coverage by region for managed partners (with account-level attribution)
-    managed_q2_regional = conn.query(f"""
-        WITH {COCO_ACCOUNTS_CTE}
-        SELECT 
-            CASE 
-                WHEN THEATER_NAME IN ('AMSExpansion', 'USMajors', 'AMSAcquisition', 'USPubSec') THEN 'NoAM'
-                WHEN THEATER_NAME = 'EMEA' THEN 'EMEA'
-                WHEN THEATER_NAME = 'APJ' THEN 'APJ'
-                ELSE 'Other'
-            END AS REGION,
-            COUNT(*) AS TOTAL_UCS,
-            SUM(CASE WHEN uc.IS_COCO OR caa.ACCOUNT_NAME_UPPER IS NOT NULL THEN 1 ELSE 0 END) AS COCO_UCS,
-            ROUND(SUM(CASE WHEN uc.IS_COCO OR caa.ACCOUNT_NAME_UPPER IS NOT NULL THEN 1 ELSE 0 END) * 100.0 / NULLIF(COUNT(*), 0), 1) AS COCO_PCT,
-            COUNT(DISTINCT uc.PARTNER_NAME) AS PARTNER_COUNT
-        FROM TEMP.COCO_PARTNER_ADOPTION.DT_OKR_USE_CASES uc
-        LEFT JOIN coco_active_accounts caa ON UPPER(uc.ACCOUNT_NAME) = caa.ACCOUNT_NAME_UPPER
-        WHERE uc.PARTNER_NAME IN ('{managed_partners_sql}')
-        AND uc.USE_CASE_STAGE IN ('3 - Technical / Business Validation','4 - Use Case Won / Migration Plan','5 - Implementation In Progress','6 - Implementation Complete','7 - Deployed')
-        AND (
-            (uc.USE_CASE_STAGE IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan') AND uc.DECISION_DATE >= '{Q2_START}' AND uc.DECISION_DATE <= '{Q2_END}')
-            OR (uc.USE_CASE_STAGE IN ('5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed') AND uc.GO_LIVE_DATE >= '{Q2_START}' AND uc.GO_LIVE_DATE <= '{Q2_END}')
+    if len(managed_bulk_conf) > 0:
+        managed_bulk_conf['IS_COCO_FINAL'] = (
+            (managed_bulk_conf['IS_COCO'] == True) |
+            (managed_bulk_conf['CONFIDENCE_BAND'].isin(_EMAIL_BANDS))
         )
-        GROUP BY REGION
-        ORDER BY TOTAL_UCS DESC
-    """)
+        managed_bulk_conf['REGION'] = managed_bulk_conf['THEATER_NAME'].map(
+            lambda t: 'NoAM' if t in ('AMSExpansion', 'USMajors', 'AMSAcquisition', 'USPubSec')
+                      else 'EMEA' if t == 'EMEA' else 'APJ' if t == 'APJ' else 'Other'
+        )
+        coco_mask = managed_bulk_conf['IS_COCO_FINAL']
 
-    # Compute avg CoCo % per partner per region
-    managed_q2_partner_avg = conn.query(f"""
-        WITH partner_stats AS (
-            SELECT 
-                CASE 
-                    WHEN THEATER_NAME IN ('AMSExpansion', 'USMajors', 'AMSAcquisition', 'USPubSec') THEN 'NoAM'
-                    WHEN THEATER_NAME = 'EMEA' THEN 'EMEA'
-                    WHEN THEATER_NAME = 'APJ' THEN 'APJ'
-                    ELSE 'Other'
-                END AS REGION,
-                PARTNER_NAME,
-                COUNT(*) AS TOTAL_UCS,
-                SUM(CASE WHEN IS_COCO THEN 1 ELSE 0 END) AS COCO_UCS,
-                ROUND(SUM(CASE WHEN IS_COCO THEN 1 ELSE 0 END) * 100.0 / NULLIF(COUNT(*), 0), 1) AS COCO_PCT
-            FROM TEMP.COCO_PARTNER_ADOPTION.DT_OKR_USE_CASES
-            WHERE PARTNER_NAME IN ('{managed_partners_sql}')
-            AND USE_CASE_STAGE IN ('3 - Technical / Business Validation','4 - Use Case Won / Migration Plan','5 - Implementation In Progress','6 - Implementation Complete','7 - Deployed')
-            AND (
-                (USE_CASE_STAGE IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan') AND DECISION_DATE >= '{Q2_START}' AND DECISION_DATE <= '{Q2_END}')
-                OR (USE_CASE_STAGE IN ('5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed') AND GO_LIVE_DATE >= '{Q2_START}' AND GO_LIVE_DATE <= '{Q2_END}')
-            )
-            GROUP BY REGION, PARTNER_NAME
-        )
-        SELECT REGION, ROUND(AVG(COCO_PCT), 1) AS AVG_COCO_PCT_PER_PARTNER
-        FROM partner_stats
-        GROUP BY REGION
-        ORDER BY AVG_COCO_PCT_PER_PARTNER DESC
-    """)
+        # Q2 headline stats
+        managed_q2_stats = pd.DataFrame([{
+            'TOTAL_UCS': len(managed_bulk_conf),
+            'COCO_UCS': int(coco_mask.sum()),
+            'TOTAL_EACV': managed_bulk_conf['USE_CASE_EACV'].sum() or 0,
+            'COCO_EACV': managed_bulk_conf.loc[coco_mask, 'USE_CASE_EACV'].sum() or 0,
+            'ACTIVE_PARTNERS': managed_bulk_conf['PARTNER_NAME'].nunique(),
+            'COCO_DEPLOYED': int(managed_bulk_conf[
+                coco_mask & (managed_bulk_conf['USE_CASE_STAGE'] == '7 - Deployed')
+            ].shape[0]),
+        }])
 
-    # Q2 Top Partners: per-partner breakdown with workload mix (with account-level attribution)
-    managed_q2_partners = conn.query(f"""
-        WITH {COCO_ACCOUNTS_CTE}
-        SELECT 
-            uc.PARTNER_NAME,
-            COUNT(*) AS TOTAL_UCS,
-            SUM(CASE WHEN uc.IS_COCO OR caa.ACCOUNT_NAME_UPPER IS NOT NULL THEN 1 ELSE 0 END) AS COCO_UCS,
-            ROUND(SUM(CASE WHEN uc.IS_COCO OR caa.ACCOUNT_NAME_UPPER IS NOT NULL THEN 1 ELSE 0 END) * 100.0 / NULLIF(COUNT(*), 0), 0) AS COCO_PCT,
-            COALESCE(SUM(uc.USE_CASE_EACV), 0) AS TOTAL_EACV,
-            SUM(CASE WHEN uc.TECHNICAL_USE_CASE LIKE '%AI%' THEN 1 ELSE 0 END) AS AI,
-            SUM(CASE WHEN uc.TECHNICAL_USE_CASE LIKE '%DE:%' THEN 1 ELSE 0 END) AS DE,
-            SUM(CASE WHEN uc.TECHNICAL_USE_CASE LIKE '%Analytics%' THEN 1 ELSE 0 END) AS ANALYTICS
-        FROM TEMP.COCO_PARTNER_ADOPTION.DT_OKR_USE_CASES uc
-        LEFT JOIN coco_active_accounts caa ON UPPER(uc.ACCOUNT_NAME) = caa.ACCOUNT_NAME_UPPER
-        WHERE uc.PARTNER_NAME IN ('{managed_partners_sql}')
-        AND uc.USE_CASE_STAGE IN ('3 - Technical / Business Validation','4 - Use Case Won / Migration Plan','5 - Implementation In Progress','6 - Implementation Complete','7 - Deployed')
-        AND (
-            (uc.USE_CASE_STAGE IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan') AND uc.DECISION_DATE >= '{Q2_START}' AND uc.DECISION_DATE <= '{Q2_END}')
-            OR (uc.USE_CASE_STAGE IN ('5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed') AND uc.GO_LIVE_DATE >= '{Q2_START}' AND uc.GO_LIVE_DATE <= '{Q2_END}')
-        )
-        GROUP BY uc.PARTNER_NAME
-        ORDER BY TOTAL_EACV DESC
-        LIMIT 15
-    """)
+        # Q2 CoCo coverage by region
+        reg_agg = managed_bulk_conf.groupby('REGION').agg(
+            TOTAL_UCS=('USE_CASE_ID', 'count'),
+            COCO_UCS=('IS_COCO_FINAL', 'sum'),
+            PARTNER_COUNT=('PARTNER_NAME', 'nunique'),
+        ).reset_index()
+        reg_agg['COCO_PCT'] = round(
+            reg_agg['COCO_UCS'] * 100.0 / reg_agg['TOTAL_UCS'].replace(0, float('nan')), 1
+        ).fillna(0)
+        managed_q2_regional = reg_agg.sort_values('TOTAL_UCS', ascending=False)
+
+        # Avg CoCo% per partner per region
+        pstats = managed_bulk_conf.groupby(['REGION', 'PARTNER_NAME']).agg(
+            TOTAL_UCS=('USE_CASE_ID', 'count'),
+            COCO_UCS=('IS_COCO_FINAL', 'sum'),
+        ).reset_index()
+        pstats['COCO_PCT'] = round(
+            pstats['COCO_UCS'] * 100.0 / pstats['TOTAL_UCS'].replace(0, float('nan')), 1
+        ).fillna(0)
+        managed_q2_partner_avg = pstats.groupby('REGION').agg(
+            AVG_COCO_PCT_PER_PARTNER=('COCO_PCT', 'mean')
+        ).reset_index()
+        managed_q2_partner_avg['AVG_COCO_PCT_PER_PARTNER'] = managed_q2_partner_avg['AVG_COCO_PCT_PER_PARTNER'].round(1)
+
+        # Per-partner breakdown
+        p_coco_eacv = managed_bulk_conf.loc[coco_mask].groupby('PARTNER_NAME')['USE_CASE_EACV'].sum().reset_index()
+        p_coco_eacv.columns = ['PARTNER_NAME', 'COCO_EACV']
+        managed_q2_partners = managed_bulk_conf.groupby('PARTNER_NAME').agg(
+            TOTAL_UCS=('USE_CASE_ID', 'count'),
+            COCO_UCS=('IS_COCO_FINAL', 'sum'),
+            TOTAL_EACV=('USE_CASE_EACV', 'sum'),
+            AI=('TECHNICAL_USE_CASE', lambda x: x.str.contains('AI', case=False, na=False).sum()),
+            DE=('TECHNICAL_USE_CASE', lambda x: x.str.contains('DE:', case=False, na=False).sum()),
+            ANALYTICS=('TECHNICAL_USE_CASE', lambda x: x.str.contains('Analytics', case=False, na=False).sum()),
+        ).reset_index()
+        managed_q2_partners = managed_q2_partners.merge(p_coco_eacv, on='PARTNER_NAME', how='left')
+        managed_q2_partners['COCO_EACV'] = managed_q2_partners['COCO_EACV'].fillna(0)
+        managed_q2_partners['COCO_PCT'] = round(
+            managed_q2_partners['COCO_UCS'] * 100.0 / managed_q2_partners['TOTAL_UCS'].replace(0, float('nan')), 0
+        ).fillna(0)
+        managed_q2_partners = managed_q2_partners.sort_values('TOTAL_EACV', ascending=False).head(15)
+    else:
+        managed_q2_stats = pd.DataFrame([{'TOTAL_UCS': 0, 'COCO_UCS': 0, 'TOTAL_EACV': 0, 'COCO_EACV': 0, 'ACTIVE_PARTNERS': 0, 'COCO_DEPLOYED': 0}])
+        managed_q2_regional = pd.DataFrame(columns=['REGION', 'TOTAL_UCS', 'COCO_UCS', 'COCO_PCT', 'PARTNER_COUNT'])
+        managed_q2_partner_avg = pd.DataFrame(columns=['REGION', 'AVG_COCO_PCT_PER_PARTNER'])
+        managed_q2_partners = pd.DataFrame(columns=['PARTNER_NAME', 'TOTAL_UCS', 'COCO_UCS', 'COCO_PCT', 'TOTAL_EACV', 'AI', 'DE', 'ANALYTICS'])
 
 # Executive email always uses MANAGED_PARTNERS list, ignoring sidebar partner filter
 # Filter to managed partners only for executive email context
@@ -237,6 +203,29 @@ partner_workloads = partner_workloads[partner_workloads['PARTNER_NAME'].isin(MAN
 coco_coverage = coco_coverage[coco_coverage['PARTNER_NAME'].isin(MANAGED_PARTNERS)]
 if 'PARTNER_NAME' in regional_themes.columns:
     regional_themes = regional_themes[regional_themes['PARTNER_NAME'].isin(MANAGED_PARTNERS)]
+
+# Override coco_coverage with High-confidence scoring (same logic as OKR Coverage)
+if len(coco_coverage) > 0 and len(managed_bulk_conf) > 0:
+    bulk_for_cov = managed_bulk_conf[managed_bulk_conf['PARTNER_NAME'].isin(coco_coverage['PARTNER_NAME'])].copy()
+    if region and region != 'Global':
+        region_theaters = {'NoAM': ['AMSExpansion', 'USMajors', 'AMSAcquisition'], 'EMEA': ['EMEA'], 'APJ': ['APJ']}
+        bulk_for_cov = bulk_for_cov[bulk_for_cov['THEATER_NAME'].isin(region_theaters.get(region, []))]
+    if len(bulk_for_cov) > 0:
+        cov_coco_eacv = bulk_for_cov[bulk_for_cov['IS_COCO_FINAL']].groupby('PARTNER_NAME')['USE_CASE_EACV'].sum().reset_index()
+        cov_coco_eacv.columns = ['PARTNER_NAME', 'COCO_EACV']
+        cov_summary = bulk_for_cov.groupby('PARTNER_NAME').agg(
+            TOTAL_PARTNER_UCS=('USE_CASE_ID', 'count'),
+            COCO_UCS=('IS_COCO_FINAL', 'sum'),
+            TOTAL_EACV=('USE_CASE_EACV', 'sum'),
+        ).reset_index()
+        cov_summary = cov_summary.merge(cov_coco_eacv, on='PARTNER_NAME', how='left')
+        cov_summary['COCO_EACV'] = cov_summary['COCO_EACV'].fillna(0)
+        cov_summary['COCO_PCT'] = round(
+            cov_summary['COCO_UCS'] * 100.0 / cov_summary['TOTAL_PARTNER_UCS'].replace(0, float('nan')), 1
+        ).fillna(0)
+        coco_coverage = coco_coverage[['PARTNER_NAME']].merge(cov_summary, on='PARTNER_NAME', how='left').fillna(0)
+        coco_coverage['COCO_PCT'] = coco_coverage['COCO_PCT'].astype(float)
+        coco_coverage[['TOTAL_PARTNER_UCS', 'COCO_UCS']] = coco_coverage[['TOTAL_PARTNER_UCS', 'COCO_UCS']].astype(int)
 
 if len(stats) == 0:
     st.warning("No data available.")
@@ -253,6 +242,24 @@ managed_coco_deployed = int(q2['COCO_DEPLOYED'])
 managed_coco_pct = round(managed_coco_ucs * 100.0 / managed_total_ucs, 1) if managed_total_ucs > 0 else 0
 managed_inactive_partners = 35 - managed_total_partners
 managed_inactive_names = [p for p in MANAGED_PARTNERS if p not in partner_data['PARTNER_NAME'].values]
+
+# Compute full per-partner OKR summary (all managed partners, not capped at 15)
+# Used to accurately report partners meeting/below the 50% target
+if len(managed_bulk_conf) > 0:
+    _full_partner_summary = managed_bulk_conf.groupby('PARTNER_NAME').agg(
+        TOTAL_UCS=('USE_CASE_ID', 'count'),
+        COCO_UCS=('IS_COCO_FINAL', 'sum'),
+    ).reset_index()
+    _full_partner_summary['COCO_PCT'] = round(
+        _full_partner_summary['COCO_UCS'] * 100.0 / _full_partner_summary['TOTAL_UCS'].replace(0, float('nan')), 1
+    ).fillna(0)
+    partners_meeting_50 = int((_full_partner_summary['COCO_PCT'] >= 50).sum())
+    partners_meeting_list = ', '.join(_full_partner_summary[_full_partner_summary['COCO_PCT'] >= 50]['PARTNER_NAME'].tolist())
+    partners_below_50 = int((_full_partner_summary['COCO_PCT'] < 50).sum())
+else:
+    partners_meeting_50 = 0
+    partners_meeting_list = 'N/A'
+    partners_below_50 = managed_total_partners
 
 s = stats.iloc[0]
 go = global_overview.iloc[0]
@@ -389,6 +396,8 @@ MANAGED PARTNERS Q2 HEADLINE:
   Total EACV: ${managed_total_eacv/1_000_000:.1f}M
   CoCo EACV: ${managed_coco_eacv/1_000_000:.1f}M
   CoCo Deployed: {managed_coco_deployed}
+  Partners Meeting 50% Target: {partners_meeting_50} ({partners_meeting_list})
+  Partners Below 50% Target: {partners_below_50}
 CoCo Active: {managed_total_partners} of 20 managed partners have Q2 activity
 No Q2 Activity ({managed_inactive_partners} partners): {', '.join(managed_inactive_names)}
 

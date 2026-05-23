@@ -189,8 +189,32 @@ def get_by_technical_type(_conn, region=None, source=None, start_date=None, end_
 
 DT_OKR = f"{SCHEMA}.DT_OKR_USE_CASES"
 
-def _coco_accounts_cte(start_date):
-    """CTE for customer accounts with actual CoCo product usage since start_date."""
+def _coco_accounts_cte(start_date, include_account_coco=True, confidence=None):
+    """CTE for customer accounts with actual CoCo product usage since start_date.
+    confidence: None=all accounts, 'High'=only accounts with skill invocations, 'Medium'=accounts with any tool activity
+    """
+    if not include_account_coco:
+        return "coco_active_accounts AS (SELECT NULL AS ACCOUNT_NAME_UPPER WHERE FALSE)"
+    if confidence == 'High':
+        return f"""coco_active_accounts AS (
+            SELECT DISTINCT UPPER(f.salesforce_account_name) AS ACCOUNT_NAME_UPPER
+            FROM snowscience.llm.cortex_code_user_day_fact f
+            WHERE f.ds >= '{start_date}' AND f.snowflake_account_type = 'Customer' AND f.total_daily_requests > 0
+            AND f.ACCOUNT_ID IN (
+                SELECT DISTINCT ACCOUNT_ID FROM SNOWSCIENCE.LLM.CORTEX_CODE_REQUEST_STG
+                WHERE ds >= '{start_date}' AND SKILL_CHOICE IS NOT NULL AND SKILL_CHOICE != ''
+            )
+        )"""
+    if confidence == 'Medium':
+        return f"""coco_active_accounts AS (
+            SELECT DISTINCT UPPER(f.salesforce_account_name) AS ACCOUNT_NAME_UPPER
+            FROM snowscience.llm.cortex_code_user_day_fact f
+            WHERE f.ds >= '{start_date}' AND f.snowflake_account_type = 'Customer' AND f.total_daily_requests > 0
+            AND f.ACCOUNT_ID IN (
+                SELECT DISTINCT ACCOUNT_ID FROM SNOWSCIENCE.LLM.CORTEX_CODE_REQUEST_STG
+                WHERE ds >= '{start_date}' AND TOOLS_INVOKED_JSON IS NOT NULL AND TOOLS_INVOKED_JSON != '[]'
+            )
+        )"""
     return f"""coco_active_accounts AS (
         SELECT DISTINCT UPPER(salesforce_account_name) AS ACCOUNT_NAME_UPPER
         FROM snowscience.llm.cortex_code_user_day_fact
@@ -202,10 +226,10 @@ def _is_coco_expanded():
     return "(uc.IS_COCO OR caa.ACCOUNT_NAME_UPPER IS NOT NULL)"
 
 @st.cache_data(ttl=timedelta(minutes=30))
-def get_adoption_overview(_conn, start_date, end_date, region=None, partners=None):
+def get_adoption_overview(_conn, start_date, end_date, region=None, partners=None, include_account_coco=True, confidence=None):
     """Get adoption metrics from DT_OKR_USE_CASES for the Overview page."""
     tf = _theater_filter(region)
-    coco_cte = _coco_accounts_cte(start_date)
+    coco_cte = _coco_accounts_cte(start_date, include_account_coco, confidence)
     is_coco = _is_coco_expanded()
     partner_filter = ""
     if partners:
@@ -245,10 +269,10 @@ def get_adoption_overview(_conn, start_date, end_date, region=None, partners=Non
     return _conn.query(query)
 
 @st.cache_data(ttl=timedelta(minutes=30))
-def get_adoption_by_partner(_conn, start_date, end_date, region=None):
+def get_adoption_by_partner(_conn, start_date, end_date, region=None, include_account_coco=True, confidence=None):
     """Get per-partner metrics from DT_OKR_USE_CASES."""
     tf = _theater_filter(region)
-    coco_cte = _coco_accounts_cte(start_date)
+    coco_cte = _coco_accounts_cte(start_date, include_account_coco, confidence)
     is_coco = _is_coco_expanded()
     date_filter = f"""(
         (uc.USE_CASE_STAGE IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan') AND uc.DECISION_DATE >= '{start_date}' AND uc.DECISION_DATE <= '{end_date}')
@@ -272,10 +296,10 @@ def get_adoption_by_partner(_conn, start_date, end_date, region=None):
     return _conn.query(query)
 
 @st.cache_data(ttl=timedelta(minutes=30))
-def get_adoption_by_stage(_conn, start_date, end_date, region=None):
+def get_adoption_by_stage(_conn, start_date, end_date, region=None, include_account_coco=True, confidence=None):
     """Get per-stage metrics from DT_OKR_USE_CASES."""
     tf = _theater_filter(region)
-    coco_cte = _coco_accounts_cte(start_date)
+    coco_cte = _coco_accounts_cte(start_date, include_account_coco, confidence)
     is_coco = _is_coco_expanded()
     date_filter = f"""(
         (uc.USE_CASE_STAGE IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan') AND uc.DECISION_DATE >= '{start_date}' AND uc.DECISION_DATE <= '{end_date}')
@@ -300,9 +324,9 @@ def get_adoption_by_stage(_conn, start_date, end_date, region=None):
     return _conn.query(query)
 
 @st.cache_data(ttl=timedelta(minutes=30))
-def get_adoption_by_region(_conn, start_date, end_date):
+def get_adoption_by_region(_conn, start_date, end_date, include_account_coco=True, confidence=None):
     """Get per-region metrics from DT_OKR_USE_CASES."""
-    coco_cte = _coco_accounts_cte(start_date)
+    coco_cte = _coco_accounts_cte(start_date, include_account_coco, confidence)
     is_coco = _is_coco_expanded()
     date_filter = f"""(
         (uc.USE_CASE_STAGE IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan') AND uc.DECISION_DATE >= '{start_date}' AND uc.DECISION_DATE <= '{end_date}')
@@ -330,9 +354,9 @@ def get_adoption_by_region(_conn, start_date, end_date):
     """
     return _conn.query(query)
 @st.cache_data(ttl=timedelta(minutes=30))
-def get_okr_coco_adoption(_conn, quarter_start, quarter_end, region=None):
+def get_okr_coco_adoption(_conn, quarter_start, quarter_end, region=None, include_account_coco=True, confidence=None):
     tf = _theater_filter(region)
-    coco_cte = _coco_accounts_cte(quarter_start)
+    coco_cte = _coco_accounts_cte(quarter_start, include_account_coco, confidence)
     is_coco = _is_coco_expanded()
     query = f"""
     WITH {coco_cte}
@@ -368,9 +392,9 @@ def get_okr_coco_adoption(_conn, quarter_start, quarter_end, region=None):
     return _conn.query(query)
 
 @st.cache_data(ttl=timedelta(minutes=30))
-def get_okr_partner_summary(_conn, quarter_start, quarter_end, region=None):
+def get_okr_partner_summary(_conn, quarter_start, quarter_end, region=None, include_account_coco=True, confidence=None):
     tf = _theater_filter(region)
-    coco_cte = _coco_accounts_cte(quarter_start)
+    coco_cte = _coco_accounts_cte(quarter_start, include_account_coco, confidence)
     is_coco = _is_coco_expanded()
     query = f"""
     WITH {coco_cte}
@@ -698,10 +722,10 @@ def get_regional_comment_narratives(_conn, target_region, source=None, start_dat
     return _conn.query(query)
 
 @st.cache_data(ttl=timedelta(minutes=30))
-def get_partner_coco_coverage(_conn, region=None, start_date=None, end_date=None):
+def get_partner_coco_coverage(_conn, region=None, start_date=None, end_date=None, include_account_coco=True, confidence=None):
     tf = _theater_filter(region)
     effective_start = start_date or '2025-11-20'
-    coco_cte = _coco_accounts_cte(effective_start)
+    coco_cte = _coco_accounts_cte(effective_start, include_account_coco, confidence)
     is_coco = _is_coco_expanded()
     if start_date and end_date:
         date_filter = f"""(
@@ -731,10 +755,10 @@ def get_partner_coco_coverage(_conn, region=None, start_date=None, end_date=None
     return _conn.query(query)
 
 @st.cache_data(ttl=timedelta(minutes=30))
-def get_okr_stage_breakdown(_conn, region=None, start_date=None, end_date=None):
+def get_okr_stage_breakdown(_conn, region=None, start_date=None, end_date=None, include_account_coco=True, confidence=None):
     tf = _theater_filter(region)
     effective_start = start_date or '2025-11-20'
-    coco_cte = _coco_accounts_cte(effective_start)
+    coco_cte = _coco_accounts_cte(effective_start, include_account_coco, confidence)
     is_coco = _is_coco_expanded()
     if start_date and end_date:
         date_filter = f"""(
@@ -819,4 +843,137 @@ def get_by_account_gvp(_conn, region=None, source=None, start_date=None, end_dat
     ORDER BY total_eacv DESC NULLS LAST
     LIMIT 15
     """
+    return _conn.query(query)
+
+# Workload-to-skill mapping for confidence scoring
+WORKLOAD_SKILL_MAP = {
+    'AI': ['%cortex-agent%', '%cortex-ai-function%', '%machine-learning%', '%semantic-view%', '%document-intelligence%', '%gdp-cortex-agent%'],
+    'Analytics': ['%sql-author%', '%semantic_studio%', '%data:analyzing%', '%dashboard%', '%cortex-context-sql%'],
+    'Data Engineering': ['%dbt%', '%dynamic-tables%', '%data:airflow%', '%openflow%', '%data-quality%', '%lineage%', '%iceberg%'],
+    'Platform': ['%cost-intelligence%', '%warehouse%', '%data-governance%', '%access-troubleshooter%', '%billing%', '%trust-center%'],
+    'Apps & Collab': ['%streamlit%', '%spcs%', '%snowflake-apps%', '%build-app%', '%notebook%'],
+    'Migration': ['%migration%', '%spark%', '%databricks%'],
+}
+
+def _confidence_scored_query(partner_filter_sql, start_date, end_date):
+    """Shared SQL body for confidence scoring - used by both single and bulk functions."""
+    return f"""
+    WITH partner_ucs AS (
+        SELECT uc.USE_CASE_ID, uc.ACCOUNT_NAME, UPPER(uc.ACCOUNT_NAME) AS ACCOUNT_NAME_UPPER,
+            uc.PARTNER_NAME, uc.TECHNICAL_USE_CASE, uc.USE_CASE_STAGE,
+            uc.USE_CASE_EACV, uc.IS_COCO, uc.COCO_SOURCE, uc.THEATER_NAME,
+            CASE
+                WHEN uc.TECHNICAL_USE_CASE ILIKE '%AI:%' THEN 'AI'
+                WHEN uc.TECHNICAL_USE_CASE ILIKE '%Analytics:%' THEN 'Analytics'
+                WHEN uc.TECHNICAL_USE_CASE ILIKE '%DE:%' THEN 'Data Engineering'
+                WHEN uc.TECHNICAL_USE_CASE ILIKE '%Platform:%' THEN 'Platform'
+                WHEN uc.TECHNICAL_USE_CASE ILIKE '%Apps%' THEN 'Apps & Collab'
+                WHEN uc.TECHNICAL_USE_CASE ILIKE '%Migration%' THEN 'Migration'
+                ELSE 'Unclassified'
+            END AS WORKLOAD_CATEGORY
+        FROM {DT_OKR} uc
+        WHERE {partner_filter_sql}
+        AND (
+            (uc.USE_CASE_STAGE IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan') AND uc.DECISION_DATE >= '{start_date}' AND uc.DECISION_DATE <= '{end_date}')
+            OR (uc.USE_CASE_STAGE IN ('5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed') AND uc.GO_LIVE_DATE >= '{start_date}' AND uc.GO_LIVE_DATE <= '{end_date}')
+        )
+    ),
+    account_ids AS (
+        SELECT DISTINCT f.ACCOUNT_ID, UPPER(f.SALESFORCE_ACCOUNT_NAME) AS ACCOUNT_NAME_UPPER
+        FROM snowscience.llm.cortex_code_user_day_fact f
+        WHERE f.snowflake_account_type = 'Customer' AND f.ds >= '{start_date}'
+        AND UPPER(f.SALESFORCE_ACCOUNT_NAME) IN (SELECT ACCOUNT_NAME_UPPER FROM partner_ucs)
+    ),
+    relevant_bundled AS (
+        SELECT aid.ACCOUNT_NAME_UPPER,
+            SUM(CASE WHEN r.SKILL_CHOICE ILIKE '%cortex-agent%' OR r.SKILL_CHOICE ILIKE '%cortex-ai-function%' OR r.SKILL_CHOICE ILIKE '%machine-learning%' OR r.SKILL_CHOICE ILIKE '%semantic-view%' OR r.SKILL_CHOICE ILIKE '%document-intelligence%' THEN 1 ELSE 0 END) AS ai_skill_count,
+            SUM(CASE WHEN r.SKILL_CHOICE ILIKE '%sql-author%' OR r.SKILL_CHOICE ILIKE '%semantic_studio%' OR r.SKILL_CHOICE ILIKE '%data:analyzing%' OR r.SKILL_CHOICE ILIKE '%dashboard%' OR r.SKILL_CHOICE ILIKE '%cortex-context-sql%' THEN 1 ELSE 0 END) AS analytics_skill_count,
+            SUM(CASE WHEN r.SKILL_CHOICE ILIKE '%dbt%' OR r.SKILL_CHOICE ILIKE '%dynamic-tables%' OR r.SKILL_CHOICE ILIKE '%data:airflow%' OR r.SKILL_CHOICE ILIKE '%openflow%' OR r.SKILL_CHOICE ILIKE '%data-quality%' OR r.SKILL_CHOICE ILIKE '%lineage%' OR r.SKILL_CHOICE ILIKE '%iceberg%' THEN 1 ELSE 0 END) AS de_skill_count,
+            SUM(CASE WHEN r.SKILL_CHOICE ILIKE '%cost-intelligence%' OR r.SKILL_CHOICE ILIKE '%warehouse%' OR r.SKILL_CHOICE ILIKE '%data-governance%' OR r.SKILL_CHOICE ILIKE '%access-troubleshooter%' OR r.SKILL_CHOICE ILIKE '%billing%' THEN 1 ELSE 0 END) AS platform_skill_count,
+            SUM(CASE WHEN r.SKILL_CHOICE ILIKE '%streamlit%' OR r.SKILL_CHOICE ILIKE '%spcs%' OR r.SKILL_CHOICE ILIKE '%snowflake-apps%' OR r.SKILL_CHOICE ILIKE '%build-app%' OR r.SKILL_CHOICE ILIKE '%notebook%' THEN 1 ELSE 0 END) AS app_skill_count,
+            SUM(CASE WHEN r.SKILL_CHOICE ILIKE '%migration%' OR r.SKILL_CHOICE ILIKE '%spark%' OR r.SKILL_CHOICE ILIKE '%databricks%' THEN 1 ELSE 0 END) AS migration_skill_count
+        FROM SNOWSCIENCE.LLM.CORTEX_CODE_REQUEST_STG r
+        INNER JOIN account_ids aid ON r.ACCOUNT_ID = aid.ACCOUNT_ID
+        WHERE r.ds >= '{start_date}' AND r.SKILL_CHOICE IS NOT NULL AND r.SKILL_CHOICE != ''
+        GROUP BY aid.ACCOUNT_NAME_UPPER
+    ),
+    custom_skills AS (
+        SELECT aid.ACCOUNT_NAME_UPPER,
+            COUNT(DISTINCT sk.value:name::STRING) AS custom_skill_count,
+            COUNT(DISTINCT CASE WHEN LOWER(sk.value:name::STRING) REGEXP '(agent|cortex|llm|ml|model|intent|analyst|ai|chat|rag|embed)' THEN sk.value:name::STRING END) AS ai_custom_skills,
+            COUNT(DISTINCT CASE WHEN LOWER(sk.value:name::STRING) REGEXP '(sql|query|analytics|bi|report|dashboard|semantic|data.analyz)' THEN sk.value:name::STRING END) AS analytics_custom_skills,
+            COUNT(DISTINCT CASE WHEN LOWER(sk.value:name::STRING) REGEXP '(dbt|airflow|pipeline|ingest|transform|etl|dag|lineage|stream|iceberg)' THEN sk.value:name::STRING END) AS de_custom_skills,
+            COUNT(DISTINCT CASE WHEN LOWER(sk.value:name::STRING) REGEXP '(govern|security|access|cost|warehouse|billing|admin|platform|monitor)' THEN sk.value:name::STRING END) AS platform_custom_skills,
+            COUNT(DISTINCT CASE WHEN LOWER(sk.value:name::STRING) REGEXP '(streamlit|app|frontend|ui|react|spcs|notebook)' THEN sk.value:name::STRING END) AS app_custom_skills,
+            COUNT(DISTINCT CASE WHEN LOWER(sk.value:name::STRING) REGEXP '(migrat|spark|databricks|convert|legacy)' THEN sk.value:name::STRING END) AS migration_custom_skills
+        FROM SNOWSCIENCE.LLM.CORTEX_CODE_REQUEST_STG r
+        INNER JOIN account_ids aid ON r.ACCOUNT_ID = aid.ACCOUNT_ID,
+        LATERAL FLATTEN(input => TRY_PARSE_JSON(r.TOOL_RESOURCES_SKILL):skills) sk
+        WHERE r.ds >= '{start_date}'
+        AND r.TOOL_RESOURCES_SKILL IS NOT NULL AND r.TOOL_RESOURCES_SKILL != '' AND r.TOOL_RESOURCES_SKILL != '[]'
+        AND sk.value:skill_source::STRING = 'user'
+        GROUP BY aid.ACCOUNT_NAME_UPPER
+    ),
+    tool_usage AS (
+        SELECT aid.ACCOUNT_NAME_UPPER, COUNT(*) AS total_tool_invocations
+        FROM SNOWSCIENCE.LLM.CORTEX_CODE_REQUEST_STG r
+        INNER JOIN account_ids aid ON r.ACCOUNT_ID = aid.ACCOUNT_ID,
+        LATERAL FLATTEN(input => TRY_PARSE_JSON(r.TOOLS_INVOKED_JSON)) f
+        WHERE r.ds >= '{start_date}' AND r.TOOLS_INVOKED_JSON IS NOT NULL AND r.TOOLS_INVOKED_JSON != '[]'
+        GROUP BY aid.ACCOUNT_NAME_UPPER
+    ),
+    product_usage AS (
+        SELECT UPPER(f.SALESFORCE_ACCOUNT_NAME) AS ACCOUNT_NAME_UPPER,
+            COUNT(DISTINCT f.ds) AS active_days,
+            COUNT(DISTINCT f.USER_ID) AS distinct_users,
+            SUM(f.TOTAL_DAILY_REQUESTS) AS total_requests
+        FROM snowscience.llm.cortex_code_user_day_fact f
+        WHERE f.snowflake_account_type = 'Customer' AND f.ds >= '{start_date}' AND f.total_daily_requests > 0
+        AND UPPER(f.SALESFORCE_ACCOUNT_NAME) IN (SELECT ACCOUNT_NAME_UPPER FROM partner_ucs)
+        GROUP BY UPPER(f.SALESFORCE_ACCOUNT_NAME)
+    ),
+    scored AS (
+        SELECT uc.*,
+            CASE WHEN uc.WORKLOAD_CATEGORY = 'AI' THEN COALESCE(rb.ai_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Analytics' THEN COALESCE(rb.analytics_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Data Engineering' THEN COALESCE(rb.de_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Platform' THEN COALESCE(rb.platform_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Apps & Collab' THEN COALESCE(rb.app_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Migration' THEN COALESCE(rb.migration_skill_count, 0) ELSE 0 END AS RELEVANT_SKILL_INVOCATIONS,
+            CASE WHEN uc.WORKLOAD_CATEGORY = 'AI' THEN COALESCE(cs.ai_custom_skills, 0) WHEN uc.WORKLOAD_CATEGORY = 'Analytics' THEN COALESCE(cs.analytics_custom_skills, 0) WHEN uc.WORKLOAD_CATEGORY = 'Data Engineering' THEN COALESCE(cs.de_custom_skills, 0) WHEN uc.WORKLOAD_CATEGORY = 'Platform' THEN COALESCE(cs.platform_custom_skills, 0) WHEN uc.WORKLOAD_CATEGORY = 'Apps & Collab' THEN COALESCE(cs.app_custom_skills, 0) WHEN uc.WORKLOAD_CATEGORY = 'Migration' THEN COALESCE(cs.migration_custom_skills, 0) ELSE 0 END AS RELEVANT_CUSTOM_SKILLS,
+            COALESCE(cs.custom_skill_count, 0) AS CUSTOM_SKILLS,
+            COALESCE(tu.total_tool_invocations, 0) AS TOOLS_INVOKED,
+            COALESCE(pu.active_days, 0) AS ACTIVE_DAYS,
+            COALESCE(pu.distinct_users, 0) AS DISTINCT_USERS,
+            COALESCE(pu.total_requests, 0) AS TOTAL_REQUESTS,
+            CASE WHEN CASE WHEN uc.WORKLOAD_CATEGORY = 'AI' THEN COALESCE(rb.ai_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Analytics' THEN COALESCE(rb.analytics_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Data Engineering' THEN COALESCE(rb.de_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Platform' THEN COALESCE(rb.platform_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Apps & Collab' THEN COALESCE(rb.app_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Migration' THEN COALESCE(rb.migration_skill_count, 0) ELSE 0 END >= 50 THEN 30 WHEN CASE WHEN uc.WORKLOAD_CATEGORY = 'AI' THEN COALESCE(rb.ai_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Analytics' THEN COALESCE(rb.analytics_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Data Engineering' THEN COALESCE(rb.de_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Platform' THEN COALESCE(rb.platform_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Apps & Collab' THEN COALESCE(rb.app_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Migration' THEN COALESCE(rb.migration_skill_count, 0) ELSE 0 END >= 10 THEN 20 WHEN CASE WHEN uc.WORKLOAD_CATEGORY = 'AI' THEN COALESCE(rb.ai_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Analytics' THEN COALESCE(rb.analytics_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Data Engineering' THEN COALESCE(rb.de_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Platform' THEN COALESCE(rb.platform_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Apps & Collab' THEN COALESCE(rb.app_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Migration' THEN COALESCE(rb.migration_skill_count, 0) ELSE 0 END >= 1 THEN 10 ELSE 0 END AS S1_SCORE,
+            CASE WHEN CASE WHEN uc.WORKLOAD_CATEGORY = 'AI' THEN COALESCE(cs.ai_custom_skills, 0) WHEN uc.WORKLOAD_CATEGORY = 'Analytics' THEN COALESCE(cs.analytics_custom_skills, 0) WHEN uc.WORKLOAD_CATEGORY = 'Data Engineering' THEN COALESCE(cs.de_custom_skills, 0) WHEN uc.WORKLOAD_CATEGORY = 'Platform' THEN COALESCE(cs.platform_custom_skills, 0) WHEN uc.WORKLOAD_CATEGORY = 'Apps & Collab' THEN COALESCE(cs.app_custom_skills, 0) WHEN uc.WORKLOAD_CATEGORY = 'Migration' THEN COALESCE(cs.migration_custom_skills, 0) ELSE 0 END >= 3 THEN 35 WHEN CASE WHEN uc.WORKLOAD_CATEGORY = 'AI' THEN COALESCE(cs.ai_custom_skills, 0) WHEN uc.WORKLOAD_CATEGORY = 'Analytics' THEN COALESCE(cs.analytics_custom_skills, 0) WHEN uc.WORKLOAD_CATEGORY = 'Data Engineering' THEN COALESCE(cs.de_custom_skills, 0) WHEN uc.WORKLOAD_CATEGORY = 'Platform' THEN COALESCE(cs.platform_custom_skills, 0) WHEN uc.WORKLOAD_CATEGORY = 'Apps & Collab' THEN COALESCE(cs.app_custom_skills, 0) WHEN uc.WORKLOAD_CATEGORY = 'Migration' THEN COALESCE(cs.migration_custom_skills, 0) ELSE 0 END >= 1 THEN 25 WHEN COALESCE(cs.custom_skill_count, 0) >= 10 THEN 15 WHEN COALESCE(cs.custom_skill_count, 0) >= 1 THEN 8 ELSE 0 END AS S2_SCORE,
+            CASE WHEN COALESCE(tu.total_tool_invocations, 0) >= 50000 THEN 20 WHEN COALESCE(tu.total_tool_invocations, 0) >= 10000 THEN 15 WHEN COALESCE(tu.total_tool_invocations, 0) >= 1000 THEN 10 WHEN COALESCE(tu.total_tool_invocations, 0) >= 1 THEN 5 WHEN COALESCE(pu.total_requests, 0) >= 1000 THEN 5 WHEN COALESCE(pu.total_requests, 0) >= 1 THEN 3 ELSE 0 END AS S3_SCORE,
+            CASE WHEN COALESCE(pu.active_days, 0) = 0 THEN 0 WHEN (CASE WHEN uc.WORKLOAD_CATEGORY = 'AI' THEN COALESCE(rb.ai_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Analytics' THEN COALESCE(rb.analytics_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Data Engineering' THEN COALESCE(rb.de_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Platform' THEN COALESCE(rb.platform_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Apps & Collab' THEN COALESCE(rb.app_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Migration' THEN COALESCE(rb.migration_skill_count, 0) ELSE 0 END) / pu.active_days >= 5 THEN 15 WHEN (CASE WHEN uc.WORKLOAD_CATEGORY = 'AI' THEN COALESCE(rb.ai_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Analytics' THEN COALESCE(rb.analytics_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Data Engineering' THEN COALESCE(rb.de_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Platform' THEN COALESCE(rb.platform_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Apps & Collab' THEN COALESCE(rb.app_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Migration' THEN COALESCE(rb.migration_skill_count, 0) ELSE 0 END) / pu.active_days >= 1 THEN 10 WHEN (CASE WHEN uc.WORKLOAD_CATEGORY = 'AI' THEN COALESCE(rb.ai_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Analytics' THEN COALESCE(rb.analytics_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Data Engineering' THEN COALESCE(rb.de_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Platform' THEN COALESCE(rb.platform_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Apps & Collab' THEN COALESCE(rb.app_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Migration' THEN COALESCE(rb.migration_skill_count, 0) ELSE 0 END) > 0 THEN 5 ELSE 0 END AS S4_SCORE
+        FROM partner_ucs uc
+        LEFT JOIN relevant_bundled rb ON uc.ACCOUNT_NAME_UPPER = rb.ACCOUNT_NAME_UPPER
+        LEFT JOIN custom_skills cs ON uc.ACCOUNT_NAME_UPPER = cs.ACCOUNT_NAME_UPPER
+        LEFT JOIN tool_usage tu ON uc.ACCOUNT_NAME_UPPER = tu.ACCOUNT_NAME_UPPER
+        LEFT JOIN product_usage pu ON uc.ACCOUNT_NAME_UPPER = pu.ACCOUNT_NAME_UPPER
+    )
+    SELECT *,
+        S1_SCORE + S2_SCORE + S3_SCORE + S4_SCORE AS TOTAL_SCORE,
+        CASE
+            WHEN S1_SCORE + S2_SCORE + S3_SCORE + S4_SCORE >= 75 THEN 'High'
+            WHEN S1_SCORE + S2_SCORE + S3_SCORE + S4_SCORE >= 40 THEN 'Medium'
+            WHEN S1_SCORE + S2_SCORE + S3_SCORE + S4_SCORE >= 1 THEN 'Low'
+            ELSE 'No Signal'
+        END AS CONFIDENCE_BAND
+    FROM scored"""
+
+@st.cache_data(ttl=timedelta(minutes=30))
+def get_usecase_confidence_scores(_conn, partner, start_date, end_date):
+    """Compute confidence scores for a single partner's use cases."""
+    partner_filter = f"uc.PARTNER_NAME = '{partner}'"
+    query = _confidence_scored_query(partner_filter, start_date, end_date)
+    query += "\n    ORDER BY TOTAL_SCORE DESC, ACCOUNT_NAME"
+    return _conn.query(query)
+
+@st.cache_data(ttl=timedelta(minutes=30))
+def get_bulk_confidence_scores(_conn, partners, start_date, end_date):
+    """Compute confidence scores for multiple partners in a single query."""
+    partners_sql = "','".join(partners)
+    partner_filter = f"uc.PARTNER_NAME IN ('{partners_sql}')"
+    query = _confidence_scored_query(partner_filter, start_date, end_date)
+    query += "\n    ORDER BY TOTAL_SCORE DESC, PARTNER_NAME, ACCOUNT_NAME"
     return _conn.query(query)

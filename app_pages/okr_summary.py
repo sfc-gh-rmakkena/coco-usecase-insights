@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
-from utils.queries import get_partner_coco_coverage, get_okr_stage_breakdown, get_partner_credit_consumption
+from utils.queries import get_partner_coco_coverage, get_okr_stage_breakdown, get_partner_credit_consumption, get_bulk_confidence_scores
 from utils import resolve_partner_filter
 
 conn = st.session_state.conn
@@ -9,6 +9,9 @@ region = st.session_state.get("selected_region", "Global")
 selected_partners = st.session_state.get("selected_partners", [])
 start_date = st.session_state.get("okr_start_date")
 end_date = st.session_state.get("okr_end_date")
+include_account_coco = st.session_state.get("include_account_coco", "Yes") == "Yes"
+confidence_filter = st.session_state.get("confidence_filter", ["High"])
+confidence = 'High' if confidence_filter == ['High'] else ('Medium' if confidence_filter else None)
 
 st.title(":material/dashboard: OKR: CoCo Coverage Dashboard")
 st.caption(f"Track CoCo adoption toward 50% target across partner use cases (Stages 3-7) | Region: {region} | {start_date} to {end_date}")
@@ -16,8 +19,9 @@ st.caption(f"Track CoCo adoption toward 50% target across partner use cases (Sta
 TARGET_PCT = 50
 
 with st.spinner("Loading CoCo coverage data..."):
-    coverage = get_partner_coco_coverage(conn, region=region, start_date=str(start_date), end_date=str(end_date))
-    stage_breakdown = get_okr_stage_breakdown(conn, region=region, start_date=str(start_date), end_date=str(end_date))
+    # Always fetch base coverage without account-level CoCo for partner list/totals
+    coverage = get_partner_coco_coverage(conn, region=region, start_date=str(start_date), end_date=str(end_date), include_account_coco=False, confidence=None)
+    stage_breakdown = get_okr_stage_breakdown(conn, region=region, start_date=str(start_date), end_date=str(end_date), include_account_coco=False, confidence=None)
     credit_data = get_partner_credit_consumption(conn, coverage['PARTNER_NAME'].tolist(), str(start_date), str(end_date))
 
 if len(coverage) == 0:
@@ -33,6 +37,55 @@ if selected_partners:
 if len(coverage) == 0:
     st.info(f"No data for selected partners.")
     st.stop()
+
+# Recompute CoCo counts using full confidence scoring — same logic as OKR Adoption page
+bulk_conf = pd.DataFrame()
+if include_account_coco and len(coverage) > 0:
+    bulk_conf = get_bulk_confidence_scores(conn, coverage['PARTNER_NAME'].tolist(), str(start_date), str(end_date))
+    if len(bulk_conf) > 0:
+        if region and region != 'Global':
+            region_theaters = {
+                'NoAM': ['AMSExpansion', 'USMajors', 'AMSAcquisition'],
+                'EMEA': ['EMEA'], 'APJ': ['APJ']
+            }
+            bulk_conf = bulk_conf[bulk_conf['THEATER_NAME'].isin(region_theaters.get(region, []))]
+        bands = confidence_filter if confidence_filter else ['High', 'Medium', 'Low']
+        bulk_conf['IS_COCO_FINAL'] = (
+            (bulk_conf['IS_COCO'] == True) |
+            (bulk_conf['CONFIDENCE_BAND'].isin(bands))
+        )
+        coco_eacv = bulk_conf[bulk_conf['IS_COCO_FINAL']].groupby('PARTNER_NAME')['USE_CASE_EACV'].sum().reset_index()
+        coco_eacv.columns = ['PARTNER_NAME', 'COCO_EACV']
+        conf_summary = bulk_conf.groupby('PARTNER_NAME').agg(
+            TOTAL_PARTNER_UCS=('USE_CASE_ID', 'count'),
+            COCO_UCS=('IS_COCO_FINAL', 'sum'),
+            TOTAL_EACV=('USE_CASE_EACV', 'sum'),
+        ).reset_index()
+        conf_summary = conf_summary.merge(coco_eacv, on='PARTNER_NAME', how='left')
+        conf_summary['COCO_EACV'] = conf_summary['COCO_EACV'].fillna(0)
+        conf_summary['NON_COCO_UCS'] = conf_summary['TOTAL_PARTNER_UCS'] - conf_summary['COCO_UCS']
+        conf_summary['COCO_PCT'] = round(
+            conf_summary['COCO_UCS'] * 100.0 / conf_summary['TOTAL_PARTNER_UCS'].replace(0, float('nan')), 1
+        ).fillna(0)
+        coverage = coverage[['PARTNER_NAME']].merge(conf_summary, on='PARTNER_NAME', how='left').fillna(0)
+        coverage['COCO_PCT'] = coverage['COCO_PCT'].astype(float)
+        coverage[['TOTAL_PARTNER_UCS', 'COCO_UCS', 'NON_COCO_UCS']] = coverage[['TOTAL_PARTNER_UCS', 'COCO_UCS', 'NON_COCO_UCS']].astype(int)
+
+        # Recompute stage breakdown with same IS_COCO_FINAL logic
+        stage_coco_eacv = bulk_conf[bulk_conf['IS_COCO_FINAL']].groupby(
+            ['PARTNER_NAME', 'USE_CASE_STAGE'])['USE_CASE_EACV'].sum().reset_index()
+        stage_coco_eacv.columns = ['PARTNER_NAME', 'USE_CASE_STAGE', 'COCO_EACV']
+        stage_from_conf = bulk_conf.groupby(['PARTNER_NAME', 'USE_CASE_STAGE']).agg(
+            TOTAL_UCS=('USE_CASE_ID', 'count'),
+            COCO_UCS=('IS_COCO_FINAL', 'sum'),
+            TOTAL_EACV=('USE_CASE_EACV', 'sum'),
+        ).reset_index()
+        stage_from_conf = stage_from_conf.merge(stage_coco_eacv, on=['PARTNER_NAME', 'USE_CASE_STAGE'], how='left')
+        stage_from_conf['COCO_EACV'] = stage_from_conf['COCO_EACV'].fillna(0)
+        stage_from_conf['COCO_PCT'] = round(
+            stage_from_conf['COCO_UCS'] * 100.0 / stage_from_conf['TOTAL_UCS'].replace(0, float('nan')), 1
+        ).fillna(0)
+        stage_breakdown = stage_from_conf
 
 tab_summary, tab_detail = st.tabs(["Summary", "Detail"])
 
@@ -79,61 +132,68 @@ with tab_summary:
 
     with pie_col:
         st.subheader("Use Case Split by Attribution")
-        # Get source breakdown — filtered by same partners/region as coverage table
-        sd = str(start_date)
-        ed = str(end_date)
-        tf = ""
-        if region == "NoAM":
-            tf = " AND uc.THEATER_NAME IN ('AMSExpansion', 'USMajors', 'AMSAcquisition')"
-        elif region == "EMEA":
-            tf = " AND uc.THEATER_NAME = 'EMEA'"
-        elif region == "APJ":
-            tf = " AND uc.THEATER_NAME = 'APJ'"
-        
-        # Filter to same partners as coverage table
-        partner_list = coverage['PARTNER_NAME'].tolist()
-        if partner_list:
-            partners_sql = "','".join(partner_list)
-            pf = f" AND uc.PARTNER_NAME IN ('{partners_sql}')"
-        else:
-            pf = ""
-        
-        source_query = f"""
-        WITH coco_active_accounts AS (
-            SELECT DISTINCT UPPER(salesforce_account_name) AS ACCOUNT_NAME_UPPER
-            FROM snowscience.llm.cortex_code_user_day_fact
-            WHERE ds >= '{sd}' AND snowflake_account_type = 'Customer' AND total_daily_requests > 0
-        )
-        SELECT 
-            SUM(CASE WHEN uc.IS_COCO AND uc.COCO_SOURCE = 'SE_COMMENTS' THEN 1 ELSE 0 END) AS SE_COMMENTS,
-            SUM(CASE WHEN uc.IS_COCO AND uc.COCO_SOURCE = 'PARTNER_COMMENTS' THEN 1 ELSE 0 END) AS PSE_COMMENTS,
-            SUM(CASE WHEN uc.IS_COCO AND uc.COCO_SOURCE = 'FEATURE_FLAG' THEN 1 ELSE 0 END) AS FEATURE_FLAG,
-            SUM(CASE WHEN NOT uc.IS_COCO AND caa.ACCOUNT_NAME_UPPER IS NOT NULL THEN 1 ELSE 0 END) AS ACCOUNT_ADOPTION,
-            SUM(CASE WHEN NOT uc.IS_COCO AND caa.ACCOUNT_NAME_UPPER IS NULL THEN 1 ELSE 0 END) AS NOT_COCO
-        FROM TEMP.COCO_PARTNER_ADOPTION.DT_OKR_USE_CASES uc
-        LEFT JOIN coco_active_accounts caa ON UPPER(uc.ACCOUNT_NAME) = caa.ACCOUNT_NAME_UPPER
-        WHERE (
-            (uc.USE_CASE_STAGE IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan') AND uc.DECISION_DATE >= '{sd}' AND uc.DECISION_DATE <= '{ed}')
-            OR (uc.USE_CASE_STAGE IN ('5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed') AND uc.GO_LIVE_DATE >= '{sd}' AND uc.GO_LIVE_DATE <= '{ed}')
-        ){tf}{pf}
-        """
-        source_split = conn.query(source_query)
-        if len(source_split) > 0:
-            ss = source_split.iloc[0]
-            labels = ['Account Adoption', 'SE Comments', 'PSE Comments', 'Feature Flag', 'Not CoCo']
-            values = [int(ss['ACCOUNT_ADOPTION']), int(ss['SE_COMMENTS']), int(ss['PSE_COMMENTS']), int(ss['FEATURE_FLAG']), int(ss['NOT_COCO'])]
+        if len(bulk_conf) > 0:
+            # Compute attribution from bulk_conf using IS_COCO_FINAL logic
+            se = int(((bulk_conf['IS_COCO'] == True) & (bulk_conf['COCO_SOURCE'] == 'SE_COMMENTS')).sum())
+            pse = int(((bulk_conf['IS_COCO'] == True) & (bulk_conf['COCO_SOURCE'] == 'PARTNER_COMMENTS')).sum())
+            flag = int(((bulk_conf['IS_COCO'] == True) & (bulk_conf['COCO_SOURCE'] == 'FEATURE_FLAG')).sum())
+            acct = int(bulk_conf['CONFIDENCE_BAND'].isin(bands).sum())
+            not_coco = int((~bulk_conf['IS_COCO_FINAL']).sum())
+            conf_desc = 'High' if confidence_filter == ['High'] else 'High + Medium' if confidence_filter else 'All account-level'
+            labels = [f'Account ({conf_desc})', 'SE Comments', 'PSE Comments', 'Feature Flag', 'Not CoCo']
+            values = [acct, se, pse, flag, not_coco]
             colors = ['#3498db', '#2ecc71', '#f39c12', '#9b59b6', '#e0e0e0']
-            # Remove zero values
-            filtered = [(l, v, c) for l, v, c in zip(labels, values, colors) if v > 0]
+            filtered_slices = [(l, v, c) for l, v, c in zip(labels, values, colors) if v > 0]
             fig = go.Figure(data=[go.Pie(
-                labels=[f[0] for f in filtered],
-                values=[f[1] for f in filtered],
-                marker_colors=[f[2] for f in filtered],
+                labels=[f[0] for f in filtered_slices],
+                values=[f[1] for f in filtered_slices],
+                marker_colors=[f[2] for f in filtered_slices],
                 hole=0.5,
                 textinfo='label+value+percent'
             )])
             fig.update_layout(height=300)
             st.plotly_chart(fig, use_container_width=True)
+        else:
+            # Fallback: SQL-based attribution (IS_COCO flag only, no account-level)
+            sd = str(start_date)
+            ed = str(end_date)
+            tf = ""
+            if region == "NoAM":
+                tf = " AND uc.THEATER_NAME IN ('AMSExpansion', 'USMajors', 'AMSAcquisition')"
+            elif region == "EMEA":
+                tf = " AND uc.THEATER_NAME = 'EMEA'"
+            elif region == "APJ":
+                tf = " AND uc.THEATER_NAME = 'APJ'"
+            partner_list = coverage['PARTNER_NAME'].tolist()
+            pf = f" AND uc.PARTNER_NAME IN ('{chr(39).join(partner_list)}')" if partner_list else ""
+            source_query = f"""
+            SELECT
+                SUM(CASE WHEN uc.IS_COCO AND uc.COCO_SOURCE = 'SE_COMMENTS' THEN 1 ELSE 0 END) AS SE_COMMENTS,
+                SUM(CASE WHEN uc.IS_COCO AND uc.COCO_SOURCE = 'PARTNER_COMMENTS' THEN 1 ELSE 0 END) AS PSE_COMMENTS,
+                SUM(CASE WHEN uc.IS_COCO AND uc.COCO_SOURCE = 'FEATURE_FLAG' THEN 1 ELSE 0 END) AS FEATURE_FLAG,
+                SUM(CASE WHEN NOT uc.IS_COCO THEN 1 ELSE 0 END) AS NOT_COCO
+            FROM TEMP.COCO_PARTNER_ADOPTION.DT_OKR_USE_CASES uc
+            WHERE (
+                (uc.USE_CASE_STAGE IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan') AND uc.DECISION_DATE >= '{sd}' AND uc.DECISION_DATE <= '{ed}')
+                OR (uc.USE_CASE_STAGE IN ('5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed') AND uc.GO_LIVE_DATE >= '{sd}' AND uc.GO_LIVE_DATE <= '{ed}')
+            ){tf}{pf}
+            """
+            source_split = conn.query(source_query)
+            if len(source_split) > 0:
+                ss = source_split.iloc[0]
+                labels = ['SE Comments', 'PSE Comments', 'Feature Flag', 'Not CoCo']
+                values = [int(ss['SE_COMMENTS']), int(ss['PSE_COMMENTS']), int(ss['FEATURE_FLAG']), int(ss['NOT_COCO'])]
+                colors = ['#2ecc71', '#f39c12', '#9b59b6', '#e0e0e0']
+                filtered_slices = [(l, v, c) for l, v, c in zip(labels, values, colors) if v > 0]
+                fig = go.Figure(data=[go.Pie(
+                    labels=[f[0] for f in filtered_slices],
+                    values=[f[1] for f in filtered_slices],
+                    marker_colors=[f[2] for f in filtered_slices],
+                    hole=0.5,
+                    textinfo='label+value+percent'
+                )])
+                fig.update_layout(height=300)
+                st.plotly_chart(fig, use_container_width=True)
 
     st.divider()
     st.subheader("CoCo % by Stage Breakdown")
