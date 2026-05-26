@@ -459,7 +459,7 @@ Follow this EXACT structure with 9 sections:
 - Bullet 3: "**Top Global SIs by EACV:** ([top 3 global partners by EACV])"
 - Bullet 4: "**Top Regional SIs by EACV:** ([top 3 regional managed partners by EACV])"
 - Bullet 5: "**Competitive displacement:** [top 3 competitors by count]"
-- Bullet 6: "**CoCo activity:** [X] of 20 managed partners active; [Y] with no CoCo activity: [list names]"
+- Bullet 6: "**[Detailed Partner CoCo usecase dashboard](https://app.snowflake.com/sfcogsops/snowhouse_aws_us_west_2/#/streamlit-apps/TEMP.COCO_PARTNER_ADOPTION.COCO_USECASE_INSIGHTS)**"
 
 PARTNER CLASSIFICATION:
 - Global SIs (6): EY, Deloitte Consulting, Accenture, Cognizant Technology Solutions US Corp, Capgemini Technologies LLC, IBM
@@ -469,6 +469,7 @@ PARTNER CLASSIFICATION:
 | Metric | Current | Target | Gap |
 - Show: CoCo use cases vs 50% target, CoCo adoption %, partners meeting 50%, CoCo EACV
 - For CoCo EACV row: put "-" in Target and Gap columns (no target for EACV)
+- For the "Partners meeting 50%" row: in Current column append "(NoAM)" after the number; in Target column use "20 (NoAM) <span style='color:red'>EMEA/APJ - TBD</span>"
 - After the table: ONE sentence on what it takes to close the gap (how many more CoCo UCs needed, which partners have the biggest gaps)
 - Call out partners already meeting 50% target
 - Use MANAGED PARTNERS data only
