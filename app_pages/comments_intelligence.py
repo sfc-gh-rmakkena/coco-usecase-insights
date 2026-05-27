@@ -5,9 +5,12 @@ from utils.cortex_helpers import cortex_complete
 
 conn = st.session_state.conn
 region = st.session_state.get("selected_region", "Global")
+start_date = str(st.session_state.get("okr_start_date", "2026-05-01"))
+end_date = str(st.session_state.get("okr_end_date", "2026-07-31"))
 
 st.title(":material/smart_toy: Comments & AI Insights")
 st.caption(f"AI-powered analysis of SE, Partner, and Specialist comments across all use cases | Region: {region}")
+st.caption(":material/info: Partner filter not applied on this page — use the page-level dropdown below")
 
 f1, f2, f3 = st.columns(3)
 with f1:
@@ -25,7 +28,7 @@ with f3:
     ], key="ci_analysis_type")
 
 source = source_filter if source_filter != "All" else None
-df = get_comments_with_context(conn, region=region, source=source, limit=100)
+df = get_comments_with_context(conn, region=region, source=source, limit=100, start_date=start_date, end_date=end_date)
 
 if selected_partner and selected_partner != "All":
     df = df[df['PARTNER_NAME'].str.contains(selected_partner, case=False, na=False)]
@@ -55,14 +58,16 @@ st.divider()
 if st.button(f"Generate {analysis_type} Insights", type="primary", key="ci_generate"):
     comments_context = ""
     for _, row in df.head(20).iterrows():
-        se = (row.get('SE_COMMENTS', '') or '')[:400]
-        pc = (row.get('PARTNER_COMMENTS', '') or '')[:400]
-        spec = (row.get('SPECIALIST_COMMENTS', '') or '')[:300]
-        feats = (row.get('PRIORITIZED_FEATURES', '') or '')[:200]
+        se = str(row.get('SE_COMMENTS', '') or '')[:400]
+        pc = str(row.get('PARTNER_COMMENTS', '') or '')[:400]
+        spec = str(row.get('SPECIALIST_COMMENTS', '') or '')[:300]
+        feats = str(row.get('PRIORITIZED_FEATURES', '') or '')[:200]
+        eacv_val = row.get('USE_CASE_EACV', 0)
+        eacv_val = eacv_val if pd.notna(eacv_val) else 0
         comments_context += f"""
 ---
 **{row['USE_CASE_NAME']}** | Partner: {row['PARTNER_NAME']} | Account: {row['ACCOUNT_NAME']}
-Stage: {row['USE_CASE_STAGE']} | EACV: ${row.get('USE_CASE_EACV', 0):,.0f} | Days in Stage: {row.get('DAYS_IN_CURRENT_STAGE', 'N/A')} | Source: {row.get('COCO_MENTION_SOURCE', 'N/A')}
+Stage: {row['USE_CASE_STAGE']} | EACV: ${eacv_val:,.0f} | Days in Stage: {row.get('DAYS_IN_CURRENT_STAGE', 'N/A')} | Source: {row.get('COCO_MENTION_SOURCE', 'N/A')}
 Features: {feats}
 SE: {se}
 Partner: {pc}

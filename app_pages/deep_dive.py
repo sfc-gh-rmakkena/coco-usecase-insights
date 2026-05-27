@@ -5,9 +5,12 @@ from utils.cortex_helpers import cortex_complete
 
 conn = st.session_state.conn
 region = st.session_state.get("selected_region", "Global")
+start_date = str(st.session_state.get("okr_start_date", "2026-05-01"))
+end_date = str(st.session_state.get("okr_end_date", "2026-07-31"))
 
 st.title(":material/search_insights: Use Case Explorer")
-st.caption(f"Deep dive into individual use cases with full comments, specialist notes, and AI insights | Region: {region}")
+st.caption(f"Deep dive into individual use cases with full comments, specialist notes, and AI insights | Region: {region} | {start_date} to {end_date}")
+st.caption(":material/info: Partner filter not applied on this page — use the page-level dropdown below")
 
 f1, f2, f3 = st.columns(3)
 with f1:
@@ -24,7 +27,7 @@ with f3:
     source_filter = st.selectbox("Source", ["Overall", "PSE Confirmed", "Feature Flag"], key="dd_source")
 
 stage_filter = selected_stages if selected_stages else None
-df = get_use_cases(conn, partner=selected_partner, stage=stage_filter, region=region, source=source_filter)
+df = get_use_cases(conn, partner=selected_partner, stage=stage_filter, region=region, source=source_filter, start_date=start_date, end_date=end_date)
 
 if len(df) == 0:
     st.info("No use cases found.")
