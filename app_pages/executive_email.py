@@ -469,7 +469,7 @@ PARTNER CLASSIFICATION:
 | Metric | Current | Target | Gap |
 - Show: CoCo use cases vs 50% target, CoCo adoption %, partners meeting 50%, CoCo EACV
 - For CoCo EACV row: put "-" in Target and Gap columns (no target for EACV)
-- For the "Partners meeting 50%" row: in Current column append "(NoAM)" after the number; in Target column use "20 (NoAM) <span style='color:red'>EMEA/APJ - TBD</span>"
+- For the "Partners meeting 50%" row: in Current column show the count; in Target column use "20"
 - After the table: ONE sentence on what it takes to close the gap (how many more CoCo UCs needed, which partners have the biggest gaps)
 - Call out partners already meeting 50% target
 - Use MANAGED PARTNERS data only
