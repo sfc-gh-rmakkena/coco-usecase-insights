@@ -1,7 +1,7 @@
 import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
-from utils.queries import get_adoption_overview, get_adoption_by_partner, get_adoption_by_stage, get_adoption_by_region, get_by_technical_type, get_by_account_gvp, get_bulk_confidence_scores
+from utils.queries import get_adoption_overview, get_adoption_by_partner, get_adoption_by_stage, get_adoption_by_region, get_by_technical_type, get_by_account_gvp, get_bulk_confidence_scores, get_partner_coco_coverage
 from utils import resolve_partner_filter
 
 conn = st.session_state.conn
@@ -79,14 +79,33 @@ if include_account_coco and selected_partners:
         coco_count = int(s['COCO_USE_CASES'])
         coco_pct = float(s['COCO_PCT'] or 0)
 elif include_account_coco:
-    # No partner filter — use CTE proxy (full scoring across all partners is too slow)
-    stats_full = get_adoption_overview(conn, start_date=start_date, end_date=end_date, region=region,
-        partners=None, include_account_coco=True, confidence=confidence)
-    s_full = stats_full.iloc[0] if len(stats_full) > 0 else s
-    coco_count = int(s_full['COCO_USE_CASES'])
-    coco_pct = float(s_full['COCO_PCT'])
-    coco_uc_display = f"{coco_count} ({coco_pct}%)"
-    account_level_count = int(s_full['ACCOUNT_LEVEL_COUNT'])
+    # Use same confidence scoring as OKR Coverage page for consistency
+    all_coverage = get_partner_coco_coverage(conn, region=region, start_date=start_date, end_date=end_date,
+        include_account_coco=False, confidence=None)
+    all_partner_names = all_coverage['PARTNER_NAME'].dropna().tolist() if len(all_coverage) > 0 else []
+    if all_partner_names:
+        bulk_conf = get_bulk_confidence_scores(conn, all_partner_names, start_date, end_date)
+        if len(bulk_conf) > 0:
+            if region and region != 'Global':
+                region_theaters = {'NoAM': ['AMSExpansion', 'USMajors', 'AMSAcquisition'], 'EMEA': ['EMEA'], 'APJ': ['APJ']}
+                bulk_conf = bulk_conf[bulk_conf['THEATER_NAME'].isin(region_theaters.get(region, []))]
+            bands = confidence_filter if confidence_filter else ['High', 'Medium', 'Low']
+            bulk_conf['IS_COCO_FINAL'] = (bulk_conf['IS_COCO'] == True) | (bulk_conf['CONFIDENCE_BAND'].isin(bands))
+            coco_count = int(bulk_conf['IS_COCO_FINAL'].sum())
+            total_count = len(bulk_conf)
+            coco_pct = round(coco_count * 100.0 / total_count, 1) if total_count > 0 else 0
+            coco_uc_display = f"{coco_count} ({coco_pct}%)"
+            account_level_count = int(bulk_conf['CONFIDENCE_BAND'].isin(bands).sum())
+        else:
+            coco_count = int(s['COCO_USE_CASES'])
+            coco_pct = float(s['COCO_PCT'] or 0)
+            coco_uc_display = f"{coco_count} ({coco_pct}%)"
+            account_level_count = 0
+    else:
+        coco_count = int(s['COCO_USE_CASES'])
+        coco_pct = float(s['COCO_PCT'] or 0)
+        coco_uc_display = f"{coco_count} ({coco_pct}%)"
+        account_level_count = 0
 else:
     coco_count = int(s['COCO_USE_CASES'])
     coco_pct = float(s['COCO_PCT'] or 0)
