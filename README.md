@@ -2,9 +2,23 @@
 
 A Streamlit-in-Snowflake (SiS) application for tracking Cortex Code (CoCo) adoption across partner use cases. Built by **#psegoingcoco**.
 
-## Live App
+## Live Apps
 
-[Open in Snowsight](https://app.snowflake.com/sfcogsops/snowhouse_aws_us_west_2/#/streamlit-apps/TEMP.COCO_PARTNER_ADOPTION.COCO_USECASE_INSIGHTS)
+| Environment | Link |
+|---|---|
+| **PROD** | [Open PROD](https://app.snowflake.com/sfcogsops/snowhouse_aws_us_west_2/#/streamlit-apps/TEMP.COCO_PARTNER_ADOPTION.COCO_USECASE_INSIGHTS) |
+| **DEV** | [Open DEV](https://app.snowflake.com/sfcogsops/snowhouse_aws_us_west_2/streamlit-apps/TEMP.COCO_PARTNER_ADOPTION_DEV.COCO_USECASE_INSIGHTS_DEV) |
+
+## Environments
+
+| | PROD | DEV |
+|---|---|---|
+| Schema | `TEMP.COCO_PARTNER_ADOPTION` | `TEMP.COCO_PARTNER_ADOPTION_DEV` |
+| App | `COCO_USECASE_INSIGHTS` | `COCO_USECASE_INSIGHTS_DEV` |
+| Task | Running (daily) | Suspended (manual only) |
+| Data | Live | Cloned from PROD at bootstrap time |
+
+DEV is fully isolated — changes to DEV data, tasks, or the app cannot affect PROD.
 
 ## Pages
 
@@ -26,6 +40,7 @@ streamlit_app.py          # Entry point: navigation, sidebar filters (Region, Pa
 app_pages/                # One file per page
 utils/
   queries.py              # All SQL queries (cached with st.cache_data)
+  config.py               # Environment detection (DEV vs PROD schema routing)
   cortex_helpers.py       # Cortex Complete wrapper for AI generation
 ```
 
@@ -64,6 +79,8 @@ Stage:      @TEMP.COCO_PARTNER_ADOPTION.STREAMLIT/COCO_USECASE_INSIGHTS/
 
 ## Deployment
 
+### Deploy to PROD
+
 Upload files to the Snowflake stage and recreate the Streamlit app:
 
 ```sql
@@ -72,6 +89,7 @@ PUT 'file:///path/to/streamlit_app.py' @TEMP.COCO_PARTNER_ADOPTION.STREAMLIT/COC
 PUT 'file:///path/to/utils/queries.py' @TEMP.COCO_PARTNER_ADOPTION.STREAMLIT/COCO_USECASE_INSIGHTS/utils/ AUTO_COMPRESS=FALSE OVERWRITE=TRUE;
 PUT 'file:///path/to/utils/cortex_helpers.py' @TEMP.COCO_PARTNER_ADOPTION.STREAMLIT/COCO_USECASE_INSIGHTS/utils/ AUTO_COMPRESS=FALSE OVERWRITE=TRUE;
 PUT 'file:///path/to/utils/__init__.py' @TEMP.COCO_PARTNER_ADOPTION.STREAMLIT/COCO_USECASE_INSIGHTS/utils/ AUTO_COMPRESS=FALSE OVERWRITE=TRUE;
+PUT 'file:///path/to/utils/config.py' @TEMP.COCO_PARTNER_ADOPTION.STREAMLIT/COCO_USECASE_INSIGHTS/utils/ AUTO_COMPRESS=FALSE OVERWRITE=TRUE;
 -- (repeat for each app_pages/*.py file)
 
 -- Recreate the app
@@ -80,6 +98,30 @@ CREATE OR REPLACE STREAMLIT TEMP.COCO_PARTNER_ADOPTION.COCO_USECASE_INSIGHTS
     MAIN_FILE = 'streamlit_app.py'
     QUERY_WAREHOUSE = 'COCO_PARTNER_ADOPTION_WH';
 ```
+
+### Deploy to DEV
+
+Same steps as PROD but targeting the DEV schema and stage:
+
+```sql
+-- Upload all source files to DEV stage
+PUT 'file:///path/to/streamlit_app.py' @TEMP.COCO_PARTNER_ADOPTION_DEV.STREAMLIT/ AUTO_COMPRESS=FALSE OVERWRITE=TRUE;
+PUT 'file:///path/to/utils/queries.py' @TEMP.COCO_PARTNER_ADOPTION_DEV.STREAMLIT/utils/ AUTO_COMPRESS=FALSE OVERWRITE=TRUE;
+PUT 'file:///path/to/utils/cortex_helpers.py' @TEMP.COCO_PARTNER_ADOPTION_DEV.STREAMLIT/utils/ AUTO_COMPRESS=FALSE OVERWRITE=TRUE;
+PUT 'file:///path/to/utils/__init__.py' @TEMP.COCO_PARTNER_ADOPTION_DEV.STREAMLIT/utils/ AUTO_COMPRESS=FALSE OVERWRITE=TRUE;
+PUT 'file:///path/to/utils/config.py' @TEMP.COCO_PARTNER_ADOPTION_DEV.STREAMLIT/utils/ AUTO_COMPRESS=FALSE OVERWRITE=TRUE;
+-- (repeat for each app_pages/*.py file)
+
+-- Recreate the DEV app
+CREATE OR REPLACE STREAMLIT TEMP.COCO_PARTNER_ADOPTION_DEV.COCO_USECASE_INSIGHTS_DEV
+    FROM '@TEMP.COCO_PARTNER_ADOPTION_DEV.STREAMLIT'
+    MAIN_FILE = 'streamlit_app.py'
+    QUERY_WAREHOUSE = 'COCO_PARTNER_ADOPTION_WH'
+    TITLE = 'CoCo Use Case Intelligence (DEV)';
+```
+
+> **Note:** The app auto-detects its environment from `CURRENT_SCHEMA()` at runtime.
+> No manual config is needed — DEV app automatically routes to `TEMP.COCO_PARTNER_ADOPTION_DEV`.
 
 ## Dependencies
 
