@@ -1,0 +1,29 @@
+-- =============================================================
+-- validate_isolation.sql
+-- Read-only checks confirming DEV and PROD are fully isolated.
+-- =============================================================
+
+USE ROLE SALES_ENGINEER;
+
+-- 1. Both schemas exist independently
+SHOW SCHEMAS LIKE 'COCO_PARTNER_ADOPTION%' IN DATABASE TEMP;
+
+-- 2. DEV task is SUSPENDED, PROD task is unaffected
+SHOW TASKS IN SCHEMA TEMP.COCO_PARTNER_ADOPTION_DEV;
+SHOW TASKS IN SCHEMA TEMP.COCO_PARTNER_ADOPTION;
+
+-- 3. Both schemas have expected tables
+SELECT TABLE_SCHEMA, TABLE_NAME, IS_DYNAMIC
+FROM TEMP.INFORMATION_SCHEMA.TABLES
+WHERE TABLE_SCHEMA IN ('COCO_PARTNER_ADOPTION', 'COCO_PARTNER_ADOPTION_DEV')
+ORDER BY TABLE_SCHEMA, TABLE_NAME;
+
+-- 4. DEV Streamlit app exists separately from PROD
+SHOW STREAMLITS IN SCHEMA TEMP.COCO_PARTNER_ADOPTION_DEV;
+SHOW STREAMLITS IN SCHEMA TEMP.COCO_PARTNER_ADOPTION;
+
+-- 5. Confirm DEV DT_OKR_USE_CASES is independent (different object IDs)
+SELECT TABLE_SCHEMA, TABLE_NAME, CREATED
+FROM TEMP.INFORMATION_SCHEMA.TABLES
+WHERE TABLE_NAME = 'DT_OKR_USE_CASES'
+  AND TABLE_SCHEMA IN ('COCO_PARTNER_ADOPTION', 'COCO_PARTNER_ADOPTION_DEV');
