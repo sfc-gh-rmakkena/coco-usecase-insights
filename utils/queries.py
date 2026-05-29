@@ -1,7 +1,8 @@
 import streamlit as st
 from datetime import timedelta
+from utils.config import get_schema
 
-SCHEMA = "TEMP.COCO_PARTNER_ADOPTION"
+SCHEMA = get_schema()
 
 def _use_case_base(start_date=None, end_date=None):
     """Generate USE_CASE_BASE CTE with configurable date filter."""

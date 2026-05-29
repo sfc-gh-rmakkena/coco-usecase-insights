@@ -1,0 +1,21 @@
+definition_version: "2"
+streamlit:
+  name: COCO_USECASE_INSIGHTS_DEV
+  stage: TEMP.COCO_PARTNER_ADOPTION_DEV.STREAMLIT
+  query_warehouse: COCO_PARTNER_ADOPTION_WH
+  main_file: streamlit_app.py
+  env_file: environment.yml
+  pages:
+    - app_pages/overview.py
+    - app_pages/pipeline.py
+    - app_pages/deep_dive.py
+    - app_pages/comments_intelligence.py
+    - app_pages/trends.py
+    - app_pages/okr_summary.py
+    - app_pages/okr_adoption.py
+    - app_pages/executive_email.py
+  additional_source_files:
+    - utils/__init__.py
+    - utils/queries.py
+    - utils/cortex_helpers.py
+    - utils/config.py
