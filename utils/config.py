@@ -19,10 +19,9 @@ def get_env() -> str:
     # 3. Auto-detect from Snowflake session schema (works in Snowflake SiS)
     # DEV app is deployed in COCO_PARTNER_ADOPTION_DEV schema
     try:
-        import streamlit as st
-        conn = st.connection("snowflake")
-        result = conn.query("SELECT CURRENT_SCHEMA() AS S", ttl=3600)
-        current_schema = result.iloc[0]["S"] if len(result) > 0 else ""
+        from snowflake.snowpark.context import get_active_session
+        session = get_active_session()
+        current_schema = session.sql("SELECT CURRENT_SCHEMA()").collect()[0][0]
         if "DEV" in current_schema.upper():
             return "dev"
     except Exception:

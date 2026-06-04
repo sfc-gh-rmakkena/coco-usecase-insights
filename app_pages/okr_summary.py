@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
-from utils.queries import get_partner_coco_coverage, get_okr_stage_breakdown, get_partner_credit_consumption, get_bulk_confidence_scores
+from utils.queries import get_partner_coco_coverage, get_okr_stage_breakdown, get_partner_credit_consumption, get_bulk_confidence_scores, DT_OKR
 from utils import resolve_partner_filter
 
 conn = st.session_state.conn
@@ -15,6 +15,7 @@ confidence = 'High' if confidence_filter == ['High'] else ('Medium' if confidenc
 
 st.title(":material/dashboard: OKR: CoCo Coverage Dashboard")
 st.caption(f"Track CoCo adoption toward 50% target across partner use cases (Stages 3-7) | Region: {region} | {start_date} to {end_date}")
+st.caption(f"DEBUG — DT_OKR: {DT_OKR}")
 
 TARGET_PCT = 50
 
@@ -172,7 +173,7 @@ with tab_summary:
                 SUM(CASE WHEN uc.IS_COCO AND uc.COCO_SOURCE = 'PARTNER_COMMENTS' THEN 1 ELSE 0 END) AS PSE_COMMENTS,
                 SUM(CASE WHEN uc.IS_COCO AND uc.COCO_SOURCE = 'FEATURE_FLAG' THEN 1 ELSE 0 END) AS FEATURE_FLAG,
                 SUM(CASE WHEN NOT uc.IS_COCO THEN 1 ELSE 0 END) AS NOT_COCO
-            FROM TEMP.COCO_PARTNER_ADOPTION.DT_OKR_USE_CASES uc
+            FROM {DT_OKR} uc
             WHERE (
                 (uc.USE_CASE_STAGE IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan') AND uc.DECISION_DATE >= '{sd}' AND uc.DECISION_DATE <= '{ed}')
                 OR (uc.USE_CASE_STAGE IN ('5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed') AND uc.GO_LIVE_DATE >= '{sd}' AND uc.GO_LIVE_DATE <= '{ed}')
@@ -260,7 +261,7 @@ with tab_summary:
             SUM(CASE WHEN uc.IS_COCO AND uc.COCO_SOURCE = 'SE_COMMENTS' THEN 1 ELSE 0 END) AS SE_COMMENTS,
             SUM(CASE WHEN uc.IS_COCO AND uc.COCO_SOURCE = 'PARTNER_COMMENTS' THEN 1 ELSE 0 END) AS PSE_COMMENTS,
             SUM(CASE WHEN uc.IS_COCO AND uc.COCO_SOURCE = 'FEATURE_FLAG' THEN 1 ELSE 0 END) AS FEATURE_FLAG
-        FROM TEMP.COCO_PARTNER_ADOPTION.DT_OKR_USE_CASES uc
+        FROM {DT_OKR} uc
         LEFT JOIN coco_active_accounts caa ON UPPER(uc.ACCOUNT_NAME) = caa.ACCOUNT_NAME_UPPER
         WHERE uc.PARTNER_NAME IN ('{partners_sql}')
         AND (
