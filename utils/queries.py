@@ -977,3 +977,116 @@ def get_bulk_confidence_scores(_conn, partners, start_date, end_date):
     query = _confidence_scored_query(partner_filter, start_date, end_date)
     query += "\n    ORDER BY TOTAL_SCORE DESC, PARTNER_NAME, ACCOUNT_NAME"
     return _conn.query(query)
+
+@st.cache_data(ttl=timedelta(minutes=30))
+def get_pipeline_wow(_conn):
+    """WoW use case count and EACV change (current vs prior week) from CEO_USE_CASE_WEEKLY_METRICS."""
+    query = f"""
+    WITH weeks AS (
+        SELECT WEEK_START,
+            SUM(USE_CASE_COUNT)  AS TOTAL_UCS,
+            SUM(TOTAL_EACV)      AS TOTAL_EACV,
+            SUM(DEPLOYED)        AS DEPLOYED,
+            SUM(IN_IMPL)         AS IN_IMPL,
+            SUM(WON)             AS WON,
+            SUM(ACTIVE_PIPELINE) AS ACTIVE_PIPELINE,
+            ROW_NUMBER() OVER (ORDER BY WEEK_START DESC) AS rn
+        FROM {SCHEMA}.CEO_USE_CASE_WEEKLY_METRICS
+        GROUP BY WEEK_START
+    )
+    SELECT
+        cur.WEEK_START,       prev.WEEK_START     AS PREV_WEEK_START,
+        cur.TOTAL_UCS,        prev.TOTAL_UCS      AS PREV_TOTAL_UCS,
+        cur.TOTAL_EACV,       prev.TOTAL_EACV     AS PREV_TOTAL_EACV,
+        cur.DEPLOYED,         prev.DEPLOYED       AS PREV_DEPLOYED,
+        cur.IN_IMPL,          prev.IN_IMPL        AS PREV_IN_IMPL,
+        cur.WON,              prev.WON            AS PREV_WON,
+        cur.ACTIVE_PIPELINE,  prev.ACTIVE_PIPELINE AS PREV_ACTIVE_PIPELINE,
+        cur.TOTAL_UCS    - prev.TOTAL_UCS    AS WOW_TOTAL,
+        cur.TOTAL_EACV   - prev.TOTAL_EACV   AS WOW_EACV,
+        cur.DEPLOYED     - prev.DEPLOYED     AS WOW_DEPLOYED,
+        cur.IN_IMPL      - prev.IN_IMPL      AS WOW_IN_IMPL,
+        cur.WON          - prev.WON          AS WOW_WON,
+        cur.ACTIVE_PIPELINE - prev.ACTIVE_PIPELINE AS WOW_ACTIVE
+    FROM weeks cur
+    JOIN weeks prev ON cur.rn = 1 AND prev.rn = 2
+    """
+    return _conn.query(query)
+
+@st.cache_data(ttl=timedelta(minutes=30))
+def get_gsi_wow(_conn):
+    """WoW engagement (requests) for the 6 GSIs aggregated across all regions."""
+    query = f"""
+    SELECT
+        GSI_GROUP,
+        SUM(TOTAL_USERS)    AS TOTAL_USERS,
+        SUM(TOTAL_REQUESTS) AS TOTAL_REQUESTS,
+        SUM(LW_REQUESTS)    AS LW_REQUESTS,
+        SUM(PW_REQUESTS)    AS PW_REQUESTS,
+        CASE WHEN SUM(PW_REQUESTS) > 0
+            THEN ROUND((SUM(LW_REQUESTS) - SUM(PW_REQUESTS)) * 100.0 / SUM(PW_REQUESTS), 1)
+        END AS WOW_PCT
+    FROM {SCHEMA}.GSI_REGIONAL_METRICS
+    GROUP BY GSI_GROUP
+    ORDER BY TOTAL_REQUESTS DESC
+    """
+    return _conn.query(query)
+
+@st.cache_data(ttl=timedelta(minutes=30))
+def get_noam_si_wow(_conn):
+    """WoW engagement (requests) for NoAM managed SIs from OTHER_SI_REGIONAL_METRICS."""
+    managed_noam_sis = (
+        "'BlueCloud Services Inc','LTIMindtree','evolv Consulting','Slalom, LLC.',"
+        "'Tredence Inc.','phData, Inc.','Squadron Data Inc','7Rivers, Inc',"
+        "'Aimpoint Digital','Infostrux Solutions Inc.','Infosys','KPMG LLP',"
+        "'NTT DATA Group Corporation'"
+    )
+    query = f"""
+    SELECT PARTNER_NAME, TOTAL_USERS, TOTAL_REQUESTS, LW_REQUESTS, PW_REQUESTS, WOW_PCT, REGION_RANK
+    FROM {SCHEMA}.OTHER_SI_REGIONAL_METRICS
+    WHERE PARTNER_REGION = 'NoAM'
+    AND PARTNER_NAME IN ({managed_noam_sis})
+    ORDER BY TOTAL_REQUESTS DESC
+    """
+    return _conn.query(query)
+
+@st.cache_data(ttl=timedelta(minutes=30))
+def get_coco_adoption_wow(_conn, partners=None):
+    """WoW CoCo adoption delta from OKR_PARTNER_WEEKLY_ADOPTION.
+    Returns per-partner rows + one overall row (PARTNER_NAME IS NULL).
+    WoW columns are NULL when fewer than 2 weekly snapshots exist.
+    """
+    partner_filter = ""
+    if partners:
+        ps = "','".join(partners)
+        partner_filter = f"AND (PARTNER_NAME IN ('{ps}') OR PARTNER_NAME IS NULL)"
+    query = f"""
+    WITH ranked AS (
+        SELECT *,
+            ROW_NUMBER() OVER (
+                PARTITION BY COALESCE(PARTNER_NAME, '__OVERALL__')
+                ORDER BY WEEK_START DESC
+            ) AS rn
+        FROM {SCHEMA}.OKR_PARTNER_WEEKLY_ADOPTION
+        WHERE 1=1 {partner_filter}
+    )
+    SELECT
+        cur.PARTNER_NAME,
+        cur.WEEK_START,
+        prev.WEEK_START                           AS PREV_WEEK,
+        cur.TOTAL_UCS,
+        cur.COCO_UCS,
+        cur.COCO_PCT,
+        cur.TOTAL_EACV,
+        cur.COCO_EACV,
+        cur.COCO_UCS  - prev.COCO_UCS            AS WOW_COCO_UCS,
+        ROUND(cur.COCO_PCT - prev.COCO_PCT, 1)   AS WOW_COCO_PCT,
+        cur.COCO_EACV - prev.COCO_EACV           AS WOW_COCO_EACV
+    FROM ranked cur
+    LEFT JOIN ranked prev
+        ON COALESCE(cur.PARTNER_NAME, '__OVERALL__') = COALESCE(prev.PARTNER_NAME, '__OVERALL__')
+        AND cur.rn = 1 AND prev.rn = 2
+    WHERE cur.rn = 1
+    ORDER BY cur.PARTNER_NAME NULLS FIRST
+    """
+    return _conn.query(query)

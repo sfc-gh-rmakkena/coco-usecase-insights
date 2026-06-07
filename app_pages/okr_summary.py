@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
-from utils.queries import get_partner_coco_coverage, get_okr_stage_breakdown, get_partner_credit_consumption, get_bulk_confidence_scores
+from utils.queries import get_partner_coco_coverage, get_okr_stage_breakdown, get_partner_credit_consumption, get_bulk_confidence_scores, get_coco_adoption_wow
 from utils import resolve_partner_filter
 
 conn = st.session_state.conn
@@ -23,6 +23,7 @@ with st.spinner("Loading CoCo coverage data..."):
     coverage = get_partner_coco_coverage(conn, region=region, start_date=str(start_date), end_date=str(end_date), include_account_coco=False, confidence=None)
     stage_breakdown = get_okr_stage_breakdown(conn, region=region, start_date=str(start_date), end_date=str(end_date), include_account_coco=False, confidence=None)
     credit_data = get_partner_credit_consumption(conn, coverage['PARTNER_NAME'].tolist(), str(start_date), str(end_date))
+    adoption_wow = get_coco_adoption_wow(conn)
 
 if len(coverage) == 0:
     st.warning("No data available for the selected filters.")
@@ -97,11 +98,22 @@ with tab_summary:
     meeting_target = int((coverage['COCO_PCT'] >= TARGET_PCT).sum())
     below_target = total_partners - meeting_target
 
+    # Extract overall WoW row (PARTNER_NAME IS NULL)
+    wow_overall = adoption_wow[adoption_wow['PARTNER_NAME'].isna()] if len(adoption_wow) > 0 else None
+    wow_coco_ucs_delta = None
+    wow_coco_pct_delta = None
+    if wow_overall is not None and len(wow_overall) > 0:
+        row = wow_overall.iloc[0]
+        if pd.notna(row.get('WOW_COCO_UCS')):
+            wow_coco_ucs_delta = f"{int(row['WOW_COCO_UCS']):+d} WoW"
+        if pd.notna(row.get('WOW_COCO_PCT')):
+            wow_coco_pct_delta = f"{float(row['WOW_COCO_PCT']):+.1f}% WoW"
+
     c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Partners", total_partners)
     c2.metric("Total Use Cases", f"{total_all_ucs:,}")
-    c3.metric("CoCo Use Cases", f"{total_coco_ucs:,}")
-    c4.metric("Overall CoCo %", f"{overall_pct}%", f"Target: {TARGET_PCT}%")
+    c3.metric("CoCo Use Cases", f"{total_coco_ucs:,}", wow_coco_ucs_delta)
+    c4.metric("Overall CoCo %", f"{overall_pct}%", wow_coco_pct_delta if wow_coco_pct_delta else f"Target: {TARGET_PCT}%")
     c5.metric(f"Meeting {TARGET_PCT}%", f"{meeting_target}/{total_partners}", f"{round(meeting_target*100/total_partners)}%" if total_partners else "0%")
 
     st.divider()
@@ -291,13 +303,53 @@ with tab_summary:
 
     display = display.sort_values('COCO_PCT', ascending=False)
 
+    # Fetch WoW engagement delta from PARTNER_WEEKLY_METRICS (latest week, all regions combined)
+    if partner_list:
+        partners_sql_wow = "','".join(partner_list)
+        wow_query = f"""
+        WITH latest AS (
+            SELECT PARTNER_NAME,
+                SUM(TOTAL_REQUESTS)      AS TOTAL_REQUESTS,
+                SUM(PREV_WEEK_REQUESTS)  AS PREV_WEEK_REQUESTS,
+                SUM(TOTAL_USERS)         AS TOTAL_USERS,
+                CASE WHEN SUM(PREV_WEEK_REQUESTS) > 0
+                    THEN ROUND((SUM(TOTAL_REQUESTS) - SUM(PREV_WEEK_REQUESTS)) * 100.0 / SUM(PREV_WEEK_REQUESTS), 1)
+                END AS WOW_REQUESTS_PCT
+            FROM TEMP.COCO_PARTNER_ADOPTION.PARTNER_WEEKLY_METRICS
+            WHERE WEEK_START = (SELECT MAX(WEEK_START) FROM TEMP.COCO_PARTNER_ADOPTION.PARTNER_WEEKLY_METRICS)
+            AND PARTNER_NAME IN ('{partners_sql_wow}')
+            GROUP BY PARTNER_NAME
+        )
+        SELECT * FROM latest
+        """
+        wow_data = conn.query(wow_query)
+    else:
+        wow_data = pd.DataFrame()
+
+    if len(wow_data) > 0:
+        display = display.merge(wow_data[['PARTNER_NAME', 'WOW_REQUESTS_PCT', 'TOTAL_REQUESTS', 'TOTAL_USERS']], on='PARTNER_NAME', how='left')
+    else:
+        display['WOW_REQUESTS_PCT'] = None
+        display['TOTAL_REQUESTS'] = 0
+        display['TOTAL_USERS'] = 0
+
+    # Merge CoCo adoption WoW (per-partner rows only)
+    wow_partners = adoption_wow[adoption_wow['PARTNER_NAME'].notna()][['PARTNER_NAME', 'WOW_COCO_PCT', 'WOW_COCO_UCS']] if len(adoption_wow) > 0 else pd.DataFrame()
+    if len(wow_partners) > 0:
+        display = display.merge(wow_partners, on='PARTNER_NAME', how='left')
+    else:
+        display['WOW_COCO_PCT'] = None
+        display['WOW_COCO_UCS'] = None
+
     st.dataframe(
-        display[['PARTNER_NAME', 'TOTAL_PARTNER_UCS', 'COCO_UCS', 'COCO_PCT', 'ACCOUNT_LEVEL_COCO_USAGE', 'SE_COMMENTS', 'PSE_COMMENTS', 'FEATURE_FLAG', 'MEETS_TARGET', 'GAP']],
+        display[['PARTNER_NAME', 'TOTAL_PARTNER_UCS', 'COCO_UCS', 'COCO_PCT', 'WOW_COCO_PCT', 'WOW_COCO_UCS', 'ACCOUNT_LEVEL_COCO_USAGE', 'SE_COMMENTS', 'PSE_COMMENTS', 'FEATURE_FLAG', 'MEETS_TARGET', 'GAP']],
         column_config={
             'PARTNER_NAME': st.column_config.TextColumn("Partner", width="medium"),
             'TOTAL_PARTNER_UCS': st.column_config.NumberColumn("Total UCs", format="%d"),
             'COCO_UCS': st.column_config.NumberColumn("CoCo UCs", format="%d"),
             'COCO_PCT': st.column_config.ProgressColumn("CoCo %", min_value=0, max_value=100, format="%.1f%%"),
+            'WOW_COCO_PCT': st.column_config.NumberColumn("WoW Δ%", format="%+.1f%%", help="Week-over-week change in CoCo adoption % (available after 2nd weekly snapshot)"),
+            'WOW_COCO_UCS': st.column_config.NumberColumn("WoW Δ UCs", format="%+d", help="Week-over-week change in CoCo use case count"),
             'ACCOUNT_LEVEL_COCO_USAGE': st.column_config.NumberColumn("Account Level CoCo Usage", format="%d", help="Use cases on accounts with CoCo product consumption"),
             'SE_COMMENTS': st.column_config.NumberColumn("SE Comments", format="%d", help="SE wrote coco/cortex code in comments"),
             'PSE_COMMENTS': st.column_config.NumberColumn("PSE Comments", format="%d", help="Partner wrote #coco in comments"),
