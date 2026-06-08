@@ -75,7 +75,7 @@ def _theater_filter(region: str) -> str:
     if not region or region == "Global":
         return ""
     elif region == "NoAM":
-        return " AND THEATER_NAME IN ('AMSExpansion', 'USMajors', 'AMSAcquisition')"
+        return " AND THEATER_NAME IN ('AMSExpansion', 'USMajors', 'AMSAcquisition', 'USPubSec')"
     elif region == "EMEA":
         return " AND THEATER_NAME = 'EMEA'"
     elif region == "APJ":
@@ -337,7 +337,7 @@ def get_adoption_by_region(_conn, start_date, end_date, include_account_coco=Tru
     WITH {coco_cte}
     SELECT 
         CASE 
-            WHEN uc.THEATER_NAME IN ('AMSExpansion', 'USMajors', 'AMSAcquisition') THEN 'NoAM'
+            WHEN uc.THEATER_NAME IN ('AMSExpansion', 'USMajors', 'AMSAcquisition', 'USPubSec') THEN 'NoAM'
             WHEN uc.THEATER_NAME = 'EMEA' THEN 'EMEA'
             WHEN uc.THEATER_NAME = 'APJ' THEN 'APJ'
             ELSE 'Other'
@@ -542,7 +542,7 @@ def get_by_region(_conn, source=None, start_date=None, end_date=None):
     query = f"""{_use_case_base(start_date, end_date)}
     SELECT 
         CASE 
-            WHEN THEATER_NAME IN ('AMSExpansion', 'USMajors', 'AMSAcquisition') THEN 'NoAM'
+            WHEN THEATER_NAME IN ('AMSExpansion', 'USMajors', 'AMSAcquisition', 'USPubSec') THEN 'NoAM'
             WHEN THEATER_NAME = 'EMEA' THEN 'EMEA'
             WHEN THEATER_NAME = 'APJ' THEN 'APJ'
             ELSE 'Other'
@@ -677,7 +677,7 @@ def get_regional_themes(_conn, source=None, start_date=None, end_date=None):
     query = f"""{_use_case_base(start_date, end_date)}
     SELECT 
         CASE 
-            WHEN THEATER_NAME IN ('AMSExpansion', 'USMajors', 'AMSAcquisition') THEN 'NoAM'
+            WHEN THEATER_NAME IN ('AMSExpansion', 'USMajors', 'AMSAcquisition', 'USPubSec') THEN 'NoAM'
             WHEN THEATER_NAME = 'EMEA' THEN 'EMEA'
             WHEN THEATER_NAME = 'APJ' THEN 'APJ'
             ELSE 'Other'
@@ -703,7 +703,7 @@ def get_regional_comment_narratives(_conn, target_region, source=None, start_dat
     sf = _source_filter(source or "")
     region_cond = ""
     if target_region == "NoAM":
-        region_cond = " AND THEATER_NAME IN ('AMSExpansion', 'USMajors', 'AMSAcquisition')"
+        region_cond = " AND THEATER_NAME IN ('AMSExpansion', 'USMajors', 'AMSAcquisition', 'USPubSec')"
     elif target_region == "EMEA":
         region_cond = " AND THEATER_NAME = 'EMEA'"
     elif target_region == "APJ":
@@ -899,21 +899,44 @@ def _confidence_scored_query(partner_filter_sql, start_date, end_date):
         GROUP BY aid.ACCOUNT_NAME_UPPER
     ),
     custom_skills AS (
-        SELECT aid.ACCOUNT_NAME_UPPER,
-            COUNT(DISTINCT sk.value:name::STRING) AS custom_skill_count,
-            COUNT(DISTINCT CASE WHEN LOWER(sk.value:name::STRING) REGEXP '(agent|cortex|llm|ml|model|intent|analyst|ai|chat|rag|embed)' THEN sk.value:name::STRING END) AS ai_custom_skills,
-            COUNT(DISTINCT CASE WHEN LOWER(sk.value:name::STRING) REGEXP '(sql|query|analytics|bi|report|dashboard|semantic|data.analyz)' THEN sk.value:name::STRING END) AS analytics_custom_skills,
-            COUNT(DISTINCT CASE WHEN LOWER(sk.value:name::STRING) REGEXP '(dbt|airflow|pipeline|ingest|transform|etl|dag|lineage|stream|iceberg)' THEN sk.value:name::STRING END) AS de_custom_skills,
-            COUNT(DISTINCT CASE WHEN LOWER(sk.value:name::STRING) REGEXP '(govern|security|access|cost|warehouse|billing|admin|platform|monitor)' THEN sk.value:name::STRING END) AS platform_custom_skills,
-            COUNT(DISTINCT CASE WHEN LOWER(sk.value:name::STRING) REGEXP '(streamlit|app|frontend|ui|react|spcs|notebook)' THEN sk.value:name::STRING END) AS app_custom_skills,
-            COUNT(DISTINCT CASE WHEN LOWER(sk.value:name::STRING) REGEXP '(migrat|spark|databricks|convert|legacy)' THEN sk.value:name::STRING END) AS migration_custom_skills
-        FROM SNOWSCIENCE.LLM.CORTEX_CODE_REQUEST_STG r
-        INNER JOIN account_ids aid ON r.ACCOUNT_ID = aid.ACCOUNT_ID,
-        LATERAL FLATTEN(input => TRY_PARSE_JSON(r.TOOL_RESOURCES_SKILL):skills) sk
-        WHERE r.ds >= '{start_date}'
-        AND r.TOOL_RESOURCES_SKILL IS NOT NULL AND r.TOOL_RESOURCES_SKILL != '' AND r.TOOL_RESOURCES_SKILL != '[]'
-        AND sk.value:skill_source::STRING = 'user'
-        GROUP BY aid.ACCOUNT_NAME_UPPER
+        SELECT flattened.ACCOUNT_NAME_UPPER,
+            COUNT(DISTINCT flattened.skill_name) AS custom_skill_count,
+            COUNT(DISTINCT CASE
+                WHEN LOWER(flattened.skill_name) REGEXP '.*(agent|cortex|llm|ml|model|intent|analyst|ai|chat|rag|embed).*'
+                     OR COALESCE(cls.WORKLOAD_CATEGORY, '') = 'AI'
+                THEN flattened.skill_name END) AS ai_custom_skills,
+            COUNT(DISTINCT CASE
+                WHEN LOWER(flattened.skill_name) REGEXP '.*(sql|query|analytics|bi|report|dashboard|semantic|data.analyz|analyzing).*'
+                     OR COALESCE(cls.WORKLOAD_CATEGORY, '') = 'Analytics'
+                THEN flattened.skill_name END) AS analytics_custom_skills,
+            COUNT(DISTINCT CASE
+                WHEN LOWER(flattened.skill_name) REGEXP '.*(dbt|airflow|pipeline|ingest|transform|etl|dag|lineage|stream|iceberg|cosmos|openlineage|checking.freshness|profiling|tracing).*'
+                     OR COALESCE(cls.WORKLOAD_CATEGORY, '') = 'Data Engineering'
+                THEN flattened.skill_name END) AS de_custom_skills,
+            COUNT(DISTINCT CASE
+                WHEN LOWER(flattened.skill_name) REGEXP '.*(govern|security|access|cost|warehouse|billing|admin|platform|monitor).*'
+                     OR COALESCE(cls.WORKLOAD_CATEGORY, '') = 'Platform'
+                THEN flattened.skill_name END) AS platform_custom_skills,
+            COUNT(DISTINCT CASE
+                WHEN LOWER(flattened.skill_name) REGEXP '.*(streamlit|app|frontend|ui|react|spcs|notebook).*'
+                     OR COALESCE(cls.WORKLOAD_CATEGORY, '') = 'Apps & Collab'
+                THEN flattened.skill_name END) AS app_custom_skills,
+            COUNT(DISTINCT CASE
+                WHEN LOWER(flattened.skill_name) REGEXP '.*(migrat|spark|databricks|ssis|convert|legacy).*'
+                     OR COALESCE(cls.WORKLOAD_CATEGORY, '') = 'Migration'
+                THEN flattened.skill_name END) AS migration_custom_skills
+        FROM (
+            SELECT aid.ACCOUNT_NAME_UPPER, sk.value:name::STRING AS skill_name
+            FROM SNOWSCIENCE.LLM.CORTEX_CODE_REQUEST_STG r
+            INNER JOIN account_ids aid ON r.ACCOUNT_ID = aid.ACCOUNT_ID,
+            LATERAL FLATTEN(input => TRY_PARSE_JSON(r.TOOL_RESOURCES_SKILL):skills) sk
+            WHERE r.ds >= '{start_date}'
+            AND r.TOOL_RESOURCES_SKILL IS NOT NULL AND r.TOOL_RESOURCES_SKILL != '' AND r.TOOL_RESOURCES_SKILL != '[]'
+            AND sk.value:skill_source::STRING = 'user'
+        ) flattened
+        LEFT JOIN {SCHEMA}.SKILL_WORKLOAD_CLASSIFICATION cls
+            ON LOWER(flattened.skill_name) = LOWER(cls.SKILL_NAME)
+        GROUP BY flattened.ACCOUNT_NAME_UPPER
     ),
     tool_usage AS (
         SELECT aid.ACCOUNT_NAME_UPPER, COUNT(*) AS total_tool_invocations
@@ -977,4 +1000,171 @@ def get_bulk_confidence_scores(_conn, partners, start_date, end_date):
     partner_filter = f"uc.PARTNER_NAME IN ('{partners_sql}')"
     query = _confidence_scored_query(partner_filter, start_date, end_date)
     query += "\n    ORDER BY TOTAL_SCORE DESC, PARTNER_NAME, ACCOUNT_NAME"
+    return _conn.query(query)
+
+@st.cache_data(ttl=timedelta(minutes=30))
+def get_pipeline_wow(_conn):
+    """WoW use case count and EACV change (current vs prior week) from CEO_USE_CASE_WEEKLY_METRICS."""
+    query = f"""
+    WITH weeks AS (
+        SELECT WEEK_START,
+            SUM(USE_CASE_COUNT)  AS TOTAL_UCS,
+            SUM(TOTAL_EACV)      AS TOTAL_EACV,
+            SUM(DEPLOYED)        AS DEPLOYED,
+            SUM(IN_IMPL)         AS IN_IMPL,
+            SUM(WON)             AS WON,
+            SUM(ACTIVE_PIPELINE) AS ACTIVE_PIPELINE,
+            ROW_NUMBER() OVER (ORDER BY WEEK_START DESC) AS rn
+        FROM {SCHEMA}.CEO_USE_CASE_WEEKLY_METRICS
+        GROUP BY WEEK_START
+    )
+    SELECT
+        cur.WEEK_START,       prev.WEEK_START     AS PREV_WEEK_START,
+        cur.TOTAL_UCS,        prev.TOTAL_UCS      AS PREV_TOTAL_UCS,
+        cur.TOTAL_EACV,       prev.TOTAL_EACV     AS PREV_TOTAL_EACV,
+        cur.DEPLOYED,         prev.DEPLOYED       AS PREV_DEPLOYED,
+        cur.IN_IMPL,          prev.IN_IMPL        AS PREV_IN_IMPL,
+        cur.WON,              prev.WON            AS PREV_WON,
+        cur.ACTIVE_PIPELINE,  prev.ACTIVE_PIPELINE AS PREV_ACTIVE_PIPELINE,
+        cur.TOTAL_UCS    - prev.TOTAL_UCS    AS WOW_TOTAL,
+        cur.TOTAL_EACV   - prev.TOTAL_EACV   AS WOW_EACV,
+        cur.DEPLOYED     - prev.DEPLOYED     AS WOW_DEPLOYED,
+        cur.IN_IMPL      - prev.IN_IMPL      AS WOW_IN_IMPL,
+        cur.WON          - prev.WON          AS WOW_WON,
+        cur.ACTIVE_PIPELINE - prev.ACTIVE_PIPELINE AS WOW_ACTIVE
+    FROM weeks cur
+    JOIN weeks prev ON cur.rn = 1 AND prev.rn = 2
+    """
+    return _conn.query(query)
+
+@st.cache_data(ttl=timedelta(minutes=30))
+def get_gsi_wow(_conn):
+    """WoW engagement (requests) for the 6 GSIs aggregated across all regions."""
+    query = f"""
+    SELECT
+        GSI_GROUP,
+        SUM(TOTAL_USERS)    AS TOTAL_USERS,
+        SUM(TOTAL_REQUESTS) AS TOTAL_REQUESTS,
+        SUM(LW_REQUESTS)    AS LW_REQUESTS,
+        SUM(PW_REQUESTS)    AS PW_REQUESTS,
+        CASE WHEN SUM(PW_REQUESTS) > 0
+            THEN ROUND((SUM(LW_REQUESTS) - SUM(PW_REQUESTS)) * 100.0 / SUM(PW_REQUESTS), 1)
+        END AS WOW_PCT
+    FROM {SCHEMA}.GSI_REGIONAL_METRICS
+    GROUP BY GSI_GROUP
+    ORDER BY TOTAL_REQUESTS DESC
+    """
+    return _conn.query(query)
+
+@st.cache_data(ttl=timedelta(minutes=30))
+def get_noam_si_wow(_conn):
+    """WoW engagement (requests) for NoAM managed SIs from OTHER_SI_REGIONAL_METRICS."""
+    managed_noam_sis = (
+        "'BlueCloud Services Inc','LTIMindtree','evolv Consulting','Slalom, LLC.',"
+        "'Tredence Inc.','phData, Inc.','Squadron Data Inc','7Rivers, Inc',"
+        "'Aimpoint Digital','Infostrux Solutions Inc.','Infosys','KPMG LLP',"
+        "'NTT DATA Group Corporation'"
+    )
+    query = f"""
+    SELECT PARTNER_NAME, TOTAL_USERS, TOTAL_REQUESTS, LW_REQUESTS, PW_REQUESTS, WOW_PCT, REGION_RANK
+    FROM {SCHEMA}.OTHER_SI_REGIONAL_METRICS
+    WHERE PARTNER_REGION = 'NoAM'
+    AND PARTNER_NAME IN ({managed_noam_sis})
+    ORDER BY TOTAL_REQUESTS DESC
+    """
+    return _conn.query(query)
+
+@st.cache_data(ttl=timedelta(minutes=30))
+def get_coco_adoption_wow(_conn, partners=None):
+    """WoW CoCo adoption delta from OKR_PARTNER_WEEKLY_ADOPTION.
+    Returns per-partner rows + one overall row (PARTNER_NAME IS NULL).
+    WoW columns are NULL when fewer than 2 weekly snapshots exist.
+    """
+    partner_filter = ""
+    if partners:
+        ps = "','".join(partners)
+        partner_filter = f"AND (PARTNER_NAME IN ('{ps}') OR PARTNER_NAME IS NULL)"
+    query = f"""
+    WITH ranked AS (
+        SELECT *,
+            ROW_NUMBER() OVER (
+                PARTITION BY COALESCE(PARTNER_NAME, '__OVERALL__')
+                ORDER BY WEEK_START DESC
+            ) AS rn
+        FROM {SCHEMA}.OKR_PARTNER_WEEKLY_ADOPTION
+        WHERE 1=1 {partner_filter}
+    )
+    SELECT
+        cur.PARTNER_NAME,
+        cur.WEEK_START,
+        prev.WEEK_START                           AS PREV_WEEK,
+        cur.TOTAL_UCS,
+        cur.COCO_UCS,
+        cur.COCO_PCT,
+        cur.TOTAL_EACV,
+        cur.COCO_EACV,
+        cur.COCO_UCS  - prev.COCO_UCS            AS WOW_COCO_UCS,
+        ROUND(cur.COCO_PCT - prev.COCO_PCT, 1)   AS WOW_COCO_PCT,
+        cur.COCO_EACV - prev.COCO_EACV           AS WOW_COCO_EACV
+    FROM ranked cur
+    LEFT JOIN ranked prev
+        ON COALESCE(cur.PARTNER_NAME, '__OVERALL__') = COALESCE(prev.PARTNER_NAME, '__OVERALL__')
+        AND cur.rn = 1 AND prev.rn = 2
+    WHERE cur.rn = 1
+    ORDER BY cur.PARTNER_NAME NULLS FIRST
+    """
+    return _conn.query(query)
+
+@st.cache_data(ttl=timedelta(minutes=30))
+def get_recent_wins(_conn, partners, start_date, end_date, days_back=7):
+    """Fetch recent deployments, competitive wins, and high-EACV CoCo UCs from last N days.
+    Used to feed fresh content into the Notable Wins section of the exec email.
+    """
+    partners_sql = "','".join(partners)
+    query = f"""
+    WITH recent AS (
+        SELECT
+            uc.ACCOUNT_NAME,
+            uc.PARTNER_NAME,
+            uc.USE_CASE_NAME,
+            uc.USE_CASE_STAGE,
+            uc.USE_CASE_EACV,
+            uc.TECHNICAL_USE_CASE,
+            uc.COMPETITORS,
+            uc.IS_COCO,
+            uc.COCO_SOURCE,
+            uc.GO_LIVE_DATE,
+            uc.DECISION_DATE,
+            CASE
+                WHEN uc.USE_CASE_STAGE = '7 - Deployed'
+                     AND uc.GO_LIVE_DATE >= DATEADD('day', -{days_back}, CURRENT_DATE())
+                    THEN 'New Deployment'
+                WHEN uc.COMPETITORS IS NOT NULL AND TRIM(uc.COMPETITORS) != ''
+                     AND uc.DECISION_DATE >= DATEADD('day', -{days_back}, CURRENT_DATE())
+                    THEN 'Competitive Win'
+                WHEN uc.DECISION_DATE >= DATEADD('day', -{days_back}, CURRENT_DATE())
+                    THEN 'Pipeline Move'
+                ELSE 'Other'
+            END AS WIN_TYPE
+        FROM {DT_OKR} uc
+        WHERE uc.PARTNER_NAME IN ('{partners_sql}')
+        AND uc.THEATER_NAME IN ('AMSExpansion','USMajors','AMSAcquisition','USPubSec')
+        AND uc.IS_COCO = TRUE
+        AND (
+            (uc.USE_CASE_STAGE IN ('3 - Technical / Business Validation','4 - Use Case Won / Migration Plan')
+                AND uc.DECISION_DATE >= '{start_date}' AND uc.DECISION_DATE <= '{end_date}')
+            OR (uc.USE_CASE_STAGE IN ('5 - Implementation In Progress','6 - Implementation Complete','7 - Deployed')
+                AND uc.GO_LIVE_DATE >= '{start_date}' AND uc.GO_LIVE_DATE <= '{end_date}')
+        )
+        AND (
+            uc.GO_LIVE_DATE >= DATEADD('day', -{days_back}, CURRENT_DATE())
+            OR uc.DECISION_DATE >= DATEADD('day', -{days_back}, CURRENT_DATE())
+        )
+    )
+    SELECT * FROM recent
+    ORDER BY
+        CASE WIN_TYPE WHEN 'New Deployment' THEN 1 WHEN 'Competitive Win' THEN 2 ELSE 3 END,
+        USE_CASE_EACV DESC NULLS LAST
+    LIMIT 15
+    """
     return _conn.query(query)
