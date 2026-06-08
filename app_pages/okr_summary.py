@@ -46,7 +46,7 @@ if include_account_coco and len(coverage) > 0:
     if len(bulk_conf) > 0:
         if region and region != 'Global':
             region_theaters = {
-                'NoAM': ['AMSExpansion', 'USMajors', 'AMSAcquisition'],
+                'NoAM': ['AMSExpansion', 'USMajors', 'AMSAcquisition', 'USPubSec'],
                 'EMEA': ['EMEA'], 'APJ': ['APJ']
             }
             bulk_conf = bulk_conf[bulk_conf['THEATER_NAME'].isin(region_theaters.get(region, []))]
@@ -171,7 +171,7 @@ with tab_summary:
             ed = str(end_date)
             tf = ""
             if region == "NoAM":
-                tf = " AND uc.THEATER_NAME IN ('AMSExpansion', 'USMajors', 'AMSAcquisition')"
+                tf = " AND uc.THEATER_NAME IN ('AMSExpansion', 'USMajors', 'AMSAcquisition', 'USPubSec')"
             elif region == "EMEA":
                 tf = " AND uc.THEATER_NAME = 'EMEA'"
             elif region == "APJ":

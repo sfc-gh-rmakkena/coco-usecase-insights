@@ -52,7 +52,7 @@ if include_account_coco:
         # Apply region filter in Python (bulk_conf includes THEATER_NAME via uc.*)
         if region and region != 'Global':
             region_theaters = {
-                'NoAM': ['AMSExpansion', 'USMajors', 'AMSAcquisition'],
+                'NoAM': ['AMSExpansion', 'USMajors', 'AMSAcquisition', 'USPubSec'],
                 'EMEA': ['EMEA'], 'APJ': ['APJ']
             }
             bulk_conf = bulk_conf[bulk_conf['THEATER_NAME'].isin(region_theaters.get(region, []))]

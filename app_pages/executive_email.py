@@ -11,7 +11,7 @@ from utils.queries import (
     get_partner_workload_cross, get_regional_themes, get_regional_comment_narratives,
     get_partner_coco_coverage, get_partner_credit_consumption, get_adoption_overview,
     get_bulk_confidence_scores, get_pipeline_wow, get_gsi_wow, get_noam_si_wow,
-    get_coco_adoption_wow,
+    get_coco_adoption_wow, get_recent_wins,
 )
 from utils.cortex_helpers import cortex_complete
 
@@ -101,8 +101,37 @@ with st.spinner("Loading data..."):
     Q2_START = '2026-05-01'
     Q2_END = '2026-07-31'
 
+    recent_wins_data = get_recent_wins(conn, MANAGED_PARTNERS, Q2_START, Q2_END)
+
     # Q2 Credit consumption for managed partners
     credit_data = get_partner_credit_consumption(conn, MANAGED_PARTNERS, Q2_START, Q2_END)
+
+    # GSI global coverage — all regions (not NoAM-filtered)
+    GSI_NAMES = "','".join(['Accenture','Capgemini Technologies LLC','Cognizant Technology Solutions US Corp',
+                            'Deloitte Consulting','EY','Ernst & Young (EY)','IBM'])
+    gsi_global_data = conn.query(f"""
+        SELECT
+            CASE
+                WHEN THEATER_NAME IN ('AMSExpansion','USMajors','AMSAcquisition','USPubSec') THEN 'NoAM'
+                WHEN THEATER_NAME = 'EMEA' THEN 'EMEA'
+                WHEN THEATER_NAME = 'APJ' THEN 'APJ'
+                ELSE 'Other'
+            END AS REGION,
+            COUNT(*) AS TOTAL_UCS,
+            SUM(IS_COCO::INT) AS COCO_UCS,
+            ROUND(SUM(IS_COCO::INT)*100.0/NULLIF(COUNT(*),0),1) AS COCO_PCT,
+            COALESCE(SUM(USE_CASE_EACV),0) AS TOTAL_EACV
+        FROM TEMP.COCO_PARTNER_ADOPTION.DT_OKR_USE_CASES
+        WHERE PARTNER_NAME IN ('{GSI_NAMES}')
+        AND (
+            (USE_CASE_STAGE IN ('3 - Technical / Business Validation','4 - Use Case Won / Migration Plan')
+                AND DECISION_DATE >= '{Q2_START}' AND DECISION_DATE <= '{Q2_END}')
+            OR (USE_CASE_STAGE IN ('5 - Implementation In Progress','6 - Implementation Complete','7 - Deployed')
+                AND GO_LIVE_DATE >= '{Q2_START}' AND GO_LIVE_DATE <= '{Q2_END}')
+        )
+        GROUP BY 1
+        ORDER BY TOTAL_UCS DESC
+    """)
 
     managed_stage_data = conn.query(f"""
         SELECT 
@@ -116,6 +145,7 @@ with st.spinner("Loading data..."):
             COALESCE(SUM(USE_CASE_EACV), 0) AS TOTAL_EACV
         FROM TEMP.COCO_PARTNER_ADOPTION.DT_OKR_USE_CASES uc
         WHERE uc.PARTNER_NAME IN ('{managed_partners_sql}')
+        AND uc.THEATER_NAME IN ('AMSExpansion', 'USMajors', 'AMSAcquisition', 'USPubSec')
         AND uc.USE_CASE_STAGE IN ('3 - Technical / Business Validation','4 - Use Case Won / Migration Plan','5 - Implementation In Progress','6 - Implementation Complete','7 - Deployed')
         AND (
             (uc.USE_CASE_STAGE IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan') AND uc.DECISION_DATE >= '{Q2_START}' AND uc.DECISION_DATE <= '{Q2_END}')
@@ -129,6 +159,13 @@ with st.spinner("Loading data..."):
     # Executive email always uses: account-level CoCo ON, High confidence only
     _EMAIL_BANDS = ['High']
     managed_bulk_conf = get_bulk_confidence_scores(conn, MANAGED_PARTNERS, Q2_START, Q2_END)
+    # Scope to NoAM only (consistent with _theater_filter)
+    if len(managed_bulk_conf) > 0:
+        managed_bulk_conf = managed_bulk_conf[
+            managed_bulk_conf['THEATER_NAME'].isin(
+                ['AMSExpansion', 'USMajors', 'AMSAcquisition', 'USPubSec']
+            )
+        ]
 
     if len(managed_bulk_conf) > 0:
         managed_bulk_conf['IS_COCO_FINAL'] = (
@@ -213,7 +250,7 @@ if 'PARTNER_NAME' in regional_themes.columns:
 if len(coco_coverage) > 0 and len(managed_bulk_conf) > 0:
     bulk_for_cov = managed_bulk_conf[managed_bulk_conf['PARTNER_NAME'].isin(coco_coverage['PARTNER_NAME'])].copy()
     if region and region != 'Global':
-        region_theaters = {'NoAM': ['AMSExpansion', 'USMajors', 'AMSAcquisition'], 'EMEA': ['EMEA'], 'APJ': ['APJ']}
+        region_theaters = {'NoAM': ['AMSExpansion', 'USMajors', 'AMSAcquisition', 'USPubSec'], 'EMEA': ['EMEA'], 'APJ': ['APJ']}
         bulk_for_cov = bulk_for_cov[bulk_for_cov['THEATER_NAME'].isin(region_theaters.get(region, []))]
     if len(bulk_for_cov) > 0:
         cov_coco_eacv = bulk_for_cov[bulk_for_cov['IS_COCO_FINAL']].groupby('PARTNER_NAME')['USE_CASE_EACV'].sum().reset_index()
@@ -306,9 +343,42 @@ for _, p in managed_q2_partners.iterrows():
     partner_ctx += f"  {p['PARTNER_NAME']}: {int(p['TOTAL_UCS'])} UCs, {int(p['COCO_UCS'])} CoCo ({int(p['COCO_PCT'])}%), ${eacv/1000:.0f}K, AI={int(p['AI'])}, DE={int(p['DE'])}, Analytics={int(p['ANALYTICS'])}\n"
 
 stage_ctx = ""
-for _, sg in managed_stage_data.iterrows():
-    eacv = sg.get('TOTAL_EACV', 0) or 0
-    stage_ctx += f"  {sg['STAGE_GROUP']}: {int(sg['UC_COUNT'])} UCs, ${eacv/1_000_000:.1f}M\n"
+if len(managed_stage_data) > 0 and len(managed_bulk_conf) > 0:
+    # Map USE_CASE_STAGE → STAGE_GROUP labels (same as managed_stage_data SQL)
+    def _stage_group(s):
+        if s == '3 - Technical / Business Validation':
+            return 'Validation (3)'
+        elif s == '4 - Use Case Won / Migration Plan':
+            return 'Won (4)'
+        elif s in ('5 - Implementation In Progress', '6 - Implementation Complete'):
+            return 'Implementation (5-6)'
+        elif s == '7 - Deployed':
+            return 'Deployed (7)'
+        return None
+
+    stage_coco = managed_bulk_conf.copy()
+    stage_coco['STAGE_GROUP'] = stage_coco['USE_CASE_STAGE'].apply(_stage_group)
+    stage_coco = stage_coco[stage_coco['STAGE_GROUP'].notna()]
+    stage_coco_agg = stage_coco.groupby('STAGE_GROUP').agg(
+        COCO_UCS=('IS_COCO_FINAL', 'sum'),
+        TOTAL_UCS_CONF=('USE_CASE_ID', 'count')
+    ).reset_index()
+    stage_coco_eacv = stage_coco[stage_coco['IS_COCO_FINAL']].groupby('STAGE_GROUP')['USE_CASE_EACV'].sum().reset_index()
+    stage_coco_eacv.columns = ['STAGE_GROUP', 'COCO_EACV']
+    stage_coco_agg = stage_coco_agg.merge(stage_coco_eacv, on='STAGE_GROUP', how='left').fillna({'COCO_EACV': 0})
+
+    stage_merged = managed_stage_data.merge(stage_coco_agg, on='STAGE_GROUP', how='left').fillna(0)
+    stage_merged['COCO_UCS'] = stage_merged['COCO_UCS'].astype(int)
+    stage_merged['COCO_PCT'] = (stage_merged['COCO_UCS'] * 100.0 / stage_merged['UC_COUNT'].replace(0, float('nan'))).round(0).fillna(0).astype(int)
+
+    for _, sg in stage_merged.iterrows():
+        eacv = sg.get('TOTAL_EACV', 0) or 0
+        coco_eacv = sg.get('COCO_EACV', 0) or 0
+        stage_ctx += f"  {sg['STAGE_GROUP']}: {int(sg['UC_COUNT'])} UCs, {int(sg['COCO_UCS'])} CoCo ({int(sg['COCO_PCT'])}%), Total EACV ${eacv/1_000_000:.1f}M, CoCo EACV ${coco_eacv/1_000_000:.1f}M\n"
+else:
+    for _, sg in managed_stage_data.iterrows():
+        eacv = sg.get('TOTAL_EACV', 0) or 0
+        stage_ctx += f"  {sg['STAGE_GROUP']}: {int(sg['UC_COUNT'])} UCs, ${eacv/1_000_000:.1f}M\n"
 
 region_ctx = ""
 for _, rg in region_data.iterrows():
@@ -386,6 +456,15 @@ if len(credit_data) > 0:
         wow = f"{cr['WOW_PCT']:+.1f}%" if pd.notna(cr['WOW_PCT']) else "N/A"
         credit_ctx += f"  {cr['PARTNER_NAME']}: Q2 Total=${cr['Q2_TOTAL_CREDITS']:,.0f}, Accounts={int(cr['COCO_CUSTOMER_ACCOUNTS'])}, Active Days={int(cr['ACTIVE_DAYS'])}, WoW={wow}\n"
 
+# GSI Global Coverage context (all regions)
+gsi_global_ctx = ""
+if len(gsi_global_data) > 0:
+    total_row = gsi_global_data.agg({'TOTAL_UCS': 'sum', 'COCO_UCS': 'sum', 'TOTAL_EACV': 'sum'})
+    global_pct = round(total_row['COCO_UCS'] * 100.0 / total_row['TOTAL_UCS'], 1) if total_row['TOTAL_UCS'] > 0 else 0
+    gsi_global_ctx += f"  Global Total: {int(total_row['TOTAL_UCS'])} UCs, {int(total_row['COCO_UCS'])} CoCo ({global_pct}%), ${total_row['TOTAL_EACV']/1_000_000:.1f}M EACV\n"
+    for _, row in gsi_global_data.iterrows():
+        gsi_global_ctx += f"  {row['REGION']}: {int(row['TOTAL_UCS'])} UCs, {int(row['COCO_UCS'])} CoCo ({row['COCO_PCT']}%), ${row['TOTAL_EACV']/1_000_000:.1f}M\n"
+
 # CoCo adoption WoW context (from OKR_PARTNER_WEEKLY_ADOPTION)
 adoption_wow_ctx = ""
 adoption_wow_partner_ctx = ""
@@ -410,6 +489,20 @@ if len(adoption_wow_data) > 0:
 else:
     adoption_wow_ctx = "  No adoption WoW data yet (first snapshot seeded, next available after Sunday task run).\n"
     adoption_wow_partner_ctx = adoption_wow_ctx
+
+# Recent wins context — last 7 days (deployments, competitive wins, pipeline moves)
+recent_wins_ctx = ""
+if len(recent_wins_data) > 0:
+    for _, rw in recent_wins_data.iterrows():
+        eacv = rw.get('USE_CASE_EACV', 0) or 0
+        comp = f", displacing {rw['COMPETITORS']}" if rw.get('COMPETITORS') and str(rw['COMPETITORS']).strip() else ""
+        recent_wins_ctx += (
+            f"  [{rw['WIN_TYPE']}] {rw['PARTNER_NAME']} @ {rw['ACCOUNT_NAME']}: "
+            f"{rw['USE_CASE_STAGE']}, ${eacv/1000:.0f}K EACV"
+            f"{comp}\n"
+        )
+else:
+    recent_wins_ctx = "  No new deployments, competitive wins, or pipeline moves in the last 7 days.\n"
 
 # Pipeline WoW context (use case count change vs prior week)
 def _fmt_wow(val):
@@ -483,6 +576,9 @@ PIPELINE WoW (all CoCo partners, use case count change vs prior week):
 COCO CREDIT CONSUMPTION (Q2, managed partners):
 {credit_ctx}
 
+GLOBAL GSI COCO COVERAGE (6 GSIs, all regions, Q2 — not NoAM-filtered):
+{gsi_global_ctx}
+
 REGIONAL BREAKDOWN (Managed and Unmanaged):
 {region_ctx}
 
@@ -506,6 +602,9 @@ OKR PROGRESS — NoAM SIs WoW (CoCo engagement — LW=last week, PW=prior week):
 
 COMMENT HIGHLIGHTS (managed partners only, Top 10 by EACV):
 {comment_ctx}
+
+RECENT ACTIVITY — LAST 7 DAYS (deployments, competitive wins, pipeline moves):
+{recent_wins_ctx}
 """
 
 st.markdown("---")
@@ -528,21 +627,18 @@ recipients_input = st.text_area(
 default_prompt = f"""You are writing a polished executive briefing for Snowflake leadership on CoCo partner use case performance. This will be read by VPs and the CEO — keep it sharp, data-rich, and action-oriented.
 Do NOT include a title, heading, or subject line like "Cortex Code (CoCo) Partner Use Case Traction" at the top of the email. Start directly with the Note block.
 
-SCOPE: Focus on the 20 managed partners. Use MANAGED PARTNERS HEADLINE numbers for all sections EXCEPT Regional Breakdown.
-- The GLOBAL REFERENCE line is for context only — mention it once in the opening sentence.
-- REGIONAL BREAKDOWN uses all-partner data (managed + unmanaged) to show geographic traction.
-- ALL other sections (Pipeline, Top Partners, OKR, Patterns, Wins) use managed partners ONLY.
+SCOPE: Focus on the 20 managed partners (NoAM only). All sections use managed partners only.
 
-Follow this EXACT structure with 9 sections:
+Follow this EXACT structure with 8 sections:
 
-## **Note: 6 GSIs and 14 NoAM Partners are aligned with Q2 OKR, but we are still showing EMEA & APJ adoption pattern.**
+## **Note: Showing NoAM use cases only — 6 GSIs (NoAM pipeline) + 14 NoAM Partners.**
 
 ## EXECUTIVE SUMMARY
 2-3 sentences maximum, then exactly 6 bullets.
-- Open with: "[X] CoCo use cases across 20 managed partners **(14 NoAM-focused partners + 6 GSIs)** representing $[Z]M in CoCo EACV, with [W] deployed in production. Global CoCo pipeline: [G] use cases across [A] partners worth $[T]M."
+- Open with: "[X] CoCo use cases across 20 managed partners **(14 NoAM-focused partners + 6 GSIs)** representing $[Z]M in CoCo EACV, with [W] deployed in production."
 - Second sentence: one crisp insight on the dominant pattern (e.g., what's working, what's accelerating).
 - Bullet 1: "**Leading use case types:** [top 3 by count]"
-- Bullet 2: "**Region leaders:** NoAM ([top 3 partners]), EMEA ([top 3]), APJ ([top 3])"
+- Bullet 2: "**NoAM CoCo Adoption:** [X]% ([CoCo UCs]/[Total UCs] use cases across 20 managed partners in NoAM)"
 - Bullet 3: "**Top Global SIs by EACV:** ([top 3 global partners by EACV])"
 - Bullet 4: "**Top Regional SIs by EACV:** ([top 3 regional managed partners by EACV])"
 - Bullet 5: "**Competitive displacement:** [top 3 competitors by count]"
@@ -565,22 +661,10 @@ PARTNER CLASSIFICATION:
 - Use MANAGED PARTNERS data only
 
 ## MANAGED PARTNER PIPELINE OVERVIEW
-| Stage | Count | EACV | WoW Δ |
-- Use MANAGED PARTNERS pipeline data (stage_ctx) for Count and EACV
-- Add "WoW Δ" column using "PIPELINE WoW" data — show +/- integer change in use case count vs prior week for each stage
-- Use stage mapping: Active Pipeline (3), Won (4), In Implementation (5-6), Deployed (7), and Total
-
-## MANAGED PARTNER COCO COVERAGE
-| Scope | Total UCs | CoCo UCs | CoCo % | Partners | Avg CoCo %/Partner |
-- Show overall managed partner CoCo adoption rate and per-region breakdown (NoAM, EMEA, APJ)
-- "Total UCs" = all use cases (CoCo + non-CoCo) for managed partners in Q2
-- "Avg CoCo %/Partner" = average of each partner's individual CoCo %, not the aggregate
-- After table: ONE sentence on which region has strongest/weakest CoCo penetration
-
-## REGIONAL BREAKDOWN (Managed and Unmanaged)
-| Region | Use Cases | EACV | Partners |
-After the table, ONE sentence per region on its dominant theme.
-- This is the ONLY section that uses all-partner data
+| Stage | Total UCs | CoCo UCs | CoCo % | Total EACV | CoCo EACV |
+- Use MANAGED PARTNERS pipeline data (stage_ctx) for all columns
+- stage_ctx has: Total UCs, CoCo UCs, CoCo %, Total EACV, CoCo EACV per stage
+- Use stage mapping: Validation (3), Won (4), Implementation (5-6), Deployed (7)
 
 ## PARTNER SCORECARD (all 20 managed partners)
 | Partner | Total UCs | CoCo UCs | CoCo% | WoW Δ% | WoW Δ UCs | EACV | AI | DE | Analytics |
@@ -589,11 +673,21 @@ After the table, ONE sentence per region on its dominant theme.
 - WoW Δ% and WoW Δ UCs from "COCO ADOPTION WoW — PER MANAGED PARTNER" — show "-" if N/A
 - Our target is **50% CoCo adoption** per partner. After the table, add ONE sentence calling out which partners are closest to 50% and which need enablement focus.
 
+## GLOBAL GSI COCO COVERAGE (6 GSIs — all regions)
+| Region | Total UCs | CoCo UCs | CoCo % | EACV |
+- Use "GLOBAL GSI COCO COVERAGE" data — shows GSI pipeline globally (NoAM + EMEA + APJ)
+- Include a Global Total row at the top, then NoAM / EMEA / APJ rows
+- ONE sentence after: highlight which region lags most and what it means for global GSI enablement
+
 ## USE CASE PATTERNS (managed partners only)
 3-4 bullets. Each: **Pattern Name** — one sentence with partner names and EACV.
 
 ## NOTABLE WINS (managed partners only)
-2-3 bullets. Cite specific partner + customer account + what happened. Focus on production deployments, competitive wins, or executive-level engagement.
+2-3 bullets. **Prioritize "RECENT ACTIVITY — LAST 7 DAYS" data first** — cite specific partner + customer account + what happened.
+- For [New Deployment]: "{{Partner}} deployed CoCo at {{Account}} — {{stage}}, ${{EACV}}K EACV"
+- For [Competitive Win]: "{{Partner}} won {{Account}} displacing {{Competitor}} — ${{EACV}}K"
+- For [Pipeline Move]: "{{Partner}} advanced {{Account}} to {{stage}} — ${{EACV}}K"
+- If no recent activity, draw from COMMENT HIGHLIGHTS — focus on production deployments or executive engagement.
 
 ## DISCLAIMER
 "**Disclaimer:** Use case data sourced from SE comments (coco/cortex code mentions), #coco in Partner Comments, and AI-Cortex Code feature flag. Pipeline figures are being confirmed by the PDM team and are subject to change. Detailed stats: http://go/cocopse"

@@ -64,7 +64,7 @@ if include_account_coco and selected_partners:
     bulk_conf = get_bulk_confidence_scores(conn, partner_names, start_date, end_date)
     if len(bulk_conf) > 0:
         if region and region != 'Global':
-            region_theaters = {'NoAM': ['AMSExpansion', 'USMajors', 'AMSAcquisition'], 'EMEA': ['EMEA'], 'APJ': ['APJ']}
+            region_theaters = {'NoAM': ['AMSExpansion', 'USMajors', 'AMSAcquisition', 'USPubSec'], 'EMEA': ['EMEA'], 'APJ': ['APJ']}
             bulk_conf = bulk_conf[bulk_conf['THEATER_NAME'].isin(region_theaters.get(region, []))]
         bands = confidence_filter if confidence_filter else ['High', 'Medium', 'Low']
         bulk_conf['IS_COCO_FINAL'] = (bulk_conf['IS_COCO'] == True) | (bulk_conf['CONFIDENCE_BAND'].isin(bands))
@@ -87,7 +87,7 @@ elif include_account_coco:
         bulk_conf = get_bulk_confidence_scores(conn, all_partner_names, start_date, end_date)
         if len(bulk_conf) > 0:
             if region and region != 'Global':
-                region_theaters = {'NoAM': ['AMSExpansion', 'USMajors', 'AMSAcquisition'], 'EMEA': ['EMEA'], 'APJ': ['APJ']}
+                region_theaters = {'NoAM': ['AMSExpansion', 'USMajors', 'AMSAcquisition', 'USPubSec'], 'EMEA': ['EMEA'], 'APJ': ['APJ']}
                 bulk_conf = bulk_conf[bulk_conf['THEATER_NAME'].isin(region_theaters.get(region, []))]
             bands = confidence_filter if confidence_filter else ['High', 'Medium', 'Low']
             bulk_conf['IS_COCO_FINAL'] = (bulk_conf['IS_COCO'] == True) | (bulk_conf['CONFIDENCE_BAND'].isin(bands))
