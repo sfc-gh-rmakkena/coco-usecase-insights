@@ -11,7 +11,7 @@ from utils.queries import (
     get_partner_workload_cross, get_regional_themes, get_regional_comment_narratives,
     get_partner_coco_coverage, get_partner_credit_consumption, get_adoption_overview,
     get_bulk_confidence_scores, get_pipeline_wow, get_gsi_wow, get_noam_si_wow,
-    get_coco_adoption_wow, get_recent_wins,
+    get_coco_adoption_wow, get_recent_wins, get_adoption_trend_4w,
 )
 from utils.cortex_helpers import cortex_complete
 
@@ -27,6 +27,30 @@ MANAGED_PARTNERS = [
     'Slalom, LLC.', 'Squadron Data Inc', 'Tredence Inc.'
 ]
 
+# Short display name → canonical partner name (for heat map tiles)
+HEATMAP_PARTNERS = [
+    ('Accenture',   'Accenture'),
+    ('Capgemini',   'Capgemini Technologies LLC'),
+    ('Cognizant',   'Cognizant Technology Solutions US Corp'),
+    ('Deloitte',    'Deloitte Consulting'),
+    ('EY',          'EY'),
+    ('IBM',         'IBM'),
+    ('7Rivers',     '7Rivers, Inc'),
+    ('Aimpoint',    'Aimpoint Digital'),
+    ('BlueCloud',   'BlueCloud Services Inc'),
+    ('kipi.ai',     'kipi.ai'),
+    ('evolv',       'evolv Consulting'),
+    ('Infostrux',   'Infostrux Solutions Inc.'),
+    ('Infosys',     'Infosys'),
+    ('KPMG',        'KPMG LLP'),
+    ('LTIMindtree', 'LTIMindtree'),
+    ('NTT DATA',    'NTT DATA Group Corporation'),
+    ('phData',      'phData, Inc.'),
+    ('Slalom',      'Slalom, LLC.'),
+    ('Squadron',    'Squadron Data Inc'),
+    ('Tredence',    'Tredence Inc.'),
+]
+
 
 def name_to_email(name):
     name = name.strip()
@@ -38,6 +62,218 @@ def name_to_email(name):
     elif len(parts) == 1:
         return f"{parts[0]}@snowflake.com"
     return name
+
+
+def generate_heatmap_html(adoption_wow_data: pd.DataFrame, managed_q2_partners: pd.DataFrame) -> str:
+    """Build Gmail-compatible partner OKR heat map.
+    Green ≥50%, amber 30-49%, red <30%. Blue border = crossed 50% this week.
+    """
+    pct_map: dict = {}
+    wow_map: dict = {}
+
+    if len(adoption_wow_data) > 0:
+        for _, row in adoption_wow_data[adoption_wow_data['PARTNER_NAME'].notna()].iterrows():
+            name = str(row['PARTNER_NAME'])
+            pct_map[name] = float(row.get('COCO_PCT') or 0)
+            wow_val = row.get('WOW_COCO_PCT')
+            wow_map[name] = float(wow_val) if pd.notna(wow_val) else None
+
+    if len(managed_q2_partners) > 0:
+        for _, row in managed_q2_partners.iterrows():
+            name = str(row['PARTNER_NAME'])
+            if name not in pct_map:
+                pct_map[name] = float(row.get('COCO_PCT') or 0)
+
+    # EY alias
+    if 'EY' not in pct_map and 'Ernst & Young (EY)' in pct_map:
+        pct_map['EY'] = pct_map['Ernst & Young (EY)']
+        wow_map['EY'] = wow_map.get('Ernst & Young (EY)')
+
+    partner_items = []
+    for display_name, data_key in HEATMAP_PARTNERS:
+        pct = pct_map.get(data_key, pct_map.get(display_name, 0))
+        wow = wow_map.get(data_key, wow_map.get(display_name))
+        partner_items.append((display_name, pct, wow))
+
+    def tier_order(item):
+        _, pct, _ = item
+        if pct >= 50: return (0, -pct)
+        if pct >= 30: return (1, -pct)
+        return (2, -pct)
+
+    partner_items.sort(key=tier_order)
+
+    tiles = []
+    for display_name, pct, wow in partner_items:
+        if pct >= 50:
+            bg, border, val_color = '#dcfce7', '1px solid #86efac', '#16a34a'
+        elif pct >= 30:
+            bg, border, val_color = '#fef3c7', '1px solid #fbbf24', '#d97706'
+        else:
+            bg, border, val_color = '#fee2e2', '1px solid #fca5a5', '#dc2626'
+
+        crossed = pct >= 50 and wow is not None and wow > 0
+        if crossed:
+            border = '2px solid #0369a1'
+
+        wow_html = ''
+        if wow is not None and wow != 0:
+            if crossed:
+                wow_html = '<div style="font-size:9px;color:#16a34a;font-weight:700;">&#9650; NEW</div>'
+            elif wow > 0:
+                wow_html = f'<div style="font-size:9px;color:#16a34a;">&#9650; +{wow:.1f}pp</div>'
+            else:
+                wow_html = f'<div style="font-size:9px;color:#dc2626;">&#9660; {wow:.1f}pp</div>'
+
+        star = ' &#9733;' if wow is not None and wow != 0 else ''
+        tiles.append(
+            f'<td style="background:{bg};border:{border};border-radius:6px;'
+            f'padding:8px 4px;text-align:center;width:20%;vertical-align:top;">'
+            f'<div style="font-size:11px;font-weight:700;white-space:nowrap;">{display_name}{star}</div>'
+            f'<div style="font-size:17px;font-weight:900;color:{val_color};">{pct:.0f}%</div>'
+            f'{wow_html}'
+            f'</td>'
+        )
+
+    row_htmls = []
+    for i in range(0, len(tiles), 5):
+        chunk = tiles[i:i+5]
+        while len(chunk) < 5:
+            chunk.append('<td style="width:20%;"></td>')
+        row_htmls.append(f'<tr style="vertical-align:top;">{"" .join(chunk)}</tr>')
+
+    legend_row = (
+        '<tr><td colspan="5" style="padding:0 0 8px 0;font-size:11px;">'
+        '<span style="background:#dcfce7;color:#16a34a;padding:3px 9px;border-radius:4px;font-weight:700;">&#9632; &#8805;50%</span>&nbsp;'
+        '<span style="background:#fef3c7;color:#d97706;padding:3px 9px;border-radius:4px;font-weight:700;">&#9632; 30&#8211;49%</span>&nbsp;'
+        '<span style="background:#fee2e2;color:#dc2626;padding:3px 9px;border-radius:4px;font-weight:700;">&#9632; &lt;30%</span>&nbsp;'
+        '<span style="color:#0369a1;font-weight:700;">&#9733; = WoW change &middot; Blue border = crossed 50% this week</span>'
+        '</td></tr>'
+    )
+
+    return (
+        '<div style="margin:14px 0;">'
+        '<div style="font-size:13px;font-weight:700;margin-bottom:8px;">Partner OKR Heat Map &#8212; All 20 (&#9733; = changed this week)</div>'
+        '<table width="100%" cellpadding="6" cellspacing="4" style="border-collapse:separate;table-layout:fixed;">'
+        f'{legend_row}{" ".join(row_htmls)}'
+        '</table></div>'
+    )
+
+
+def generate_trend_chart_html(trend_data: list) -> str:
+    """Gmail-safe 4-week CoCo adoption % bar chart with 50% reference line."""
+    if not trend_data:
+        return ''
+
+    ZONE_H = 40
+    CHART_H = ZONE_H * 2
+    BAR_W = 88
+    GAP = 24
+    NB = 'border:none;outline:none;'
+
+    n = len(trend_data)
+    n_cols = 2 * n - 1
+    chart_w = n * BAR_W + (n - 1) * GAP
+    total_w = chart_w + 35
+
+    current_pct = trend_data[-1][1]
+    if n >= 2:
+        arrow = '&#9650;' if trend_data[-1][1] > trend_data[-2][1] else (
+                '&#9660;' if trend_data[-1][1] < trend_data[-2][1] else '&#8212;')
+    else:
+        arrow = '&#8212;'
+    pct_color = '#16a34a' if current_pct >= 50 else ('#f59e0b' if current_pct >= 30 else '#dc2626')
+
+    def bar_fill(i):
+        return '#16a34a' if i == n - 1 else '#29B5E8'
+
+    label_cells, above_cells, below_cells, date_cells = [], [], [], []
+
+    for i, (label, pct) in enumerate(trend_data):
+        bar_h = max(2, int(CHART_H * pct / 100))
+        bar_below = min(bar_h, ZONE_H)
+        bar_above = max(0, bar_h - ZONE_H)
+        spacer_h = ZONE_H - bar_below
+        fill = bar_fill(i)
+
+        if i > 0:
+            for lst in (label_cells, date_cells):
+                lst.append(f'<td width="{GAP}" style="width:{GAP}px;{NB}"></td>')
+            above_cells.append(f'<td width="{GAP}" bgcolor="#ffffff" style="width:{GAP}px;background-color:#ffffff;font-size:0;line-height:0;{NB}">&nbsp;</td>')
+            below_cells.append(f'<td width="{GAP}" style="width:{GAP}px;font-size:0;line-height:0;{NB}">&nbsp;</td>')
+
+        label_cells.append(f'<td width="{BAR_W}" align="center" style="width:{BAR_W}px;text-align:center;font-size:12px;font-weight:bold;color:{fill};padding-bottom:4px;{NB}">{pct:.1f}%</td>')
+
+        if bar_above > 0:
+            gs = ZONE_H - bar_above
+            inner = (f'<table width="{BAR_W}" border="0" cellpadding="0" cellspacing="0" style="width:{BAR_W}px;border-collapse:collapse;">'
+                     f'<tr><td width="{BAR_W}" height="{gs}" bgcolor="#ffffff" style="width:{BAR_W}px;height:{gs}px;background-color:#ffffff;font-size:0;line-height:0;{NB}">&nbsp;</td></tr>'
+                     f'<tr><td width="{BAR_W}" height="{bar_above}" bgcolor="{fill}" style="width:{BAR_W}px;height:{bar_above}px;background-color:{fill};font-size:0;line-height:0;{NB}">&nbsp;</td></tr>'
+                     f'</table>')
+            above_cells.append(f'<td width="{BAR_W}" height="{ZONE_H}" bgcolor="#ffffff" valign="bottom" style="width:{BAR_W}px;height:{ZONE_H}px;background-color:#ffffff;vertical-align:bottom;padding:0;{NB}">{inner}</td>')
+        else:
+            above_cells.append(f'<td width="{BAR_W}" height="{ZONE_H}" bgcolor="#ffffff" style="width:{BAR_W}px;height:{ZONE_H}px;background-color:#ffffff;font-size:0;line-height:0;{NB}">&nbsp;</td>')
+
+        inner_below = f'<table width="{BAR_W}" border="0" cellpadding="0" cellspacing="0" style="width:{BAR_W}px;border-collapse:collapse;">'
+        if spacer_h > 0:
+            inner_below += f'<tr><td width="{BAR_W}" height="{spacer_h}" bgcolor="#ffffff" style="width:{BAR_W}px;height:{spacer_h}px;background-color:#ffffff;font-size:0;line-height:0;{NB}">&nbsp;</td></tr>'
+        inner_below += (f'<tr><td width="{BAR_W}" height="{bar_below}" bgcolor="{fill}" style="width:{BAR_W}px;height:{bar_below}px;background-color:{fill};font-size:0;line-height:0;{NB}">&nbsp;</td></tr></table>')
+        below_cells.append(f'<td width="{BAR_W}" height="{ZONE_H}" valign="bottom" style="width:{BAR_W}px;height:{ZONE_H}px;vertical-align:bottom;padding:0;{NB}">{inner_below}</td>')
+
+        date_cells.append(f'<td width="{BAR_W}" align="center" style="width:{BAR_W}px;text-align:center;font-size:10px;color:#374151;padding-top:6px;{NB}">{label}</td>')
+
+    lbl_col_e = f'<td width="35" style="width:35px;{NB}"></td>'
+    lbl_col_w = f'<td width="35" bgcolor="#ffffff" style="width:35px;background-color:#ffffff;font-size:0;line-height:0;{NB}">&nbsp;</td>'
+
+    row0 = '<tr>' + ''.join(label_cells) + lbl_col_e + '</tr>'
+    row1 = '<tr>' + ''.join(above_cells) + lbl_col_w + '</tr>'
+    row2 = (f'<tr><td colspan="{n_cols}" height="2" style="height:2px;border-bottom:2px dashed #dc2626;font-size:0;line-height:0;"></td>'
+            f'<td width="35" height="2" style="width:35px;height:2px;border-bottom:2px dashed #dc2626;padding:0 0 2px 4px;font-size:10px;color:#dc2626;font-weight:bold;vertical-align:bottom;white-space:nowrap;">50%</td></tr>')
+    row3 = '<tr>' + ''.join(below_cells) + lbl_col_e + '</tr>'
+    row4 = f'<tr><td colspan="{n_cols + 1}" height="2" bgcolor="#d1d5db" style="height:2px;background-color:#d1d5db;font-size:0;line-height:0;">&nbsp;</td></tr>'
+    row5 = '<tr>' + ''.join(date_cells) + lbl_col_e + '</tr>'
+
+    chart_table = (f'<table width="{total_w}" border="0" cellpadding="0" cellspacing="0" style="width:{total_w}px;border-collapse:collapse;">'
+                   f'{row0}{row1}{row2}{row3}{row4}{row5}</table>')
+
+    return (
+        '<table width="600" border="0" cellpadding="0" cellspacing="0" style="font-family:Arial,sans-serif;margin:16px 0;border:1px solid #e5e7eb;">'
+        '<tr><td style="padding:12px 16px;background-color:#f9fafb;border-bottom:1px solid #e5e7eb;">'
+        f'<span style="font-size:13px;font-weight:bold;color:#111827;">&#128200; CoCo Adoption % &#8212; {n}-Week Trend</span>'
+        f'&nbsp;&nbsp;<span style="font-size:12px;color:{pct_color};font-weight:bold;">Current: {current_pct:.1f}% {arrow}</span>'
+        '</td></tr>'
+        f'<tr><td style="padding:8px 16px 8px;background-color:#ffffff;">{chart_table}'
+        '<table width="100%" border="0" cellpadding="0" cellspacing="0" style="margin-top:6px;">'
+        '<tr><td style="font-size:10px;color:#6b7280;padding-top:2px;">'
+        '&#8212;&#8212; Dashed red = 50% OKR target &nbsp;&middot;&nbsp; <span style="color:#16a34a;font-weight:bold;">&#9646;</span> = current week'
+        '</td></tr></table></td></tr></table>'
+    )
+
+
+def inject_heatmap(html_email: str, heatmap_html: str) -> str:
+    """Insert heat map after the Executive Summary bullet list."""
+    import re
+    match = re.compile(r'(EXECUTIVE SUMMARY.*?</ul>)', re.DOTALL | re.IGNORECASE).search(html_email)
+    if match:
+        pos = match.end()
+        return html_email[:pos] + heatmap_html + html_email[pos:]
+    okr_match = re.search(r'(<h[23][^>]*>[^<]*OKR PROGRESS[^<]*</h[23]>)', html_email, re.IGNORECASE)
+    if okr_match:
+        return html_email[:okr_match.start()] + heatmap_html + html_email[okr_match.start():]
+    return html_email.replace('<body>', '<body>' + heatmap_html, 1)
+
+
+def inject_after_okr_table(html_email: str, chart_html: str) -> str:
+    """Insert trend chart immediately after the OKR PROGRESS table."""
+    import re
+    m = re.compile(r'(OKR PROGRESS.*?</table>)', re.DOTALL | re.IGNORECASE).search(html_email)
+    if m:
+        pos = m.end()
+        return html_email[:pos] + chart_html + html_email[pos:]
+    pos = html_email.find('</table>')
+    if pos >= 0:
+        return html_email[:pos + len('</table>')] + chart_html + html_email[pos + len('</table>'):]
+    return html_email + chart_html
 
 
 def md_to_html(md_text):
@@ -102,6 +338,7 @@ with st.spinner("Loading data..."):
     Q2_END = '2026-07-31'
 
     recent_wins_data = get_recent_wins(conn, MANAGED_PARTNERS, Q2_START, Q2_END)
+    trend_data = get_adoption_trend_4w(conn, tuple(MANAGED_PARTNERS), 'NoAM')
 
     # Q2 Credit consumption for managed partners
     credit_data = get_partner_credit_consumption(conn, MANAGED_PARTNERS, Q2_START, Q2_END)
@@ -747,6 +984,22 @@ Write the executive briefing:"""
     st.markdown("---")
 
     html_email = md_to_html(full_response)
+
+    # Inject heat map after Executive Summary bullets
+    if len(managed_q2_partners) > 0:
+        heatmap_html = generate_heatmap_html(adoption_wow_data, managed_q2_partners)
+        html_email = inject_heatmap(html_email, heatmap_html)
+
+    # Inject 4-week trend chart after OKR Progress table
+    if trend_data:
+        # Override the last bar with IS_COCO_FINAL rate so chart matches scorecard
+        _live_trend = list(trend_data)
+        if len(managed_q2_stats) > 0:
+            _q = managed_q2_stats.iloc[0]
+            _final_pct = round(float(_q['COCO_UCS']) * 100.0 / max(float(_q['TOTAL_UCS']), 1), 1)
+            _live_trend[-1] = (_live_trend[-1][0], _final_pct)
+        trend_chart_html = generate_trend_chart_html(_live_trend)
+        html_email = inject_after_okr_table(html_email, trend_chart_html)
 
     to_lines = [l.strip() for l in recipients_input.strip().splitlines() if l.strip()] if recipients_input.strip() else []
     to_emails = [name_to_email(n) for n in to_lines]

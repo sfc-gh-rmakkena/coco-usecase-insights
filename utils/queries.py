@@ -1179,3 +1179,72 @@ def get_recent_wins(_conn, partners, start_date, end_date, days_back=7):
     LIMIT 15
     """
     return _conn.query(query)
+
+@st.cache_data(ttl=timedelta(minutes=30))
+def get_adoption_trend_4w(_conn, partners: tuple, region: str = "NoAM") -> list:
+    """Return [(week_label, coco_pct), ...] for last 4 weeks from OKR_PARTNER_WEEKLY_ADOPTION.
+    Used to feed the 4-week trend bar chart in the exec email.
+    """
+    ps = "','".join(partners)
+
+    if region == "All":
+        partner_where = f"w.PARTNER_NAME IN ('{ps}')"
+        region_cte = ""
+    else:
+        region_theaters_sql = {
+            "NoAM": "('AMSExpansion','USMajors','AMSAcquisition','USPubSec')",
+            "EMEA": "('EMEA')",
+            "APJ":  "('APJ')",
+        }.get(region, "('AMSExpansion','USMajors','AMSAcquisition','USPubSec')")
+        region_cte = f"""partner_theater AS (
+            SELECT PARTNER_NAME,
+                   CASE
+                       WHEN THEATER_NAME IN ('AMSExpansion','USMajors','AMSAcquisition','USPubSec') THEN 'NoAM'
+                       WHEN THEATER_NAME = 'EMEA' THEN 'EMEA'
+                       WHEN THEATER_NAME = 'APJ'  THEN 'APJ'
+                       ELSE 'Other'
+                   END AS REGION,
+                   COUNT(*) AS UC_CNT
+            FROM {DT_OKR}
+            WHERE PARTNER_NAME IN ('{ps}')
+            GROUP BY 1, 2
+            QUALIFY ROW_NUMBER() OVER (PARTITION BY PARTNER_NAME ORDER BY UC_CNT DESC) = 1
+        ),"""
+        partner_where = (
+            f"w.PARTNER_NAME IN ('{ps}') "
+            f"AND w.PARTNER_NAME IN (SELECT PARTNER_NAME FROM partner_theater WHERE REGION = '{region}')"
+        )
+
+    cte_prefix = f"WITH {region_cte}" if region_cte else "WITH "
+    query = f"""
+        {cte_prefix}
+        weekly_raw AS (
+            SELECT w.WEEK_START,
+                SUM(w.TOTAL_UCS) AS total,
+                SUM(w.COCO_UCS)  AS coco
+            FROM {SCHEMA}.OKR_PARTNER_WEEKLY_ADOPTION w
+            WHERE {partner_where}
+            GROUP BY 1
+        ),
+        cumulative AS (
+            SELECT WEEK_START,
+                SUM(coco)  OVER (ORDER BY WEEK_START ROWS UNBOUNDED PRECEDING) AS cum_coco,
+                SUM(total) OVER (ORDER BY WEEK_START ROWS UNBOUNDED PRECEDING) AS cum_total,
+                ROW_NUMBER() OVER (ORDER BY WEEK_START DESC) AS rn
+            FROM weekly_raw
+        )
+        SELECT WEEK_START, ROUND(cum_coco * 100.0 / NULLIF(cum_total, 0), 1) AS COCO_PCT
+        FROM cumulative
+        WHERE rn <= 4
+        ORDER BY WEEK_START ASC
+    """
+    import pandas as pd
+    df = _conn.query(query)
+    result = []
+    for _, row in df.iterrows():
+        try:
+            label = f"{pd.Timestamp(row['WEEK_START']).month}/{pd.Timestamp(row['WEEK_START']).day}"
+        except Exception:
+            label = str(row['WEEK_START'])[:10]
+        result.append((label, float(row['COCO_PCT']) if pd.notna(row['COCO_PCT']) else 0.0))
+    return result
