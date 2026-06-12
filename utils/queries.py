@@ -1122,7 +1122,17 @@ def get_recent_wins(_conn, partners, start_date, end_date, days_back=7):
     """
     partners_sql = "','".join(partners)
     query = f"""
-    WITH recent AS (
+    WITH coco_active_accounts AS (
+        SELECT DISTINCT UPPER(f.salesforce_account_name) AS ACCOUNT_NAME_UPPER
+        FROM snowscience.llm.cortex_code_user_day_fact f
+        WHERE f.ds >= '{start_date}'
+        AND f.snowflake_account_type = 'Customer' AND f.total_daily_requests > 0
+        AND f.ACCOUNT_ID IN (
+            SELECT DISTINCT ACCOUNT_ID FROM SNOWSCIENCE.LLM.CORTEX_CODE_REQUEST_STG
+            WHERE ds >= '{start_date}' AND SKILL_CHOICE IS NOT NULL AND SKILL_CHOICE != ''
+        )
+    ),
+    recent AS (
         SELECT
             uc.ACCOUNT_NAME,
             uc.PARTNER_NAME,
@@ -1147,9 +1157,10 @@ def get_recent_wins(_conn, partners, start_date, end_date, days_back=7):
                 ELSE 'Other'
             END AS WIN_TYPE
         FROM {DT_OKR} uc
+        LEFT JOIN coco_active_accounts caa ON UPPER(uc.ACCOUNT_NAME) = caa.ACCOUNT_NAME_UPPER
         WHERE uc.PARTNER_NAME IN ('{partners_sql}')
         AND uc.THEATER_NAME IN ('AMSExpansion','USMajors','AMSAcquisition','USPubSec')
-        AND uc.IS_COCO = TRUE
+        AND (uc.IS_COCO = TRUE OR caa.ACCOUNT_NAME_UPPER IS NOT NULL)
         AND (
             (uc.USE_CASE_STAGE IN ('3 - Technical / Business Validation','4 - Use Case Won / Migration Plan')
                 AND uc.DECISION_DATE >= '{start_date}' AND uc.DECISION_DATE <= '{end_date}')

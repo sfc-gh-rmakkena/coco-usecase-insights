@@ -105,9 +105,9 @@ with tab_summary:
     if wow_overall is not None and len(wow_overall) > 0:
         row = wow_overall.iloc[0]
         if pd.notna(row.get('WOW_COCO_UCS')):
-            wow_coco_ucs_delta = f"{int(row['WOW_COCO_UCS']):+d} WoW"
+            wow_coco_ucs_delta = f"{int(row['WOW_COCO_UCS']):+d} vs last week"
         if pd.notna(row.get('WOW_COCO_PCT')):
-            wow_coco_pct_delta = f"{float(row['WOW_COCO_PCT']):+.1f}% WoW"
+            wow_coco_pct_delta = f"{float(row['WOW_COCO_PCT']):+.1f}% vs last week"
 
     c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Partners", total_partners)
@@ -166,7 +166,7 @@ with tab_summary:
             fig.update_layout(height=300)
             st.plotly_chart(fig, use_container_width=True)
         else:
-            # Fallback: SQL-based attribution (IS_COCO flag only, no account-level)
+            # Fallback: SQL-based attribution with account-level High confidence expansion
             sd = str(start_date)
             ed = str(end_date)
             tf = ""
@@ -179,12 +179,23 @@ with tab_summary:
             partner_list = coverage['PARTNER_NAME'].tolist()
             pf = f" AND uc.PARTNER_NAME IN ('{chr(39).join(partner_list)}')" if partner_list else ""
             source_query = f"""
+            WITH coco_active_accounts AS (
+                SELECT DISTINCT UPPER(f.salesforce_account_name) AS ACCOUNT_NAME_UPPER
+                FROM snowscience.llm.cortex_code_user_day_fact f
+                WHERE f.ds >= '{sd}' AND f.snowflake_account_type = 'Customer' AND f.total_daily_requests > 0
+                AND f.ACCOUNT_ID IN (
+                    SELECT DISTINCT ACCOUNT_ID FROM SNOWSCIENCE.LLM.CORTEX_CODE_REQUEST_STG
+                    WHERE ds >= '{sd}' AND SKILL_CHOICE IS NOT NULL AND SKILL_CHOICE != ''
+                )
+            )
             SELECT
                 SUM(CASE WHEN uc.IS_COCO AND uc.COCO_SOURCE = 'SE_COMMENTS' THEN 1 ELSE 0 END) AS SE_COMMENTS,
                 SUM(CASE WHEN uc.IS_COCO AND uc.COCO_SOURCE = 'PARTNER_COMMENTS' THEN 1 ELSE 0 END) AS PSE_COMMENTS,
                 SUM(CASE WHEN uc.IS_COCO AND uc.COCO_SOURCE = 'FEATURE_FLAG' THEN 1 ELSE 0 END) AS FEATURE_FLAG,
-                SUM(CASE WHEN NOT uc.IS_COCO THEN 1 ELSE 0 END) AS NOT_COCO
+                SUM(CASE WHEN NOT uc.IS_COCO AND caa.ACCOUNT_NAME_UPPER IS NOT NULL THEN 1 ELSE 0 END) AS ACCOUNT_HIGH,
+                SUM(CASE WHEN NOT uc.IS_COCO AND caa.ACCOUNT_NAME_UPPER IS NULL THEN 1 ELSE 0 END) AS NOT_COCO
             FROM TEMP.COCO_PARTNER_ADOPTION.DT_OKR_USE_CASES uc
+            LEFT JOIN coco_active_accounts caa ON UPPER(uc.ACCOUNT_NAME) = caa.ACCOUNT_NAME_UPPER
             WHERE (
                 (uc.USE_CASE_STAGE IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan') AND uc.DECISION_DATE >= '{sd}' AND uc.DECISION_DATE <= '{ed}')
                 OR (uc.USE_CASE_STAGE IN ('5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed') AND uc.GO_LIVE_DATE >= '{sd}' AND uc.GO_LIVE_DATE <= '{ed}')
@@ -193,9 +204,9 @@ with tab_summary:
             source_split = conn.query(source_query)
             if len(source_split) > 0:
                 ss = source_split.iloc[0]
-                labels = ['SE Comments', 'PSE Comments', 'Feature Flag', 'Not CoCo']
-                values = [int(ss['SE_COMMENTS']), int(ss['PSE_COMMENTS']), int(ss['FEATURE_FLAG']), int(ss['NOT_COCO'])]
-                colors = ['#2ecc71', '#f39c12', '#9b59b6', '#e0e0e0']
+                labels = ['SE Comments', 'PSE Comments', 'Feature Flag', 'Account (High)', 'Not CoCo']
+                values = [int(ss['SE_COMMENTS']), int(ss['PSE_COMMENTS']), int(ss['FEATURE_FLAG']), int(ss['ACCOUNT_HIGH']), int(ss['NOT_COCO'])]
+                colors = ['#2ecc71', '#f39c12', '#9b59b6', '#3498db', '#e0e0e0']
                 filtered_slices = [(l, v, c) for l, v, c in zip(labels, values, colors) if v > 0]
                 fig = go.Figure(data=[go.Pie(
                     labels=[f[0] for f in filtered_slices],
@@ -262,9 +273,13 @@ with tab_summary:
         partners_sql = "','".join(partner_list)
         attribution_query = f"""
         WITH coco_active_accounts AS (
-            SELECT DISTINCT UPPER(salesforce_account_name) AS ACCOUNT_NAME_UPPER
-            FROM snowscience.llm.cortex_code_user_day_fact
-            WHERE ds >= '{sd}' AND snowflake_account_type = 'Customer' AND total_daily_requests > 0
+            SELECT DISTINCT UPPER(f.salesforce_account_name) AS ACCOUNT_NAME_UPPER
+            FROM snowscience.llm.cortex_code_user_day_fact f
+            WHERE f.ds >= '{sd}' AND f.snowflake_account_type = 'Customer' AND f.total_daily_requests > 0
+            AND f.ACCOUNT_ID IN (
+                SELECT DISTINCT ACCOUNT_ID FROM SNOWSCIENCE.LLM.CORTEX_CODE_REQUEST_STG
+                WHERE ds >= '{sd}' AND SKILL_CHOICE IS NOT NULL AND SKILL_CHOICE != ''
+            )
         )
         SELECT 
             uc.PARTNER_NAME,

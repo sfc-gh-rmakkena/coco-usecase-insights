@@ -106,32 +106,30 @@ with st.spinner("Loading data..."):
     # Q2 Credit consumption for managed partners
     credit_data = get_partner_credit_consumption(conn, MANAGED_PARTNERS, Q2_START, Q2_END)
 
-    # GSI global coverage — all regions (not NoAM-filtered)
-    GSI_NAMES = "','".join(['Accenture','Capgemini Technologies LLC','Cognizant Technology Solutions US Corp',
-                            'Deloitte Consulting','EY','Ernst & Young (EY)','IBM'])
-    gsi_global_data = conn.query(f"""
-        SELECT
-            CASE
-                WHEN THEATER_NAME IN ('AMSExpansion','USMajors','AMSAcquisition','USPubSec') THEN 'NoAM'
-                WHEN THEATER_NAME = 'EMEA' THEN 'EMEA'
-                WHEN THEATER_NAME = 'APJ' THEN 'APJ'
-                ELSE 'Other'
-            END AS REGION,
-            COUNT(*) AS TOTAL_UCS,
-            SUM(IS_COCO::INT) AS COCO_UCS,
-            ROUND(SUM(IS_COCO::INT)*100.0/NULLIF(COUNT(*),0),1) AS COCO_PCT,
-            COALESCE(SUM(USE_CASE_EACV),0) AS TOTAL_EACV
-        FROM TEMP.COCO_PARTNER_ADOPTION.DT_OKR_USE_CASES
-        WHERE PARTNER_NAME IN ('{GSI_NAMES}')
-        AND (
-            (USE_CASE_STAGE IN ('3 - Technical / Business Validation','4 - Use Case Won / Migration Plan')
-                AND DECISION_DATE >= '{Q2_START}' AND DECISION_DATE <= '{Q2_END}')
-            OR (USE_CASE_STAGE IN ('5 - Implementation In Progress','6 - Implementation Complete','7 - Deployed')
-                AND GO_LIVE_DATE >= '{Q2_START}' AND GO_LIVE_DATE <= '{Q2_END}')
+    # GSI global coverage — all regions (not NoAM-filtered), using IS_COCO_FINAL
+    GSI_LIST = ['Accenture','Capgemini Technologies LLC','Cognizant Technology Solutions US Corp',
+                'Deloitte Consulting','EY','Ernst & Young (EY)','IBM']
+    gsi_bulk_conf = get_bulk_confidence_scores(conn, GSI_LIST, Q2_START, Q2_END)
+    if len(gsi_bulk_conf) > 0:
+        gsi_bulk_conf['IS_COCO_FINAL'] = (
+            (gsi_bulk_conf['IS_COCO'] == True) |
+            (gsi_bulk_conf['CONFIDENCE_BAND'].isin(['High']))
         )
-        GROUP BY 1
-        ORDER BY TOTAL_UCS DESC
-    """)
+        gsi_bulk_conf['REGION'] = gsi_bulk_conf['THEATER_NAME'].map(
+            lambda t: 'NoAM' if t in ('AMSExpansion','USMajors','AMSAcquisition','USPubSec')
+                      else ('EMEA' if t == 'EMEA' else ('APJ' if t == 'APJ' else 'Other'))
+        )
+        gsi_global_data = gsi_bulk_conf.groupby('REGION').agg(
+            TOTAL_UCS=('USE_CASE_ID', 'count'),
+            COCO_UCS=('IS_COCO_FINAL', 'sum'),
+            TOTAL_EACV=('USE_CASE_EACV', 'sum'),
+        ).reset_index()
+        gsi_global_data['COCO_PCT'] = round(
+            gsi_global_data['COCO_UCS'] * 100.0 / gsi_global_data['TOTAL_UCS'].replace(0, float('nan')), 1
+        ).fillna(0)
+        gsi_global_data = gsi_global_data.sort_values('TOTAL_UCS', ascending=False)
+    else:
+        gsi_global_data = pd.DataFrame(columns=['REGION','TOTAL_UCS','COCO_UCS','COCO_PCT','TOTAL_EACV'])
 
     managed_stage_data = conn.query(f"""
         SELECT 
@@ -465,9 +463,28 @@ if len(gsi_global_data) > 0:
     for _, row in gsi_global_data.iterrows():
         gsi_global_ctx += f"  {row['REGION']}: {int(row['TOTAL_UCS'])} UCs, {int(row['COCO_UCS'])} CoCo ({row['COCO_PCT']}%), ${row['TOTAL_EACV']/1_000_000:.1f}M\n"
 
-# CoCo adoption WoW context (from OKR_PARTNER_WEEKLY_ADOPTION)
+# CoCo adoption WoW context — current values from IS_COCO_FINAL, deltas from weekly snapshot
 adoption_wow_ctx = ""
 adoption_wow_partner_ctx = ""
+
+# Build IS_COCO_FINAL per-partner lookup from managed_bulk_conf (same basis as scorecard)
+_live_lookup = {}
+if len(managed_bulk_conf) > 0:
+    _live_partner = (
+        managed_bulk_conf.groupby('PARTNER_NAME')
+        .agg(TOTAL_UCS=('USE_CASE_ID', 'count'), COCO_UCS=('IS_COCO_FINAL', 'sum'))
+        .reset_index()
+    )
+    _live_partner['COCO_PCT'] = round(
+        _live_partner['COCO_UCS'] * 100.0 / _live_partner['TOTAL_UCS'].replace(0, float('nan')), 1
+    ).fillna(0)
+    _live_lookup = _live_partner.set_index('PARTNER_NAME').to_dict('index')
+
+# IS_COCO_FINAL overall totals from managed_q2_stats
+_live_total = int(managed_q2_stats.iloc[0]['TOTAL_UCS']) if len(managed_q2_stats) > 0 else 0
+_live_coco  = int(managed_q2_stats.iloc[0]['COCO_UCS'])  if len(managed_q2_stats) > 0 else 0
+_live_pct   = round(_live_coco * 100.0 / _live_total, 1) if _live_total > 0 else 0.0
+
 if len(adoption_wow_data) > 0:
     overall_row = adoption_wow_data[adoption_wow_data['PARTNER_NAME'].isna()]
     partner_rows = adoption_wow_data[adoption_wow_data['PARTNER_NAME'].notna()].sort_values('COCO_PCT', ascending=False)
@@ -477,15 +494,19 @@ if len(adoption_wow_data) > 0:
         wow_ucs = f"{int(ow['WOW_COCO_UCS']):+d}" if pd.notna(ow.get('WOW_COCO_UCS')) else "N/A"
         adoption_wow_ctx = (
             f"  Week of {ow['WEEK_START']}:\n"
-            f"  Overall CoCo Adoption %: {ow['COCO_PCT']}% (WoW: {wow_pct})\n"
-            f"  Overall CoCo UCs: {int(ow['COCO_UCS'])} (WoW: {wow_ucs})\n"
+            f"  Overall CoCo Adoption %: {_live_pct}% (WoW: {wow_pct})\n"
+            f"  Overall CoCo UCs: {_live_coco} of {_live_total} (WoW: {wow_ucs})\n"
         )
     for _, pr in partner_rows.iterrows():
         if pr['PARTNER_NAME'] not in MANAGED_PARTNERS:
             continue
         wow_pct = f"{float(pr['WOW_COCO_PCT']):+.1f}%" if pd.notna(pr.get('WOW_COCO_PCT')) else "N/A"
         wow_ucs = f"{int(pr['WOW_COCO_UCS']):+d}" if pd.notna(pr.get('WOW_COCO_UCS')) else "N/A"
-        adoption_wow_partner_ctx += f"  {pr['PARTNER_NAME']}: {pr['COCO_PCT']}% CoCo ({int(pr['COCO_UCS'])}/{int(pr['TOTAL_UCS'])} UCs), WoW Δ={wow_pct}, Δ UCs={wow_ucs}\n"
+        lv = _live_lookup.get(pr['PARTNER_NAME'], {})
+        live_pct   = lv.get('COCO_PCT',  pr['COCO_PCT'])
+        live_coco  = lv.get('COCO_UCS',  pr['COCO_UCS'])
+        live_total = lv.get('TOTAL_UCS', pr['TOTAL_UCS'])
+        adoption_wow_partner_ctx += f"  {pr['PARTNER_NAME']}: {live_pct}% CoCo ({int(live_coco)}/{int(live_total)} UCs), WoW Δ={wow_pct}, Δ UCs={wow_ucs}\n"
 else:
     adoption_wow_ctx = "  No adoption WoW data yet (first snapshot seeded, next available after Sunday task run).\n"
     adoption_wow_partner_ctx = adoption_wow_ctx
