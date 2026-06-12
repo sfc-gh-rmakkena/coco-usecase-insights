@@ -11,7 +11,7 @@ from utils.queries import (
     get_partner_workload_cross, get_regional_themes, get_regional_comment_narratives,
     get_partner_coco_coverage, get_partner_credit_consumption, get_adoption_overview,
     get_bulk_confidence_scores, get_pipeline_wow, get_gsi_wow, get_noam_si_wow,
-    get_coco_adoption_wow, get_recent_wins, get_adoption_trend_4w,
+    get_recent_wins, get_coco_final_wow, get_coco_final_trend_4w, save_coco_final_snapshot,
 )
 from utils.cortex_helpers import cortex_complete
 
@@ -71,16 +71,18 @@ def generate_heatmap_html(adoption_wow_data: pd.DataFrame, managed_q2_partners: 
     pct_map: dict = {}
     wow_map: dict = {}
 
+    # Primary: IS_COCO_FINAL from managed_q2_partners (same basis as scorecard)
+    if len(managed_q2_partners) > 0:
+        for _, row in managed_q2_partners.iterrows():
+            pct_map[str(row['PARTNER_NAME'])] = float(row.get('COCO_PCT') or 0)
+
+    # WoW delta from snapshot (only source for deltas)
     if len(adoption_wow_data) > 0:
         for _, row in adoption_wow_data[adoption_wow_data['PARTNER_NAME'].notna()].iterrows():
             name = str(row['PARTNER_NAME'])
-            pct_map[name] = float(row.get('COCO_PCT') or 0)
             wow_val = row.get('WOW_COCO_PCT')
             wow_map[name] = float(wow_val) if pd.notna(wow_val) else None
-
-    if len(managed_q2_partners) > 0:
-        for _, row in managed_q2_partners.iterrows():
-            name = str(row['PARTNER_NAME'])
+            # Fallback pct for partners absent from managed_q2_partners
             if name not in pct_map:
                 pct_map[name] = float(row.get('COCO_PCT') or 0)
 
@@ -330,7 +332,7 @@ with st.spinner("Loading data..."):
     pipeline_wow = get_pipeline_wow(conn)
     gsi_wow = get_gsi_wow(conn)
     noam_si_wow = get_noam_si_wow(conn)
-    adoption_wow_data = get_coco_adoption_wow(conn, partners=MANAGED_PARTNERS)
+    adoption_wow_data = get_coco_final_wow(conn, partners=MANAGED_PARTNERS)
 
     # Managed partner stage EACV breakdown — Q2 ONLY (May 1 - Jul 31, 2026)
     managed_partners_sql = "','".join(MANAGED_PARTNERS)
@@ -338,7 +340,7 @@ with st.spinner("Loading data..."):
     Q2_END = '2026-07-31'
 
     recent_wins_data = get_recent_wins(conn, MANAGED_PARTNERS, Q2_START, Q2_END)
-    trend_data = get_adoption_trend_4w(conn, tuple(MANAGED_PARTNERS), 'NoAM')
+    trend_data = get_coco_final_trend_4w(conn, tuple(MANAGED_PARTNERS), 'NoAM')
 
     # Q2 Credit consumption for managed partners
     credit_data = get_partner_credit_consumption(conn, MANAGED_PARTNERS, Q2_START, Q2_END)
@@ -473,6 +475,14 @@ with st.spinner("Loading data..."):
         managed_q2_partners = pd.DataFrame(columns=['PARTNER_NAME', 'TOTAL_UCS', 'COCO_UCS', 'COCO_PCT', 'TOTAL_EACV', 'AI', 'DE', 'ANALYTICS'])
 
 # Executive email always uses MANAGED_PARTNERS list, ignoring sidebar partner filter
+# Auto-save IS_COCO_FINAL (Def C) weekly snapshot — idempotent, first load each week triggers save
+if len(managed_bulk_conf) > 0:
+    try:
+        _saved = save_coco_final_snapshot(conn, managed_bulk_conf)
+        if _saved:
+            st.toast("Weekly IS_COCO_FINAL snapshot saved", icon="✅")
+    except Exception as _e:
+        st.toast(f"Snapshot save skipped: {_e}", icon="⚠️")
 # Filter to managed partners only for executive email context
 partner_data = partner_data[partner_data['PARTNER_NAME'].isin(MANAGED_PARTNERS)]
 comment_data = comment_data[comment_data['PARTNER_NAME'].isin(MANAGED_PARTNERS)]

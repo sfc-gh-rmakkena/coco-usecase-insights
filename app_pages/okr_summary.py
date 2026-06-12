@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
-from utils.queries import get_partner_coco_coverage, get_okr_stage_breakdown, get_partner_credit_consumption, get_bulk_confidence_scores, get_coco_adoption_wow
+from utils.queries import get_partner_coco_coverage, get_okr_stage_breakdown, get_partner_credit_consumption, get_bulk_confidence_scores, get_coco_final_wow
 from utils import resolve_partner_filter
 
 conn = st.session_state.conn
@@ -23,7 +23,7 @@ with st.spinner("Loading CoCo coverage data..."):
     coverage = get_partner_coco_coverage(conn, region=region, start_date=str(start_date), end_date=str(end_date), include_account_coco=False, confidence=None)
     stage_breakdown = get_okr_stage_breakdown(conn, region=region, start_date=str(start_date), end_date=str(end_date), include_account_coco=False, confidence=None)
     credit_data = get_partner_credit_consumption(conn, coverage['PARTNER_NAME'].tolist(), str(start_date), str(end_date))
-    adoption_wow = get_coco_adoption_wow(conn)
+    adoption_wow = get_coco_final_wow(conn)
 
 if len(coverage) == 0:
     st.warning("No data available for the selected filters.")

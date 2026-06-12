@@ -1075,47 +1075,6 @@ def get_noam_si_wow(_conn):
     return _conn.query(query)
 
 @st.cache_data(ttl=timedelta(minutes=30))
-def get_coco_adoption_wow(_conn, partners=None):
-    """WoW CoCo adoption delta from OKR_PARTNER_WEEKLY_ADOPTION.
-    Returns per-partner rows + one overall row (PARTNER_NAME IS NULL).
-    WoW columns are NULL when fewer than 2 weekly snapshots exist.
-    """
-    partner_filter = ""
-    if partners:
-        ps = "','".join(partners)
-        partner_filter = f"AND (PARTNER_NAME IN ('{ps}') OR PARTNER_NAME IS NULL)"
-    query = f"""
-    WITH ranked AS (
-        SELECT *,
-            ROW_NUMBER() OVER (
-                PARTITION BY COALESCE(PARTNER_NAME, '__OVERALL__')
-                ORDER BY WEEK_START DESC
-            ) AS rn
-        FROM {SCHEMA}.OKR_PARTNER_WEEKLY_ADOPTION
-        WHERE 1=1 {partner_filter}
-    )
-    SELECT
-        cur.PARTNER_NAME,
-        cur.WEEK_START,
-        prev.WEEK_START                           AS PREV_WEEK,
-        cur.TOTAL_UCS,
-        cur.COCO_UCS,
-        cur.COCO_PCT,
-        cur.TOTAL_EACV,
-        cur.COCO_EACV,
-        cur.COCO_UCS  - prev.COCO_UCS            AS WOW_COCO_UCS,
-        ROUND(cur.COCO_PCT - prev.COCO_PCT, 1)   AS WOW_COCO_PCT,
-        cur.COCO_EACV - prev.COCO_EACV           AS WOW_COCO_EACV
-    FROM ranked cur
-    LEFT JOIN ranked prev
-        ON COALESCE(cur.PARTNER_NAME, '__OVERALL__') = COALESCE(prev.PARTNER_NAME, '__OVERALL__')
-        AND cur.rn = 1 AND prev.rn = 2
-    WHERE cur.rn = 1
-    ORDER BY cur.PARTNER_NAME NULLS FIRST
-    """
-    return _conn.query(query)
-
-@st.cache_data(ttl=timedelta(minutes=30))
 def get_recent_wins(_conn, partners, start_date, end_date, days_back=7):
     """Fetch recent deployments, competitive wins, and high-EACV CoCo UCs from last N days.
     Used to feed fresh content into the Notable Wins section of the exec email.
@@ -1183,7 +1142,7 @@ def get_recent_wins(_conn, partners, start_date, end_date, days_back=7):
 @st.cache_data(ttl=timedelta(minutes=30))
 def get_adoption_trend_4w(_conn, partners: tuple, region: str = "NoAM") -> list:
     """Return [(week_label, coco_pct), ...] for last 4 weeks from OKR_PARTNER_WEEKLY_ADOPTION.
-    Used to feed the 4-week trend bar chart in the exec email.
+    Note: use get_coco_final_trend_4w for Def C (IS_COCO_FINAL) values.
     """
     ps = "','".join(partners)
 
@@ -1236,6 +1195,178 @@ def get_adoption_trend_4w(_conn, partners: tuple, region: str = "NoAM") -> list:
         SELECT WEEK_START, ROUND(cum_coco * 100.0 / NULLIF(cum_total, 0), 1) AS COCO_PCT
         FROM cumulative
         WHERE rn <= 4
+        ORDER BY WEEK_START ASC
+    """
+    import pandas as pd
+    df = _conn.query(query)
+    result = []
+    for _, row in df.iterrows():
+        try:
+            label = f"{pd.Timestamp(row['WEEK_START']).month}/{pd.Timestamp(row['WEEK_START']).day}"
+        except Exception:
+            label = str(row['WEEK_START'])[:10]
+        result.append((label, float(row['COCO_PCT']) if pd.notna(row['COCO_PCT']) else 0.0))
+    return result
+
+
+def save_coco_final_snapshot(_conn, bulk_conf_df) -> bool:
+    """Save this week's IS_COCO_FINAL (Def C) snapshot. Idempotent — skips if already saved.
+    bulk_conf_df must have IS_COCO_FINAL, PARTNER_NAME, USE_CASE_ID, USE_CASE_EACV columns.
+    Returns True if saved, False if already exists for this week.
+    """
+    import pandas as pd
+    week_start = pd.Timestamp.now().to_period('W').start_time.date().strftime('%Y-%m-%d')
+
+    existing = _conn.query(f"""
+        SELECT COUNT(*) AS CNT FROM {SCHEMA}.IS_COCO_FINAL_WEEKLY_SNAPSHOT
+        WHERE WEEK_START = '{week_start}'
+    """)
+    if existing.iloc[0]['CNT'] > 0:
+        return False
+
+    rows = []
+    for partner, grp in bulk_conf_df.groupby('PARTNER_NAME'):
+        coco = int(grp['IS_COCO_FINAL'].sum())
+        total = len(grp)
+        pct = round(coco * 100.0 / total, 1) if total > 0 else 0.0
+        eacv = float(grp['USE_CASE_EACV'].sum() or 0)
+        coco_eacv = float(grp.loc[grp['IS_COCO_FINAL'], 'USE_CASE_EACV'].sum() or 0)
+        safe_partner = partner.replace("'", "''")
+        rows.append(f"('{week_start}', '{safe_partner}', {total}, {coco}, {pct}, {eacv}, {coco_eacv})")
+
+    total_all = len(bulk_conf_df)
+    coco_all = int(bulk_conf_df['IS_COCO_FINAL'].sum())
+    pct_all = round(coco_all * 100.0 / total_all, 1) if total_all > 0 else 0.0
+    eacv_all = float(bulk_conf_df['USE_CASE_EACV'].sum() or 0)
+    coco_eacv_all = float(bulk_conf_df.loc[bulk_conf_df['IS_COCO_FINAL'], 'USE_CASE_EACV'].sum() or 0)
+    rows.append(f"('{week_start}', NULL, {total_all}, {coco_all}, {pct_all}, {eacv_all}, {coco_eacv_all})")
+
+    _conn.query(f"""
+        INSERT INTO {SCHEMA}.IS_COCO_FINAL_WEEKLY_SNAPSHOT
+            (WEEK_START, PARTNER_NAME, TOTAL_UCS, COCO_UCS, COCO_PCT, TOTAL_EACV, COCO_EACV)
+        VALUES {', '.join(rows)}
+    """)
+    return True
+
+
+@st.cache_data(ttl=timedelta(minutes=30))
+def get_coco_final_wow(_conn, partners=None):
+    """WoW CoCo adoption delta using IS_COCO_FINAL_WEEKLY_SNAPSHOT (Def C) as primary source,
+    falling back to OKR_PARTNER_WEEKLY_ADOPTION for historical weeks not yet in the new table.
+    """
+    partner_filter = ""
+    if partners:
+        ps = "','".join(partners)
+        partner_filter = f"AND (PARTNER_NAME IN ('{ps}') OR PARTNER_NAME IS NULL)"
+    query = f"""
+    WITH combined AS (
+        SELECT WEEK_START, PARTNER_NAME, TOTAL_UCS, COCO_UCS, COCO_PCT, TOTAL_EACV, COCO_EACV, 1 AS src_priority
+        FROM {SCHEMA}.IS_COCO_FINAL_WEEKLY_SNAPSHOT
+        WHERE 1=1 {partner_filter}
+        UNION ALL
+        SELECT WEEK_START, PARTNER_NAME, TOTAL_UCS, COCO_UCS, COCO_PCT, TOTAL_EACV, COCO_EACV, 2 AS src_priority
+        FROM {SCHEMA}.OKR_PARTNER_WEEKLY_ADOPTION
+        WHERE 1=1 {partner_filter}
+    ),
+    deduped AS (
+        SELECT WEEK_START, PARTNER_NAME, TOTAL_UCS, COCO_UCS, COCO_PCT, TOTAL_EACV, COCO_EACV
+        FROM combined
+        QUALIFY ROW_NUMBER() OVER (
+            PARTITION BY WEEK_START, COALESCE(PARTNER_NAME, '__OVERALL__')
+            ORDER BY src_priority
+        ) = 1
+    ),
+    ranked AS (
+        SELECT *,
+            ROW_NUMBER() OVER (
+                PARTITION BY COALESCE(PARTNER_NAME, '__OVERALL__')
+                ORDER BY WEEK_START DESC
+            ) AS rn
+        FROM deduped
+    )
+    SELECT
+        cur.PARTNER_NAME, cur.WEEK_START,
+        prev.WEEK_START                           AS PREV_WEEK,
+        cur.TOTAL_UCS, cur.COCO_UCS, cur.COCO_PCT,
+        cur.TOTAL_EACV, cur.COCO_EACV,
+        cur.COCO_UCS  - prev.COCO_UCS            AS WOW_COCO_UCS,
+        ROUND(cur.COCO_PCT - prev.COCO_PCT, 1)   AS WOW_COCO_PCT,
+        cur.COCO_EACV - prev.COCO_EACV           AS WOW_COCO_EACV
+    FROM ranked cur
+    LEFT JOIN ranked prev
+        ON COALESCE(cur.PARTNER_NAME, '__OVERALL__') = COALESCE(prev.PARTNER_NAME, '__OVERALL__')
+        AND cur.rn = 1 AND prev.rn = 2
+    WHERE cur.rn = 1
+    ORDER BY cur.PARTNER_NAME NULLS FIRST
+    """
+    return _conn.query(query)
+
+
+@st.cache_data(ttl=timedelta(minutes=30))
+def get_coco_final_trend_4w(_conn, partners: tuple, region: str = "NoAM") -> list:
+    """Return [(week_label, coco_pct), ...] for last 4 weeks.
+    Reads IS_COCO_FINAL_WEEKLY_SNAPSHOT (Def C) first; falls back to OKR_PARTNER_WEEKLY_ADOPTION
+    for historical weeks not yet in the new table.
+    """
+    ps = "','".join(partners)
+
+    if region == "All":
+        partner_where = f"w.PARTNER_NAME IN ('{ps}')"
+        cte_prefix = "WITH "
+    else:
+        region_theaters_sql = {
+            "NoAM": "('AMSExpansion','USMajors','AMSAcquisition','USPubSec')",
+            "EMEA": "('EMEA')", "APJ": "('APJ')",
+        }.get(region, "('AMSExpansion','USMajors','AMSAcquisition','USPubSec')")
+        cte_prefix = f"""WITH partner_theater AS (
+            SELECT PARTNER_NAME,
+                   CASE WHEN THEATER_NAME IN ('AMSExpansion','USMajors','AMSAcquisition','USPubSec') THEN 'NoAM'
+                        WHEN THEATER_NAME = 'EMEA' THEN 'EMEA'
+                        WHEN THEATER_NAME = 'APJ' THEN 'APJ' ELSE 'Other' END AS REGION,
+                   COUNT(*) AS UC_CNT
+            FROM {DT_OKR} WHERE PARTNER_NAME IN ('{ps}')
+            GROUP BY 1, 2
+            QUALIFY ROW_NUMBER() OVER (PARTITION BY PARTNER_NAME ORDER BY UC_CNT DESC) = 1
+        ),"""
+        partner_where = (
+            f"w.PARTNER_NAME IN ('{ps}') "
+            f"AND w.PARTNER_NAME IN (SELECT PARTNER_NAME FROM partner_theater WHERE REGION = '{region}')"
+        )
+
+    query = f"""
+        {cte_prefix}
+        -- IS_COCO_FINAL_WEEKLY_SNAPSHOT (Def C) has priority; OKR_PARTNER_WEEKLY_ADOPTION fills historical gaps
+        combined AS (
+            SELECT WEEK_START, PARTNER_NAME, TOTAL_UCS, COCO_UCS, 1 AS src_priority
+            FROM {SCHEMA}.IS_COCO_FINAL_WEEKLY_SNAPSHOT w
+            WHERE {partner_where}
+            UNION ALL
+            SELECT WEEK_START, PARTNER_NAME, TOTAL_UCS, COCO_UCS, 2 AS src_priority
+            FROM {SCHEMA}.OKR_PARTNER_WEEKLY_ADOPTION w
+            WHERE {partner_where}
+        ),
+        deduped AS (
+            SELECT WEEK_START, PARTNER_NAME, TOTAL_UCS, COCO_UCS
+            FROM combined
+            QUALIFY ROW_NUMBER() OVER (
+                PARTITION BY WEEK_START, COALESCE(PARTNER_NAME, '__OVERALL__')
+                ORDER BY src_priority
+            ) = 1
+        ),
+        weekly_raw AS (
+            SELECT WEEK_START, SUM(TOTAL_UCS) AS total, SUM(COCO_UCS) AS coco
+            FROM deduped
+            GROUP BY 1
+        ),
+        cumulative AS (
+            SELECT WEEK_START,
+                SUM(coco)  OVER (ORDER BY WEEK_START ROWS UNBOUNDED PRECEDING) AS cum_coco,
+                SUM(total) OVER (ORDER BY WEEK_START ROWS UNBOUNDED PRECEDING) AS cum_total,
+                ROW_NUMBER() OVER (ORDER BY WEEK_START DESC) AS rn
+            FROM weekly_raw
+        )
+        SELECT WEEK_START, ROUND(cum_coco * 100.0 / NULLIF(cum_total, 0), 1) AS COCO_PCT
+        FROM cumulative WHERE rn <= 4
         ORDER BY WEEK_START ASC
     """
     import pandas as pd
