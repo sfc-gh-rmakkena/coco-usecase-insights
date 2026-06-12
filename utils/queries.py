@@ -1209,6 +1209,55 @@ def get_adoption_trend_4w(_conn, partners: tuple, region: str = "NoAM") -> list:
     return result
 
 
+@st.cache_data(ttl=timedelta(minutes=30))
+def get_partners_at_target_trend_4w(_conn, partners: tuple, target_pct: float = 50.0) -> list:
+    """Return [(week_label, partners_at_target, total_partners), ...] for last 4 weeks.
+    Counts how many of the given partners had COCO_PCT >= target_pct each week.
+    Uses IS_COCO_FINAL_WEEKLY_SNAPSHOT (Def C) with OKR_PARTNER_WEEKLY_ADOPTION fallback.
+    """
+    ps = "','".join(partners)
+    total_partners = len(partners)
+    query = f"""
+    WITH combined AS (
+        SELECT WEEK_START, PARTNER_NAME, COCO_PCT, 1 AS src_priority
+        FROM {SCHEMA}.IS_COCO_FINAL_WEEKLY_SNAPSHOT
+        WHERE PARTNER_NAME IN ('{ps}')
+        UNION ALL
+        SELECT WEEK_START, PARTNER_NAME, COCO_PCT, 2 AS src_priority
+        FROM {SCHEMA}.OKR_PARTNER_WEEKLY_ADOPTION
+        WHERE PARTNER_NAME IN ('{ps}')
+    ),
+    deduped AS (
+        SELECT WEEK_START, PARTNER_NAME, COCO_PCT
+        FROM combined
+        QUALIFY ROW_NUMBER() OVER (
+            PARTITION BY WEEK_START, PARTNER_NAME
+            ORDER BY src_priority
+        ) = 1
+    ),
+    weekly AS (
+        SELECT WEEK_START,
+            COUNT(DISTINCT CASE WHEN COCO_PCT >= {target_pct} THEN PARTNER_NAME END) AS PARTNERS_AT_TARGET,
+            ROW_NUMBER() OVER (ORDER BY WEEK_START DESC) AS rn
+        FROM deduped
+        GROUP BY WEEK_START
+    )
+    SELECT WEEK_START, PARTNERS_AT_TARGET
+    FROM weekly WHERE rn <= 4
+    ORDER BY WEEK_START ASC
+    """
+    import pandas as pd
+    df = _conn.query(query)
+    result = []
+    for _, row in df.iterrows():
+        try:
+            label = f"{pd.Timestamp(row['WEEK_START']).month}/{pd.Timestamp(row['WEEK_START']).day}"
+        except Exception:
+            label = str(row['WEEK_START'])[:10]
+        result.append((label, int(row['PARTNERS_AT_TARGET']), total_partners))
+    return result
+
+
 def save_coco_final_snapshot(_conn, bulk_conf_df) -> bool:
     """Save this week's IS_COCO_FINAL (Def C) snapshot. Idempotent — skips if already saved.
     bulk_conf_df must have IS_COCO_FINAL, PARTNER_NAME, USE_CASE_ID, USE_CASE_EACV columns.
@@ -1251,29 +1300,25 @@ def save_coco_final_snapshot(_conn, bulk_conf_df) -> bool:
 
 @st.cache_data(ttl=timedelta(minutes=30))
 def get_coco_final_wow(_conn, partners=None):
-    """WoW CoCo adoption delta using IS_COCO_FINAL_WEEKLY_SNAPSHOT (Def C) as primary source,
-    falling back to OKR_PARTNER_WEEKLY_ADOPTION for historical weeks not yet in the new table.
+    """WoW CoCo adoption delta from IS_COCO_FINAL_WEEKLY_SNAPSHOT (Def C, NoAM-scoped).
+    No fallback to OKR_PARTNER_WEEKLY_ADOPTION — that table is globally-scoped and would
+    create a NoAM vs global mismatch in the delta.
+    Deduplicates within each WEEK_START to guard against accidental double-saves.
+    Returns NULL WoW columns until 2 distinct weeks of data exist.
     """
     partner_filter = ""
     if partners:
         ps = "','".join(partners)
         partner_filter = f"AND (PARTNER_NAME IN ('{ps}') OR PARTNER_NAME IS NULL)"
     query = f"""
-    WITH combined AS (
-        SELECT WEEK_START, PARTNER_NAME, TOTAL_UCS, COCO_UCS, COCO_PCT, TOTAL_EACV, COCO_EACV, 1 AS src_priority
+    WITH deduped AS (
+        -- Keep one row per (WEEK_START, PARTNER_NAME), preferring the earliest SAVED_AT
+        SELECT WEEK_START, PARTNER_NAME, TOTAL_UCS, COCO_UCS, COCO_PCT, TOTAL_EACV, COCO_EACV
         FROM {SCHEMA}.IS_COCO_FINAL_WEEKLY_SNAPSHOT
         WHERE 1=1 {partner_filter}
-        UNION ALL
-        SELECT WEEK_START, PARTNER_NAME, TOTAL_UCS, COCO_UCS, COCO_PCT, TOTAL_EACV, COCO_EACV, 2 AS src_priority
-        FROM {SCHEMA}.OKR_PARTNER_WEEKLY_ADOPTION
-        WHERE 1=1 {partner_filter}
-    ),
-    deduped AS (
-        SELECT WEEK_START, PARTNER_NAME, TOTAL_UCS, COCO_UCS, COCO_PCT, TOTAL_EACV, COCO_EACV
-        FROM combined
         QUALIFY ROW_NUMBER() OVER (
             PARTITION BY WEEK_START, COALESCE(PARTNER_NAME, '__OVERALL__')
-            ORDER BY src_priority
+            ORDER BY SAVED_AT
         ) = 1
     ),
     ranked AS (

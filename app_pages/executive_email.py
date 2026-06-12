@@ -12,6 +12,7 @@ from utils.queries import (
     get_partner_coco_coverage, get_partner_credit_consumption, get_adoption_overview,
     get_bulk_confidence_scores, get_pipeline_wow, get_gsi_wow, get_noam_si_wow,
     get_recent_wins, get_coco_final_wow, get_coco_final_trend_4w, save_coco_final_snapshot,
+    get_partners_at_target_trend_4w,
 )
 from utils.cortex_helpers import cortex_complete
 
@@ -252,6 +253,109 @@ def generate_trend_chart_html(trend_data: list) -> str:
     )
 
 
+def generate_partners_target_chart_html(trend_data: list) -> str:
+    """Gmail-safe bar chart showing count of partners meeting the 50% CoCo target per week.
+    trend_data: [(week_label, partners_at_target, total_partners), ...]
+    """
+    if not trend_data:
+        return ''
+
+    MAX_PARTNERS = 20  # always 20 managed partners (EY + Ernst & Young are aliases of one)
+    CHART_H = 80       # chart area height in px
+    BAR_W = 88
+    GAP = 24
+    Y_W = 28           # y-axis label column width
+    NB = 'border:none;outline:none;'
+
+    n = len(trend_data)
+    n_cols = 2 * n - 1
+    bars_w = n * BAR_W + (n - 1) * GAP
+    total_w = Y_W + bars_w
+
+    current_count = trend_data[-1][1]
+    if n >= 2:
+        wow_delta = trend_data[-1][1] - trend_data[-2][1]
+        arrow = '&#9650;' if wow_delta > 0 else ('&#9660;' if wow_delta < 0 else '&#8212;')
+        if wow_delta > 0:
+            wow_label = f'&nbsp;<span style="font-size:11px;color:#16a34a;font-weight:bold;">+{wow_delta} new this week</span>'
+        elif wow_delta < 0:
+            wow_label = f'&nbsp;<span style="font-size:11px;color:#dc2626;font-weight:bold;">{wow_delta} this week</span>'
+        else:
+            wow_label = f'&nbsp;<span style="font-size:11px;color:#6b7280;">no change this week</span>'
+    else:
+        arrow = '&#8212;'
+        wow_label = ''
+    pct_color = '#16a34a' if current_count >= MAX_PARTNERS * 0.5 else ('#f59e0b' if current_count >= MAX_PARTNERS * 0.3 else '#dc2626')
+
+    # Y-axis: ticks at 20, 10, 0
+    half_h = CHART_H // 2
+    y_axis = (
+        f'<td width="{Y_W}" valign="top" style="width:{Y_W}px;vertical-align:top;padding:0;{NB}">'
+        f'<table width="{Y_W}" border="0" cellpadding="0" cellspacing="0" style="width:{Y_W}px;border-collapse:collapse;">'
+        f'<tr><td width="{Y_W}" height="1" style="width:{Y_W}px;font-size:9px;color:#9ca3af;text-align:right;padding-right:4px;line-height:1;{NB}">20</td></tr>'
+        f'<tr><td width="{Y_W}" height="{half_h - 6}" style="width:{Y_W}px;{NB}"></td></tr>'
+        f'<tr><td width="{Y_W}" height="1" style="width:{Y_W}px;font-size:9px;color:#9ca3af;text-align:right;padding-right:4px;line-height:1;{NB}">10</td></tr>'
+        f'<tr><td width="{Y_W}" height="{half_h - 6}" style="width:{Y_W}px;{NB}"></td></tr>'
+        f'<tr><td width="{Y_W}" height="1" style="width:{Y_W}px;font-size:9px;color:#9ca3af;text-align:right;padding-right:4px;line-height:1;{NB}">0</td></tr>'
+        f'</table></td>'
+    )
+    y_axis_label_row = (
+        f'<td width="{Y_W}" style="width:{Y_W}px;font-size:9px;color:#9ca3af;text-align:right;padding-right:4px;{NB}">Partners</td>'
+    )
+
+    label_cells, bar_cells, date_cells = [], [], []
+
+    for i, (label, count, total) in enumerate(trend_data):
+        fill = '#16a34a' if i == n - 1 else '#29B5E8'
+        bar_h = max(4, int(CHART_H * count / MAX_PARTNERS))
+        spacer_h = CHART_H - bar_h
+
+        if i > 0:
+            for lst in (label_cells, date_cells):
+                lst.append(f'<td width="{GAP}" style="width:{GAP}px;{NB}"></td>')
+            bar_cells.append(f'<td width="{GAP}" style="width:{GAP}px;font-size:0;line-height:0;{NB}">&nbsp;</td>')
+
+        label_cells.append(
+            f'<td width="{BAR_W}" align="center" style="width:{BAR_W}px;text-align:center;'
+            f'font-size:13px;font-weight:bold;color:{fill};padding-bottom:4px;{NB}">'
+            f'{count}/{MAX_PARTNERS}</td>'
+        )
+
+        inner = f'<table width="{BAR_W}" border="0" cellpadding="0" cellspacing="0" style="width:{BAR_W}px;border-collapse:collapse;">'
+        if spacer_h > 0:
+            inner += f'<tr><td width="{BAR_W}" height="{spacer_h}" bgcolor="#ffffff" style="width:{BAR_W}px;height:{spacer_h}px;background-color:#ffffff;font-size:0;line-height:0;{NB}">&nbsp;</td></tr>'
+        inner += (f'<tr><td width="{BAR_W}" height="{bar_h}" bgcolor="{fill}" '
+                  f'style="width:{BAR_W}px;height:{bar_h}px;background-color:{fill};font-size:0;line-height:0;{NB}">&nbsp;</td></tr></table>')
+        bar_cells.append(f'<td width="{BAR_W}" height="{CHART_H}" valign="bottom" style="width:{BAR_W}px;height:{CHART_H}px;vertical-align:bottom;padding:0;{NB}">{inner}</td>')
+
+        date_cells.append(f'<td width="{BAR_W}" align="center" style="width:{BAR_W}px;text-align:center;font-size:10px;color:#374151;padding-top:6px;{NB}">{label}</td>')
+
+    # Rows: value labels, bars, x-axis line, date labels
+    row0 = f'<tr>{y_axis}<td><table border="0" cellpadding="0" cellspacing="0">{"<tr>" + "".join(label_cells) + "</tr>"}</table></td></tr>'
+    row1 = f'<tr><td width="{Y_W}" style="width:{Y_W}px;{NB}"></td><td><table border="0" cellpadding="0" cellspacing="0">{"<tr>" + "".join(bar_cells) + "</tr>"}</table></td></tr>'
+    row2 = f'<tr><td colspan="2" height="2" bgcolor="#d1d5db" style="height:2px;background-color:#d1d5db;font-size:0;line-height:0;">&nbsp;</td></tr>'
+    row3 = f'<tr>{y_axis_label_row}<td><table border="0" cellpadding="0" cellspacing="0">{"<tr>" + "".join(date_cells) + "</tr>"}</table></td></tr>'
+    row4 = f'<tr><td></td><td align="center" style="font-size:9px;color:#9ca3af;padding-top:2px;">Week</td></tr>'
+
+    chart_table = (f'<table width="{total_w}" border="0" cellpadding="0" cellspacing="0" style="width:{total_w}px;border-collapse:collapse;">'
+                   f'{row0}{row1}{row2}{row3}{row4}</table>')
+
+    return (
+        '<table width="600" border="0" cellpadding="0" cellspacing="0" style="font-family:Arial,sans-serif;margin:16px 0;border:1px solid #e5e7eb;">'
+        '<tr><td style="padding:12px 16px;background-color:#f9fafb;border-bottom:1px solid #e5e7eb;">'
+        f'<span style="font-size:13px;font-weight:bold;color:#111827;">&#127942; Partners Meeting 50% Target &#8212; {n}-Week Trend</span>'
+        f'&nbsp;&nbsp;<span style="font-size:12px;color:{pct_color};font-weight:bold;">Current: {current_count}/{MAX_PARTNERS} {arrow}</span>'
+        f'{wow_label}'
+        '</td></tr>'
+        f'<tr><td style="padding:8px 16px 8px;background-color:#ffffff;">{chart_table}'
+        '<table width="100%" border="0" cellpadding="0" cellspacing="0" style="margin-top:6px;">'
+        '<tr><td style="font-size:10px;color:#6b7280;padding-top:2px;">'
+        f'# of 20 managed partners with \u226550% CoCo adoption &nbsp;&middot;&nbsp; '
+        '<span style="color:#16a34a;font-weight:bold;">&#9646;</span> = current week'
+        '</td></tr></table></td></tr></table>'
+    )
+
+
 def inject_heatmap(html_email: str, heatmap_html: str) -> str:
     """Insert heat map after the Executive Summary bullet list."""
     import re
@@ -340,7 +444,7 @@ with st.spinner("Loading data..."):
     Q2_END = '2026-07-31'
 
     recent_wins_data = get_recent_wins(conn, MANAGED_PARTNERS, Q2_START, Q2_END)
-    trend_data = get_coco_final_trend_4w(conn, tuple(MANAGED_PARTNERS), 'NoAM')
+    trend_data = get_partners_at_target_trend_4w(conn, tuple(MANAGED_PARTNERS))
 
     # Q2 Credit consumption for managed partners
     credit_data = get_partner_credit_consumption(conn, MANAGED_PARTNERS, Q2_START, Q2_END)
@@ -1000,15 +1104,9 @@ Write the executive briefing:"""
         heatmap_html = generate_heatmap_html(adoption_wow_data, managed_q2_partners)
         html_email = inject_heatmap(html_email, heatmap_html)
 
-    # Inject 4-week trend chart after OKR Progress table
+    # Inject partners-meeting-50% trend chart after OKR Progress table
     if trend_data:
-        # Override the last bar with IS_COCO_FINAL rate so chart matches scorecard
-        _live_trend = list(trend_data)
-        if len(managed_q2_stats) > 0:
-            _q = managed_q2_stats.iloc[0]
-            _final_pct = round(float(_q['COCO_UCS']) * 100.0 / max(float(_q['TOTAL_UCS']), 1), 1)
-            _live_trend[-1] = (_live_trend[-1][0], _final_pct)
-        trend_chart_html = generate_trend_chart_html(_live_trend)
+        trend_chart_html = generate_partners_target_chart_html(trend_data)
         html_email = inject_after_okr_table(html_email, trend_chart_html)
 
     to_lines = [l.strip() for l in recipients_input.strip().splitlines() if l.strip()] if recipients_input.strip() else []
