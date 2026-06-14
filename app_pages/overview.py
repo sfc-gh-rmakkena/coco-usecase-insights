@@ -125,7 +125,8 @@ st.subheader("OKR Progress: 50% CoCo Adoption Target")
 target_pct = 50
 current_pct = coco_pct if include_account_coco else float(s['COCO_PCT'] or 0)
 coco_ucs = coco_count
-total_ucs = int(s['TOTAL_USE_CASES'])
+# Use IS_COCO_FINAL population as denominator when bulk_conf is available
+total_ucs = total_count if len(bulk_conf) > 0 else int(s['TOTAL_USE_CASES'])
 target_ucs = int(total_ucs * 0.5)
 gap_ucs = max(0, target_ucs - coco_ucs)
 
