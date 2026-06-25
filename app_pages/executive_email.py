@@ -636,11 +636,16 @@ with st.spinner("Loading data..."):
             COALESCE(SUM(USE_CASE_EACV), 0) AS TOTAL_EACV
         FROM TEMP.COCO_PARTNER_ADOPTION.DT_OKR_USE_CASES uc
         WHERE uc.PARTNER_NAME IN ('{managed_partners_sql}')
-        AND uc.THEATER_NAME IN ('AMSExpansion', 'USMajors', 'AMSAcquisition', 'USPubSec')
         AND uc.USE_CASE_STAGE IN ('3 - Technical / Business Validation','4 - Use Case Won / Migration Plan','5 - Implementation In Progress','6 - Implementation Complete','7 - Deployed')
         AND (
             (uc.USE_CASE_STAGE IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan') AND uc.DECISION_DATE >= '{Q2_START}' AND uc.DECISION_DATE <= '{Q2_END}')
             OR (uc.USE_CASE_STAGE IN ('5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed') AND uc.GO_LIVE_DATE >= '{Q2_START}' AND uc.GO_LIVE_DATE <= '{Q2_END}')
+        )
+        -- GSIs: all theaters (global); RSIs: NoAM only
+        AND (
+            uc.PARTNER_NAME IN ('Accenture','Capgemini Technologies LLC','Cognizant Technology Solutions US Corp',
+                                'Deloitte Consulting','EY','Ernst & Young (EY)','IBM','IBM Consulting')
+            OR uc.THEATER_NAME IN ('AMSExpansion','USMajors','AMSAcquisition','USPubSec')
         )
         GROUP BY STAGE_GROUP
         ORDER BY STAGE_GROUP
