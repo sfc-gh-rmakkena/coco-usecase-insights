@@ -13,6 +13,7 @@ from utils.queries import (
     get_bulk_confidence_scores, get_pipeline_wow, get_gsi_wow, get_noam_si_wow,
     get_recent_wins, get_coco_final_wow, get_coco_final_trend_4w, save_coco_final_snapshot,
     get_partners_at_target_trend_4w,
+    get_partner_velocity_data,
 )
 from utils.cortex_helpers import cortex_complete
 
@@ -389,6 +390,145 @@ def inject_after_okr_table(html_email: str, chart_html: str) -> str:
     return html_email + chart_html
 
 
+_VEL_CATS = ['AI / ML', 'Data Engineering', 'DWH / Migration', 'Platform / Governance', 'Apps / Data Sharing']
+_VEL_MANAGED_SQL = (
+    "'Accenture','Capgemini Technologies LLC','Cognizant Technology Solutions US Corp',"
+    "'Deloitte Consulting','EY','Ernst & Young (EY)','IBM','IBM Consulting',"
+    "'7Rivers, Inc','Aimpoint Digital','BlueCloud Services Inc','kipi.ai','Kipi.ai',"
+    "'evolv Consulting','Infostrux Solutions Inc.','Infosys','KPMG LLP',"
+    "'LTM','LTI Mindtree','NTT DATA Group Corporation','phData, Inc.',"
+    "'Slalom, LLC.','Squadron Data Inc','Tredence Inc.'"
+)
+
+
+def _compute_velocity_medians(conn):
+    """Fetch and compute per-workload FY26/FY27 medians. Returns (fy26_map, fy27_map)."""
+    raw = get_partner_velocity_data(conn, _VEL_MANAGED_SQL)
+    df = raw.copy()
+    df.columns = [c.upper() for c in df.columns]
+    df['DAYS_FULL_CYCLE'] = pd.to_numeric(df['DAYS_FULL_CYCLE'], errors='coerce')
+    df = df[df['DAYS_FULL_CYCLE'].notna() & df['WORKLOAD_CATEGORY'].notna() & df['FISCAL_QUARTER'].notna()]
+    df['FISCAL_YEAR'] = df['FISCAL_QUARTER'].str[:4]
+    med = df.groupby(['WORKLOAD_CATEGORY', 'FISCAL_YEAR'])['DAYS_FULL_CYCLE'].median().reset_index()
+    fy26 = med[med['FISCAL_YEAR'] == 'FY26'].set_index('WORKLOAD_CATEGORY')['DAYS_FULL_CYCLE'].to_dict()
+    fy27 = med[med['FISCAL_YEAR'] == 'FY27'].set_index('WORKLOAD_CATEGORY')['DAYS_FULL_CYCLE'].to_dict()
+    return fy26, fy27
+
+
+def generate_velocity_dumbbell_html(fy26_map: dict, fy27_map: dict) -> str:
+    """Gmail-safe table-based dumbbell chart — same approach as the heatmap (pure tables, no SVG)."""
+    _G  = '#34d399'
+    _R  = '#f87171'
+    _GR = '#94a3b8'
+
+    cats = [c for c in _VEL_CATS if fy26_map.get(c) is not None and fy27_map.get(c) is not None]
+    if not cats:
+        return ''
+
+    all_vals = [fy26_map[c] for c in cats] + [fy27_map[c] for c in cats]
+    x_min = min(all_vals) * 0.90
+    x_max = max(all_vals) * 1.08
+    x_range = x_max - x_min or 1
+    TRACK_W = 280  # total track width in px
+
+    def track_px(v):
+        return max(1.0, (v - x_min) / x_range * TRACK_W)
+
+    rows = ''
+    for cat in cats:
+        v26 = fy26_map[cat]
+        v27 = fy27_map[cat]
+        delta = v27 - v26
+        color = _G if delta < -3 else (_R if delta > 3 else _GR)
+        arrow = f'&#8595; {abs(delta):.0f}d faster' if delta < -3 else (f'&#8593; {delta:.0f}d slower' if delta > 3 else '&#8776; flat')
+
+        p26 = track_px(v26)
+        p27 = track_px(v27)
+        left_dot_x  = min(p26, p27)
+        right_dot_x = max(p26, p27)
+        line_w = max(right_dot_x - left_dot_x, 2)
+        left_gap  = int(left_dot_x)
+        right_gap = max(int(TRACK_W - right_dot_x - 12), 0)
+
+        dot26_style = ('width:12px;height:12px;border-radius:6px;background:#cbd5e1;'
+                       'border:2px solid #94a3b8;display:inline-block;vertical-align:middle;')
+        dot27_style = (f'width:12px;height:12px;border-radius:6px;background:{color};'
+                       f'border:2px solid {color};display:inline-block;vertical-align:middle;')
+
+        left_dot_html  = (f'<td width="14" style="width:14px;padding:0;" align="center" valign="middle">'
+                          f'<span style="{dot26_style if p26 <= p27 else dot27_style}"></span>'
+                          f'<div style="font-size:9px;color:#64748b;text-align:center;">{(v26 if p26 <= p27 else v27):.0f}d</div>'
+                          f'</td>')
+        right_dot_html = (f'<td width="14" style="width:14px;padding:0;" align="center" valign="middle">'
+                          f'<span style="{dot27_style if p26 <= p27 else dot26_style}"></span>'
+                          f'<div style="font-size:9px;color:{color if p26<=p27 else "#64748b"};text-align:center;">{(v27 if p26 <= p27 else v26):.0f}d</div>'
+                          f'</td>')
+
+        track_cells = (
+            f'<td width="{left_gap}" style="width:{left_gap}px;padding:0;"></td>'
+            f'{left_dot_html}'
+            f'<td width="{int(line_w)}" style="width:{int(line_w)}px;padding:0;" valign="middle">'
+            f'<div style="height:3px;background:{color};"></div></td>'
+            f'{right_dot_html}'
+            f'<td width="{right_gap}" style="width:{right_gap}px;padding:0;"></td>'
+        )
+
+        rows += (
+            f'<tr>'
+            f'<td width="160" style="width:160px;font-size:12px;font-weight:700;color:#475569;'
+            f'padding:6px 8px 6px 0;white-space:nowrap;">{cat}</td>'
+            f'<td width="{TRACK_W}" style="width:{TRACK_W}px;padding:4px 0;">'
+            f'<table border="0" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">'
+            f'<tr>{track_cells}</tr></table></td>'
+            f'<td width="130" style="width:130px;font-size:12px;font-weight:700;color:{color};'
+            f'padding:6px 0 6px 12px;white-space:nowrap;">{arrow}</td>'
+            f'</tr>'
+        )
+
+    legend = (
+        f'<tr><td colspan="3" style="padding:8px 0 0 0;font-size:11px;color:#64748b;">'
+        f'<span style="display:inline-block;width:10px;height:10px;border-radius:5px;'
+        f'background:#cbd5e1;border:1px solid #94a3b8;vertical-align:middle;margin-right:4px;"></span>FY26&nbsp;&nbsp;'
+        f'<span style="display:inline-block;width:10px;height:10px;border-radius:5px;'
+        f'background:{_G};vertical-align:middle;margin-right:4px;"></span>FY27 faster&nbsp;&nbsp;'
+        f'<span style="display:inline-block;width:10px;height:10px;border-radius:5px;'
+        f'background:{_R};vertical-align:middle;margin-right:4px;"></span>FY27 slower'
+        f'</td></tr>'
+    )
+
+    return (
+        '<div style="margin:16px 0;font-family:Arial,sans-serif;">'
+        '<div style="font-size:13px;font-weight:700;color:#29B5E8;margin-bottom:6px;">'
+        'Partner Implementation Velocity by Workload &#8592; fewer days = faster</div>'
+        f'<table border="0" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">'
+        f'{rows}{legend}'
+        '</table>'
+        '<p style="font-size:10px;color:#94a3b8;margin:6px 0 0 0;line-height:1.4;">'
+        'FY26 vs FY27 Q1+Q2 &middot; Median days decision &#8594; go-live, grouped by workload type. '
+        '<em>Workload categories AI-assigned from Salesforce descriptions (one category per use case).</em>'
+        '</p></div>'
+    )
+
+
+def inject_velocity_chart(html_email: str, chart_html: str) -> str:
+    """Insert dumbbell chart before USE CASE PATTERNS so the scorecard 50% sentence stays above."""
+    import re
+    # Primary: just before USE CASE PATTERNS heading (matches any h2/h3 containing those words)
+    m = re.search(r'(<h[23][^>]*>[^<]*USE\s+CASE\s+PATTERN[^<]*</h[23]>)', html_email, re.IGNORECASE)
+    if m:
+        return html_email[:m.start()] + chart_html + html_email[m.start():]
+    # Secondary: before NOTABLE WINS heading as fallback
+    m2 = re.search(r'(<h[23][^>]*>[^<]*NOTABLE\s+WINS[^<]*</h[23]>)', html_email, re.IGNORECASE)
+    if m2:
+        return html_email[:m2.start()] + chart_html + html_email[m2.start():]
+    # Last resort: after the last </table> in the body
+    pos = html_email.rfind('</table>')
+    if pos >= 0:
+        end = pos + len('</table>')
+        return html_email[:end] + chart_html + html_email[end:]
+    return html_email
+
+
 def md_to_html(md_text):
     html_body = markdown.markdown(md_text, extensions=['tables'])
     return f"""<html><head><style>
@@ -451,7 +591,10 @@ with st.spinner("Loading data..."):
     Q2_END = '2026-07-31'
 
     recent_wins_data = get_recent_wins(conn, MANAGED_PARTNERS, Q2_START, Q2_END)
-    trend_data = get_partners_at_target_trend_4w(conn, tuple(MANAGED_PARTNERS))
+    trend_data = get_partners_at_target_trend_4w(
+        conn, tuple(MANAGED_PARTNERS),
+        gsi_names=tuple(_GSI_NAMES)   # GSIs use Global row; RSIs use NoAM row
+    )
 
     # Q2 Credit consumption for managed partners
     credit_data = get_partner_credit_consumption(conn, MANAGED_PARTNERS, Q2_START, Q2_END)
@@ -672,27 +815,7 @@ else:
 s = stats.iloc[0]
 go = global_overview.iloc[0]
 
-st.subheader("Data Summary")
-with st.expander("View Raw Metrics", expanded=False):
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Total Use Cases", int(s['TOTAL_USE_CASES']))
-    c2.metric("Total EACV", f"${s['TOTAL_EACV']/1_000_000:.1f}M" if s['TOTAL_EACV'] else "$0")
-    c3.metric("Partners", int(s['TOTAL_PARTNERS']))
-    c4.metric("Accounts", int(s['TOTAL_ACCOUNTS']))
 
-    tab1, tab2, tab3, tab4 = st.tabs(["Pipeline", "Use Case Types", "Workloads", "Competitors"])
-    with tab1:
-        if len(stage_data) > 0:
-            st.dataframe(stage_data, hide_index=True, use_container_width=True)
-    with tab2:
-        if len(type_patterns) > 0:
-            st.dataframe(type_patterns[['TECHNICAL_USE_CASE', 'USE_CASE_COUNT', 'TOTAL_EACV', 'PARTNER_COUNT', 'WON_PLUS']], hide_index=True, use_container_width=True)
-    with tab3:
-        if len(workload_data) > 0:
-            st.dataframe(workload_data, hide_index=True, use_container_width=True)
-    with tab4:
-        if len(competitive_data) > 0:
-            st.dataframe(competitive_data, hide_index=True, use_container_width=True)
 
 coverage_map = {}
 if len(coco_coverage) > 0:
@@ -913,7 +1036,7 @@ if len(managed_bulk_conf) > 0:
         _np = _noam.groupby('PARTNER_NAME').agg(T=('USE_CASE_ID','count'), C=('IS_COCO_FINAL','sum')).reset_index()
         _np['PCT'] = _np['C'] / _np['T'].replace(0, float('nan'))
         regional_okr_ctx += (
-            f"  NoAM (all managed partners): {_noam_total} total UCs, "
+            f"  NoAM (6 GSI + 14 RSI): {_noam_total} total UCs, "
             f"{_noam_coco} CoCo UCs, {_noam_pct}% CoCo, "
             f"{int((_np['PCT'] >= 0.5).sum())} partners meeting 50%\n"
         )
@@ -1041,7 +1164,7 @@ OKR PROGRESS — 6 GSIs WoW (CoCo engagement, all regions combined — LW=last w
 OKR PROGRESS — NoAM SIs WoW (CoCo engagement — LW=last week, PW=prior week):
 {noam_si_wow_ctx}
 
-OKR PROGRESS — REGIONAL BREAKDOWN (current week; NoAM=all partners, EMEA/APJ=GSIs only):
+OKR PROGRESS — REGIONAL BREAKDOWN (current week; NoAM=6 GSI + 14 RSI, EMEA/APJ=GSIs only):
 {regional_okr_ctx}
 
 COMMENT HIGHLIGHTS (managed partners only, Top 10 by EACV):
@@ -1114,7 +1237,7 @@ PARTNER CLASSIFICATION:
 - **GSIs (6): Total UCs and CoCo UCs are GLOBAL (all regions combined).** RSIs (14): Total UCs and CoCo UCs are NoAM only.
 - "CoCo%" = CoCo/Total for each partner's scoped data.
 - WoW Δ% and WoW Δ UCs from "COCO ADOPTION WoW — PER MANAGED PARTNER" — show "-" if N/A
-- Our target is **50% CoCo adoption** per partner. After the table, add ONE sentence calling out which partners are closest to 50% and which need enablement focus.
+- Our target is **50% CoCo adoption** per partner. After the table, add ONE sentence listing the partners below 50% in ascending order of CoCo% (closest to 50% first, lowest last) — these need the most enablement focus.
 
 ## USE CASE PATTERNS (managed partners only)
 3-4 bullets. Each: **Pattern Name** — one sentence with partner names and EACV.
