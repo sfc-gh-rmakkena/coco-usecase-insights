@@ -1300,30 +1300,45 @@ def get_partner_velocity_data(_conn, partners_sql: str):
 
 
 @st.cache_data(ttl=timedelta(minutes=30))
-def get_partners_at_target_trend_4w(_conn, partners: tuple, target_pct: float = 50.0) -> list:
+def get_partners_at_target_trend_4w(_conn, partners: tuple, target_pct: float = 50.0, gsi_names: tuple = ()) -> list:
     """Return [(week_label, partners_at_target, total_partners), ...] for last 4 weeks.
-    Counts how many of the given partners had COCO_PCT >= target_pct each week.
     Uses IS_COCO_FINAL_WEEKLY_SNAPSHOT (Def C) with OKR_PARTNER_WEEKLY_ADOPTION fallback.
+    Region filter: GSIs use Global row; RSIs use NoAM row — matches heatmap scope.
     """
     ps = "','".join(partners)
     total_partners = len(partners)
+
+    if gsi_names:
+        gsi_sql = "','".join(gsi_names)
+        region_filter = f"""AND (
+            (PARTNER_NAME IN ('{gsi_sql}') AND COALESCE(REGION, 'NoAM') = 'Global')
+            OR (PARTNER_NAME NOT IN ('{gsi_sql}') AND COALESCE(REGION, 'NoAM') = 'NoAM')
+        )"""
+    else:
+        region_filter = "AND COALESCE(REGION, 'NoAM') = 'NoAM'"
+
     query = f"""
-    WITH combined AS (
-        SELECT WEEK_START, PARTNER_NAME, COCO_PCT, 1 AS src_priority
+    WITH primary_src AS (
+        SELECT WEEK_START, PARTNER_NAME, COCO_PCT
         FROM {SCHEMA}.IS_COCO_FINAL_WEEKLY_SNAPSHOT
         WHERE PARTNER_NAME IN ('{ps}')
-        UNION ALL
-        SELECT WEEK_START, PARTNER_NAME, COCO_PCT, 2 AS src_priority
+        {region_filter}
+        QUALIFY ROW_NUMBER() OVER (PARTITION BY WEEK_START, PARTNER_NAME ORDER BY SAVED_AT DESC) = 1
+    ),
+    fallback_src AS (
+        SELECT WEEK_START, PARTNER_NAME, COCO_PCT
         FROM {SCHEMA}.OKR_PARTNER_WEEKLY_ADOPTION
         WHERE PARTNER_NAME IN ('{ps}')
+    ),
+    combined AS (
+        SELECT WEEK_START, PARTNER_NAME, COCO_PCT, 1 AS src_priority FROM primary_src
+        UNION ALL
+        SELECT WEEK_START, PARTNER_NAME, COCO_PCT, 2 AS src_priority FROM fallback_src
     ),
     deduped AS (
         SELECT WEEK_START, PARTNER_NAME, COCO_PCT
         FROM combined
-        QUALIFY ROW_NUMBER() OVER (
-            PARTITION BY WEEK_START, PARTNER_NAME
-            ORDER BY src_priority
-        ) = 1
+        QUALIFY ROW_NUMBER() OVER (PARTITION BY WEEK_START, PARTNER_NAME ORDER BY src_priority) = 1
     ),
     weekly AS (
         SELECT WEEK_START,
