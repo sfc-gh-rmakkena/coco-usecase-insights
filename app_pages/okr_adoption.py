@@ -3,8 +3,8 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime, date
-from utils.queries import get_okr_partner_summary, get_okr_coco_adoption, get_partner_credit_consumption, get_usecase_confidence_scores, get_bulk_confidence_scores
-from utils import resolve_partner_filter
+from utils.queries import get_okr_partner_summary, get_okr_coco_adoption, get_partner_credit_consumption, get_usecase_confidence_scores, get_bulk_confidence_scores, get_account_coco_credits
+from utils import resolve_partner_filter, resolve_region_theaters, PARTNER_RENAME_MAP
 
 conn = st.session_state.conn
 region = st.session_state.get("selected_region", "Global")
@@ -51,16 +51,12 @@ if include_account_coco:
     if len(bulk_conf) > 0:
         # Apply region filter in Python (bulk_conf includes THEATER_NAME via uc.*)
         if region and region != 'Global':
-            region_theaters = {
-                'NoAM': ['AMSExpansion', 'USMajors', 'AMSAcquisition', 'USPubSec'],
-                'EMEA': ['EMEA'], 'APJ': ['APJ']
-            }
-            bulk_conf = bulk_conf[bulk_conf['THEATER_NAME'].isin(region_theaters.get(region, []))]
+            _theaters = resolve_region_theaters(region)
+            if _theaters is not None:
+                bulk_conf = bulk_conf[bulk_conf['THEATER_NAME'].isin(_theaters)]
 
-        # CoCo = IS_COCO (comments/flag always) OR account-level at selected confidence
-        # confidence_filter=['High'] → only High scoring use cases count for account-level
-        # confidence_filter=['High','Medium'] → High or Medium count
-        # confidence_filter=[] → all bands except No Signal (has product usage)
+        # Merge partner aliases (IBM Consulting→IBM, EY aliases, etc.) before groupby
+        bulk_conf['PARTNER_NAME'] = bulk_conf['PARTNER_NAME'].replace(PARTNER_RENAME_MAP)
         bands = confidence_filter if confidence_filter else ['High', 'Medium', 'Low']
         bulk_conf['IS_COCO_FINAL'] = (
             (bulk_conf['IS_COCO'] == True) |
@@ -82,6 +78,20 @@ if include_account_coco:
         # Count account-level use cases at the selected confidence bands
         high_conf_coco = int(bulk_conf['CONFIDENCE_BAND'].isin(bands).sum())
     else:
+        # Rename aliases in base_summary and re-aggregate so merged partners show as one row
+        base_summary = base_summary.copy()
+        base_summary['PARTNER_NAME'] = base_summary['PARTNER_NAME'].replace(PARTNER_RENAME_MAP)
+        if base_summary['PARTNER_NAME'].duplicated().any():
+            _agg = base_summary.groupby('PARTNER_NAME').agg(
+                total_use_cases=('total_use_cases', 'sum'),
+                coco_use_cases=('coco_use_cases', 'sum'),
+                total_eacv=('total_eacv', 'sum'),
+                coco_eacv=('coco_eacv', 'sum'),
+            ).reset_index()
+            _agg['non_coco_use_cases'] = _agg['total_use_cases'] - _agg['coco_use_cases']
+            _agg['coco_pct'] = round(_agg['coco_use_cases'] * 100.0 / _agg['total_use_cases'].replace(0, float('nan')), 1).fillna(0)
+            _agg['MEETS_TARGET'] = _agg['coco_pct'] >= 50
+            base_summary = _agg
         summary = base_summary
         bulk_conf = pd.DataFrame()
         high_conf_coco = 0
@@ -271,22 +281,41 @@ if selected_partner:
             "Confidence Scoring"
         ])
 
-        uc_cols = ['USE_CASE_NAME', 'ACCOUNT_NAME', 'USE_CASE_STAGE', 'USE_CASE_EACV', 'TECHNICAL_USE_CASE', 'ATTRIBUTION_FLAGS']
+        uc_cols = ['USE_CASE_NAME', 'ACCOUNT_NAME', 'THEATER_NAME', 'USE_CASE_STAGE', 'USE_CASE_EACV', 'TECHNICAL_USE_CASE', 'ATTRIBUTION_FLAGS']
         uc_config = {
-            "USE_CASE_NAME": st.column_config.TextColumn("Use Case", width="large"),
-            "ACCOUNT_NAME": st.column_config.TextColumn("Account", width="medium"),
-            "USE_CASE_STAGE": st.column_config.TextColumn("Stage", width="small"),
-            "USE_CASE_EACV": st.column_config.NumberColumn("EACV", format="$%.0f", width="small"),
-            "TECHNICAL_USE_CASE": st.column_config.TextColumn("Technical Type", width="medium"),
-            "ATTRIBUTION_FLAGS": st.column_config.TextColumn("CoCo Source", width="medium"),
+            "USE_CASE_NAME": st.column_config.TextColumn("Use Case", width=200),
+            "ACCOUNT_NAME": st.column_config.TextColumn("Account", width=160),
+            "THEATER_NAME": st.column_config.TextColumn("Theater", width=80),
+            "USE_CASE_STAGE": st.column_config.TextColumn("Stage", width=50),
+            "USE_CASE_EACV": st.column_config.NumberColumn("EACV", format="$%.0f", width=90),
+            "TECHNICAL_USE_CASE": st.column_config.TextColumn("Technical Type", width=150),
+            "ATTRIBUTION_FLAGS": st.column_config.TextColumn("CoCo Source", width=140),
         }
 
         with tab_coco:
             if len(coco_ucs) > 0:
+                # Fetch account-level CoCo credit consumption (Option 1: CORTEX_CODE_USER_DAY_FACT)
+                _acct_list = tuple(coco_ucs['ACCOUNT_NAME'].str.upper().unique())
+                _credits = get_account_coco_credits(conn, _acct_list, str(q_start))
+
                 coco_display = coco_ucs[uc_cols].copy()
                 coco_display['USE_CASE_STAGE'] = coco_display['USE_CASE_STAGE'].str.extract(r'^(\d+)').iloc[:, 0]
-                st.dataframe(coco_display, hide_index=True, use_container_width=True,
-                           column_config=uc_config)
+
+                if len(_credits) > 0:
+                    _credits_map = _credits.set_index('ACCOUNT_NAME_UPPER')[['Q2_CREDITS', 'ACTIVE_DAYS', 'LAST_ACTIVE']]
+                    coco_display['Q2_CREDITS'] = coco_display['ACCOUNT_NAME'].str.upper().map(_credits_map['Q2_CREDITS'])
+                    coco_display['ACTIVE_DAYS'] = coco_display['ACCOUNT_NAME'].str.upper().map(_credits_map['ACTIVE_DAYS'])
+                    coco_display['LAST_ACTIVE'] = coco_display['ACCOUNT_NAME'].str.upper().map(_credits_map['LAST_ACTIVE'])
+                    coco_uc_config = {
+                        **uc_config,
+                        'Q2_CREDITS': st.column_config.NumberColumn("CoCo Q2 Credits", format="$%.0f", width=110, help="Account-level CoCo token credits since Q2 start"),
+                        'ACTIVE_DAYS': st.column_config.NumberColumn("Active Days", format="%d", width=90, help="Days with CoCo activity at this account since Q2 start"),
+                        'LAST_ACTIVE': st.column_config.DateColumn("Last Active", width=100, help="Last day CoCo was used at this account"),
+                    }
+                    st.dataframe(coco_display, hide_index=True, use_container_width=True, column_config=coco_uc_config)
+                    st.caption("Q2 Credits and Active Days are account-level signals shared across all UCs at the same account.")
+                else:
+                    st.dataframe(coco_display, hide_index=True, use_container_width=True, column_config=uc_config)
             else:
                 st.info("No CoCo-attached use cases.")
 
@@ -313,11 +342,14 @@ if selected_partner:
                 m3.metric("Low", low, help="Score 1-39")
                 m4.metric("No Signal", no_signal, help="Score 0")
 
-                conf_cols = ['ACCOUNT_NAME', 'TECHNICAL_USE_CASE', 'WORKLOAD_CATEGORY', 'RELEVANT_SKILL_INVOCATIONS', 'RELEVANT_CUSTOM_SKILLS', 'TOOLS_INVOKED', 'ACTIVE_DAYS', 'DISTINCT_USERS', 'TOTAL_SCORE', 'CONFIDENCE_BAND']
+                _base_conf_cols = ['ACCOUNT_NAME', 'THEATER_NAME', 'TECHNICAL_USE_CASE', 'WORKLOAD_CATEGORY', 'RELEVANT_SKILL_INVOCATIONS', 'RELEVANT_CUSTOM_SKILLS', 'TOOLS_INVOKED', 'ACTIVE_DAYS', 'DISTINCT_USERS', 'TOTAL_SCORE', 'CONFIDENCE_BAND']
+                conf_cols = (['USE_CASE_NAME'] if 'USE_CASE_NAME' in confidence_data.columns else []) + _base_conf_cols
                 st.dataframe(
                     confidence_data[conf_cols],
                     column_config={
+                        'USE_CASE_NAME': st.column_config.TextColumn("Use Case", width="large"),
                         'ACCOUNT_NAME': st.column_config.TextColumn("Account", width="medium"),
+                        'THEATER_NAME': st.column_config.TextColumn("Theater", width="small"),
                         'TECHNICAL_USE_CASE': st.column_config.TextColumn("Technical Type", width="medium"),
                         'WORKLOAD_CATEGORY': st.column_config.TextColumn("Workload", width="small"),
                         'RELEVANT_SKILL_INVOCATIONS': st.column_config.NumberColumn("Bundled Skills", format="%d", help="Relevant bundled skill invocations for this workload"),

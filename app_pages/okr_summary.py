@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 from utils.queries import get_partner_coco_coverage, get_okr_stage_breakdown, get_partner_credit_consumption, get_bulk_confidence_scores, get_coco_final_wow
-from utils import resolve_partner_filter
+from utils import resolve_partner_filter, resolve_region_theaters, PARTNER_RENAME_MAP
 
 conn = st.session_state.conn
 region = st.session_state.get("selected_region", "Global")
@@ -45,11 +45,11 @@ if include_account_coco and len(coverage) > 0:
     bulk_conf = get_bulk_confidence_scores(conn, coverage['PARTNER_NAME'].tolist(), str(start_date), str(end_date))
     if len(bulk_conf) > 0:
         if region and region != 'Global':
-            region_theaters = {
-                'NoAM': ['AMSExpansion', 'USMajors', 'AMSAcquisition', 'USPubSec'],
-                'EMEA': ['EMEA'], 'APJ': ['APJ']
-            }
-            bulk_conf = bulk_conf[bulk_conf['THEATER_NAME'].isin(region_theaters.get(region, []))]
+            _theaters = resolve_region_theaters(region)
+            if _theaters is not None:
+                bulk_conf = bulk_conf[bulk_conf['THEATER_NAME'].isin(_theaters)]
+        # Merge partner aliases (IBM Consulting→IBM, EY aliases, etc.) before groupby
+        bulk_conf['PARTNER_NAME'] = bulk_conf['PARTNER_NAME'].replace(PARTNER_RENAME_MAP)
         bands = confidence_filter if confidence_filter else ['High', 'Medium', 'Low']
         bulk_conf['IS_COCO_FINAL'] = (
             (bulk_conf['IS_COCO'] == True) |
@@ -68,7 +68,10 @@ if include_account_coco and len(coverage) > 0:
         conf_summary['COCO_PCT'] = round(
             conf_summary['COCO_UCS'] * 100.0 / conf_summary['TOTAL_PARTNER_UCS'].replace(0, float('nan')), 1
         ).fillna(0)
-        coverage = coverage[['PARTNER_NAME']].merge(conf_summary, on='PARTNER_NAME', how='left').fillna(0)
+        _cov = coverage[['PARTNER_NAME']].copy()
+        _cov['PARTNER_NAME'] = _cov['PARTNER_NAME'].replace(PARTNER_RENAME_MAP)
+        _cov = _cov.drop_duplicates(subset='PARTNER_NAME')
+        coverage = _cov.merge(conf_summary, on='PARTNER_NAME', how='left').fillna(0)
         coverage['COCO_PCT'] = coverage['COCO_PCT'].astype(float)
         coverage[['TOTAL_PARTNER_UCS', 'COCO_UCS', 'NON_COCO_UCS']] = coverage[['TOTAL_PARTNER_UCS', 'COCO_UCS', 'NON_COCO_UCS']].astype(int)
 
@@ -357,7 +360,7 @@ with tab_summary:
         display['WOW_COCO_UCS'] = None
 
     st.dataframe(
-        display[['PARTNER_NAME', 'TOTAL_PARTNER_UCS', 'COCO_UCS', 'COCO_PCT', 'WOW_COCO_PCT', 'WOW_COCO_UCS', 'ACCOUNT_LEVEL_COCO_USAGE', 'SE_COMMENTS', 'PSE_COMMENTS', 'FEATURE_FLAG', 'MEETS_TARGET', 'GAP']],
+        display[['PARTNER_NAME', 'TOTAL_PARTNER_UCS', 'COCO_UCS', 'COCO_PCT', 'WOW_COCO_PCT', 'WOW_COCO_UCS', 'SE_COMMENTS', 'PSE_COMMENTS', 'FEATURE_FLAG', 'MEETS_TARGET', 'GAP']],
         column_config={
             'PARTNER_NAME': st.column_config.TextColumn("Partner", width="medium"),
             'TOTAL_PARTNER_UCS': st.column_config.NumberColumn("Total UCs", format="%d"),
@@ -365,7 +368,6 @@ with tab_summary:
             'COCO_PCT': st.column_config.ProgressColumn("CoCo %", min_value=0, max_value=100, format="%.1f%%"),
             'WOW_COCO_PCT': st.column_config.NumberColumn("WoW Δ%", format="%+.1f%%", help="Week-over-week change in CoCo adoption % (available after 2nd weekly snapshot)"),
             'WOW_COCO_UCS': st.column_config.NumberColumn("WoW Δ UCs", format="%+d", help="Week-over-week change in CoCo use case count"),
-            'ACCOUNT_LEVEL_COCO_USAGE': st.column_config.NumberColumn("Account Level CoCo Usage", format="%d", help="Use cases on accounts with CoCo product consumption"),
             'SE_COMMENTS': st.column_config.NumberColumn("SE Comments", format="%d", help="SE wrote coco/cortex code in comments"),
             'PSE_COMMENTS': st.column_config.NumberColumn("PSE Comments", format="%d", help="Partner wrote #coco in comments"),
             'FEATURE_FLAG': st.column_config.NumberColumn("Feature Flag", format="%d", help="AI - Cortex Code in Prioritized Features"),
