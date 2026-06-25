@@ -13,8 +13,12 @@ st.set_page_config(
 if "conn" not in st.session_state:
     st.session_state.conn = st.connection("snowflake")
 
+if "_ui_region" not in st.session_state:
+    st.session_state._ui_region = "Global"
 if "selected_region" not in st.session_state:
     st.session_state.selected_region = "Global"
+if "selected_theater" not in st.session_state:
+    st.session_state.selected_theater = "All"
 if "selected_partners" not in st.session_state:
     st.session_state.selected_partners = []
 if "okr_start_date" not in st.session_state:
@@ -30,9 +34,22 @@ with st.sidebar:
     st.selectbox(
         "Region",
         options=["Global", "NoAM", "EMEA", "APJ"],
-        key="selected_region",
+        key="_ui_region",
         help="Filter all pages by region"
     )
+    st.selectbox(
+        "Theater",
+        options=["All", "AMSExpansion", "USMajors", "USPubSec", "AMSAcquisition"],
+        key="selected_theater",
+        help="Filter by NoAM theater. Only applies when Region is NoAM or Global."
+    )
+    # Compute effective region: theater name overrides NoAM/Global for query cache keying
+    _theater = st.session_state.selected_theater
+    _ui_reg = st.session_state._ui_region
+    if _theater != "All" and _ui_reg in ("NoAM", "Global"):
+        st.session_state.selected_region = _theater
+    else:
+        st.session_state.selected_region = _ui_reg
     partners = get_distinct_partners(st.session_state.conn, region=st.session_state.selected_region)
     # Remove "All" from the options list for multiselect (empty = all)
     partner_options = [p for p in partners if p != "All"]
@@ -80,6 +97,7 @@ page = st.navigation({
     "OKR & Reports": [
         st.Page("app_pages/okr_summary.py", title="OKR: CoCo Coverage", icon=":material/dashboard:"),
         st.Page("app_pages/okr_adoption.py", title="OKR: CoCo Adoption", icon=":material/check_circle:"),
+        st.Page("app_pages/partner_velocity.py", title="Partner Velocity", icon=":material/speed:"),
         st.Page("app_pages/executive_email.py", title="Executive Email", icon=":material/mail:"),
     ],
 })

@@ -20,13 +20,20 @@ MANAGED_PARTNERS = [
     # Global SIs
     'Accenture', 'Capgemini Technologies LLC',
     'Cognizant Technology Solutions US Corp', 'Deloitte Consulting', 'EY', 'Ernst & Young (EY)',
-    'IBM',
+    'IBM', 'IBM Consulting',
     # Regional Managed Partners
-    '7Rivers, Inc', 'Aimpoint Digital', 'BlueCloud Services Inc', 'kipi.ai',
+    '7Rivers, Inc', 'Aimpoint Digital', 'BlueCloud Services Inc', 'kipi.ai', 'Kipi.ai',
     'evolv Consulting', 'Infostrux Solutions Inc.', 'Infosys', 'KPMG LLP',
-    'LTIMindtree', 'NTT DATA Group Corporation', 'phData, Inc.',
+    'LTM', 'LTI Mindtree', 'NTT DATA Group Corporation', 'phData, Inc.',
     'Slalom, LLC.', 'Squadron Data Inc', 'Tredence Inc.'
 ]
+
+# GSIs report globally (all theaters); Regional SIs report NoAM only.
+# Aliases: EY=Ernst & Young (EY), IBM=IBM Consulting, kipi.ai=Kipi.ai, LTM=LTI Mindtree
+_GSI_NAMES = frozenset({
+    'Accenture', 'Capgemini Technologies LLC', 'Cognizant Technology Solutions US Corp',
+    'Deloitte Consulting', 'EY', 'Ernst & Young (EY)', 'IBM', 'IBM Consulting'
+})
 
 # Short display name → canonical partner name (for heat map tiles)
 HEATMAP_PARTNERS = [
@@ -44,7 +51,7 @@ HEATMAP_PARTNERS = [
     ('Infostrux',   'Infostrux Solutions Inc.'),
     ('Infosys',     'Infosys'),
     ('KPMG',        'KPMG LLP'),
-    ('LTIMindtree', 'LTIMindtree'),
+    ('LTM',         'LTM'),
     ('NTT DATA',    'NTT DATA Group Corporation'),
     ('phData',      'phData, Inc.'),
     ('Slalom',      'Slalom, LLC.'),
@@ -436,7 +443,7 @@ with st.spinner("Loading data..."):
     pipeline_wow = get_pipeline_wow(conn)
     gsi_wow = get_gsi_wow(conn)
     noam_si_wow = get_noam_si_wow(conn)
-    adoption_wow_data = get_coco_final_wow(conn, partners=MANAGED_PARTNERS)
+    adoption_wow_data = get_coco_final_wow(conn, partners=MANAGED_PARTNERS, gsi_global=True, gsi_names=_GSI_NAMES)
 
     # Managed partner stage EACV breakdown — Q2 ONLY (May 1 - Jul 31, 2026)
     managed_partners_sql = "','".join(MANAGED_PARTNERS)
@@ -451,7 +458,7 @@ with st.spinner("Loading data..."):
 
     # GSI global coverage — all regions (not NoAM-filtered), using IS_COCO_FINAL
     GSI_LIST = ['Accenture','Capgemini Technologies LLC','Cognizant Technology Solutions US Corp',
-                'Deloitte Consulting','EY','Ernst & Young (EY)','IBM']
+                'Deloitte Consulting','EY','Ernst & Young (EY)','IBM','IBM Consulting']
     gsi_bulk_conf = get_bulk_confidence_scores(conn, GSI_LIST, Q2_START, Q2_END)
     if len(gsi_bulk_conf) > 0:
         gsi_bulk_conf['IS_COCO_FINAL'] = (
@@ -500,13 +507,23 @@ with st.spinner("Loading data..."):
     # Executive email always uses: account-level CoCo ON, High confidence only
     _EMAIL_BANDS = ['High']
     managed_bulk_conf = get_bulk_confidence_scores(conn, MANAGED_PARTNERS, Q2_START, Q2_END)
-    # Scope to NoAM only (consistent with _theater_filter)
+    # GSIs: global scope (all theaters), EY aliases merged.
+    # Regional SIs: NoAM only (consistent with OKR tracking scope).
     if len(managed_bulk_conf) > 0:
-        managed_bulk_conf = managed_bulk_conf[
-            managed_bulk_conf['THEATER_NAME'].isin(
-                ['AMSExpansion', 'USMajors', 'AMSAcquisition', 'USPubSec']
-            )
+        _gsi_rows = managed_bulk_conf[managed_bulk_conf['PARTNER_NAME'].isin(_GSI_NAMES)].copy()
+        _regional_rows = managed_bulk_conf[~managed_bulk_conf['PARTNER_NAME'].isin(_GSI_NAMES)].copy()
+        # Regional SIs → NoAM only
+        _regional_rows = _regional_rows[
+            _regional_rows['THEATER_NAME'].isin(['AMSExpansion', 'USMajors', 'AMSAcquisition', 'USPubSec'])
         ]
+        # Merge aliases into canonical names
+        _gsi_rows['PARTNER_NAME'] = _gsi_rows['PARTNER_NAME'].replace(
+            {'Ernst & Young (EY)': 'EY', 'IBM Consulting': 'IBM'}
+        )
+        _regional_rows['PARTNER_NAME'] = _regional_rows['PARTNER_NAME'].replace(
+            {'Kipi.ai': 'kipi.ai', 'LTI Mindtree': 'LTM'}
+        )
+        managed_bulk_conf = pd.concat([_gsi_rows, _regional_rows], ignore_index=True)
 
     if len(managed_bulk_conf) > 0:
         managed_bulk_conf['IS_COCO_FINAL'] = (
@@ -805,14 +822,7 @@ if len(credit_data) > 0:
         wow = f"{cr['WOW_PCT']:+.1f}%" if pd.notna(cr['WOW_PCT']) else "N/A"
         credit_ctx += f"  {cr['PARTNER_NAME']}: Q2 Total=${cr['Q2_TOTAL_CREDITS']:,.0f}, Accounts={int(cr['COCO_CUSTOMER_ACCOUNTS'])}, Active Days={int(cr['ACTIVE_DAYS'])}, WoW={wow}\n"
 
-# GSI Global Coverage context (all regions)
-gsi_global_ctx = ""
-if len(gsi_global_data) > 0:
-    total_row = gsi_global_data.agg({'TOTAL_UCS': 'sum', 'COCO_UCS': 'sum', 'TOTAL_EACV': 'sum'})
-    global_pct = round(total_row['COCO_UCS'] * 100.0 / total_row['TOTAL_UCS'], 1) if total_row['TOTAL_UCS'] > 0 else 0
-    gsi_global_ctx += f"  Global Total: {int(total_row['TOTAL_UCS'])} UCs, {int(total_row['COCO_UCS'])} CoCo ({global_pct}%), ${total_row['TOTAL_EACV']/1_000_000:.1f}M EACV\n"
-    for _, row in gsi_global_data.iterrows():
-        gsi_global_ctx += f"  {row['REGION']}: {int(row['TOTAL_UCS'])} UCs, {int(row['COCO_UCS'])} CoCo ({row['COCO_PCT']}%), ${row['TOTAL_EACV']/1_000_000:.1f}M\n"
+
 
 # CoCo adoption WoW context — current values from IS_COCO_FINAL, deltas from weekly snapshot
 adoption_wow_ctx = ""
@@ -835,6 +845,32 @@ if len(managed_bulk_conf) > 0:
 _live_total = int(managed_q2_stats.iloc[0]['TOTAL_UCS']) if len(managed_q2_stats) > 0 else 0
 _live_coco  = int(managed_q2_stats.iloc[0]['COCO_UCS'])  if len(managed_q2_stats) > 0 else 0
 _live_pct   = round(_live_coco * 100.0 / _live_total, 1) if _live_total > 0 else 0.0
+
+# Pre-compute OKR headline targets so LLM doesn't need to infer them
+import math as _math
+_okr_target_ucs = _math.ceil(_live_total * 0.50)   # target = 50% of total UCs
+_okr_gap_ucs    = _live_coco - _okr_target_ucs      # negative = short of target
+_okr_target_pct = 50.0
+_okr_gap_pct    = round(_live_pct - _okr_target_pct, 1)
+# Partners meeting 50% per partner — computed from managed_bulk_conf
+_p_meeting_50 = 0
+if len(managed_bulk_conf) > 0:
+    _pm = (managed_bulk_conf.groupby('PARTNER_NAME')
+           .agg(T=('USE_CASE_ID','count'), C=('IS_COCO_FINAL','sum'))
+           .assign(PCT=lambda d: d['C']/d['T'].replace(0, float('nan'))))
+    _p_meeting_50 = int((_pm['PCT'] >= 0.50).sum())
+
+okr_headline_ctx = (
+    f"  Scope: 6 GSIs (Global all regions) + 14 RSIs (NoAM only)\n"
+    f"  Total Use Cases: {_live_total}\n"
+    f"  CoCo Use Cases (Current): {_live_coco}\n"
+    f"  CoCo Adoption % (Current): {_live_pct}%\n"
+    f"  Target CoCo UCs (50% of total): {_okr_target_ucs}\n"
+    f"  Target CoCo Adoption %: {_okr_target_pct}%\n"
+    f"  Gap (UCs): {_okr_gap_ucs:+d}\n"
+    f"  Gap (Adoption %): {_okr_gap_pct:+.1f}pp\n"
+    f"  Partners Meeting 50% Target: {_p_meeting_50}/20\n"
+)
 
 if len(adoption_wow_data) > 0:
     overall_row = adoption_wow_data[adoption_wow_data['PARTNER_NAME'].isna()]
@@ -861,6 +897,42 @@ if len(adoption_wow_data) > 0:
 else:
     adoption_wow_ctx = "  No adoption WoW data yet (first snapshot seeded, next available after Sunday task run).\n"
     adoption_wow_partner_ctx = adoption_wow_ctx
+
+# Regional OKR breakdown — hybrid live sources:
+# NoAM: managed_bulk_conf (all 20 managed partners, NoAM scope)
+# EMEA/APJ: gsi_bulk_conf (6 GSIs only) — same account pool as OKR Coverage with GSI filter
+regional_okr_ctx = ""
+
+# NoAM row — managed_bulk_conf NoAM rows (GSI NoAM + RSI NoAM, all 20 managed partners)
+if len(managed_bulk_conf) > 0:
+    _noam = managed_bulk_conf[managed_bulk_conf['REGION'] == 'NoAM']
+    if len(_noam) > 0:
+        _noam_total = len(_noam)
+        _noam_coco  = int(_noam['IS_COCO_FINAL'].sum())
+        _noam_pct   = round(_noam_coco * 100.0 / _noam_total, 1)
+        _np = _noam.groupby('PARTNER_NAME').agg(T=('USE_CASE_ID','count'), C=('IS_COCO_FINAL','sum')).reset_index()
+        _np['PCT'] = _np['C'] / _np['T'].replace(0, float('nan'))
+        regional_okr_ctx += (
+            f"  NoAM (all managed partners): {_noam_total} total UCs, "
+            f"{_noam_coco} CoCo UCs, {_noam_pct}% CoCo, "
+            f"{int((_np['PCT'] >= 0.5).sum())} partners meeting 50%\n"
+        )
+
+# EMEA and APJ rows — gsi_bulk_conf (6 GSIs only, same pool as OKR Coverage GSI filter)
+if len(gsi_bulk_conf) > 0 and 'REGION' in gsi_bulk_conf.columns and 'IS_COCO_FINAL' in gsi_bulk_conf.columns:
+    for _rname in ['EMEA', 'APJ']:
+        _gr = gsi_bulk_conf[gsi_bulk_conf['REGION'] == _rname]
+        if len(_gr) > 0:
+            _gr_total = len(_gr)
+            _gr_coco  = int(_gr['IS_COCO_FINAL'].sum())
+            _gr_pct   = round(_gr_coco * 100.0 / _gr_total, 1)
+            _gp = _gr.groupby('PARTNER_NAME').agg(T=('USE_CASE_ID','count'), C=('IS_COCO_FINAL','sum')).reset_index()
+            _gp['PCT'] = _gp['C'] / _gp['T'].replace(0, float('nan'))
+            regional_okr_ctx += (
+                f"  {_rname} (6 GSIs): {_gr_total} total UCs, "
+                f"{_gr_coco} CoCo UCs, {_gr_pct}% CoCo, "
+                f"{int((_gp['PCT'] >= 0.5).sum())} partners meeting 50%\n"
+            )
 
 # Recent wins context — last 7 days (deployments, competitive wins, pipeline moves)
 recent_wins_ctx = ""
@@ -948,9 +1020,6 @@ PIPELINE WoW (all CoCo partners, use case count change vs prior week):
 COCO CREDIT CONSUMPTION (Q2, managed partners):
 {credit_ctx}
 
-GLOBAL GSI COCO COVERAGE (6 GSIs, all regions, Q2 — not NoAM-filtered):
-{gsi_global_ctx}
-
 REGIONAL BREAKDOWN (Managed and Unmanaged):
 {region_ctx}
 
@@ -971,6 +1040,9 @@ OKR PROGRESS — 6 GSIs WoW (CoCo engagement, all regions combined — LW=last w
 
 OKR PROGRESS — NoAM SIs WoW (CoCo engagement — LW=last week, PW=prior week):
 {noam_si_wow_ctx}
+
+OKR PROGRESS — REGIONAL BREAKDOWN (current week; NoAM=all partners, EMEA/APJ=GSIs only):
+{regional_okr_ctx}
 
 COMMENT HIGHLIGHTS (managed partners only, Top 10 by EACV):
 {comment_ctx}
@@ -999,38 +1071,36 @@ recipients_input = st.text_area(
 default_prompt = f"""You are writing a polished executive briefing for Snowflake leadership on CoCo partner use case performance. This will be read by VPs and the CEO — keep it sharp, data-rich, and action-oriented.
 Do NOT include a title, heading, or subject line like "Cortex Code (CoCo) Partner Use Case Traction" at the top of the email. Start directly with the Note block.
 
-SCOPE: Focus on the 20 managed partners (NoAM only). All sections use managed partners only.
+SCOPE: Focus on the 20 managed partners. **GSIs (6) report GLOBAL numbers (NoAM + EMEA + APJ combined). RSIs (14) report NoAM-only numbers.** All sections must respect this scope.
 
 Follow this EXACT structure with 8 sections:
 
-## **Note: Showing NoAM use cases only — 6 GSIs (NoAM pipeline) + 14 NoAM Partners.**
+## **Note: Mixed scope — 6 GSIs report globally (all regions) | 14 Regional SIs report NoAM only.**
 
 ## EXECUTIVE SUMMARY
 2-3 sentences maximum, then exactly 6 bullets.
-- Open with: "[X] CoCo use cases across 20 managed partners **(14 NoAM-focused partners + 6 GSIs)** representing $[Z]M in CoCo EACV, with [W] deployed in production."
+- Open with: "[X] CoCo use cases across 20 managed partners **(6 GSIs global + 14 RSIs NoAM)** representing $[Z]M in CoCo EACV, with [W] deployed in production."
 - Second sentence: one crisp insight on the dominant pattern (e.g., what's working, what's accelerating).
 - Bullet 1: "**Leading use case types:** [top 3 by count]"
-- Bullet 2: "**NoAM CoCo Adoption:** [X]% ([CoCo UCs]/[Total UCs] use cases across 20 managed partners in NoAM)"
+- Bullet 2: "**CoCo Adoption (mixed scope):** [X]% overall — GSIs globally: [GSI CoCo UCs]/[GSI Total UCs] UCs | RSIs NoAM: [RSI CoCo UCs]/[RSI Total UCs] UCs"
 - Bullet 3: "**Top Global SIs by EACV:** ([top 3 global partners by EACV])"
 - Bullet 4: "**Top Regional SIs by EACV:** ([top 3 regional managed partners by EACV])"
 - Bullet 5: "**Competitive displacement:** [top 3 competitors by count]"
 - Bullet 6: "**[Detailed Partner CoCo usecase dashboard](https://app.snowflake.com/sfcogsops/snowhouse_aws_us_west_2/#/streamlit-apps/TEMP.COCO_PARTNER_ADOPTION.COCO_USECASE_INSIGHTS)**"
 
 PARTNER CLASSIFICATION:
-- Global SIs (6): EY, Deloitte Consulting, Accenture, Cognizant Technology Solutions US Corp, Capgemini Technologies LLC, IBM
-- Regional Managed Partners (15): 7Rivers, Aimpoint Digital, BlueCloud, kipi.ai, evolv Consulting, Infostrux, Infosys, KPMG, LTIMindtree, NTT DATA, phData, Slalom, Squadron Data, Tredence
+- Global SIs (6): EY (incl. Ernst & Young (EY)), Deloitte Consulting, Accenture, Cognizant Technology Solutions US Corp, Capgemini Technologies LLC, IBM (incl. IBM Consulting)
+- Regional Managed Partners (14): 7Rivers, Aimpoint Digital, BlueCloud, kipi.ai (incl. Kipi.ai), evolv Consulting, Infostrux, Infosys, KPMG, LTM (incl. LTI Mindtree), NTT DATA, phData, Slalom, Squadron Data, Tredence
 
-## OKR PROGRESS
-| Metric | Current | Target | Gap | WoW Δ |
-- Show exactly these 4 rows: CoCo Use Cases, CoCo Adoption %, Partners Meeting 50%, CoCo EACV
-- For CoCo EACV row: Target = "-", Gap = "-", WoW Δ = "-"
-- For the "Partners meeting 50%" row: Current = count, Target = "20", WoW Δ = "-"
-- For CoCo Use Cases row: WoW Δ from "COCO ADOPTION WoW — OVERALL" (Δ UCs field)
-- For CoCo Adoption % row: WoW Δ from "COCO ADOPTION WoW — OVERALL" (WoW field for adoption %)
-- If WoW data shows "N/A (first week)", put "-" in WoW Δ column with note "(data from next week)"
-- After the table: ONE sentence on what it takes to close the gap (how many more CoCo UCs needed, which partners have the biggest gaps)
-- Call out partners already meeting 50% target
-- Use MANAGED PARTNERS data only
+## OKR PROGRESS — REGIONAL BREAKDOWN
+| Region | Scope | Total UCs | CoCo UCs | CoCo Usecase % | Partners Meeting 50% |
+- Show 3 rows: NoAM, EMEA, APJ
+- Use "OKR PROGRESS — REGIONAL BREAKDOWN" data from context
+- NoAM row: all 20 GSI+RSI partners (NoAM scope for all)
+- EMEA row: 6 GSIs only (their EMEA pipeline)
+- APJ row: 6 GSIs only (their APJ pipeline)
+- After table: ONE sentence — which region is lagging most and what it signals for GSI enablement focus
+
 
 ## MANAGED PARTNER PIPELINE OVERVIEW
 | Stage | Total UCs | CoCo UCs | CoCo % | Total EACV | CoCo EACV |
@@ -1041,15 +1111,10 @@ PARTNER CLASSIFICATION:
 ## PARTNER SCORECARD (all 20 managed partners)
 | Partner | Total UCs | CoCo UCs | CoCo% | WoW Δ% | WoW Δ UCs | EACV | AI | DE | Analytics |
 - Show ALL 20 managed partners (do not cap or truncate). Sort by EACV descending.
-- "Total UCs" = all partner use cases (stages 3-7). "CoCo%" = CoCo/Total.
+- **GSIs (6): Total UCs and CoCo UCs are GLOBAL (all regions combined).** RSIs (14): Total UCs and CoCo UCs are NoAM only.
+- "CoCo%" = CoCo/Total for each partner's scoped data.
 - WoW Δ% and WoW Δ UCs from "COCO ADOPTION WoW — PER MANAGED PARTNER" — show "-" if N/A
 - Our target is **50% CoCo adoption** per partner. After the table, add ONE sentence calling out which partners are closest to 50% and which need enablement focus.
-
-## GLOBAL GSI COCO COVERAGE (6 GSIs — all regions)
-| Region | Total UCs | CoCo UCs | CoCo % | EACV |
-- Use "GLOBAL GSI COCO COVERAGE" data — shows GSI pipeline globally (NoAM + EMEA + APJ)
-- Include a Global Total row at the top, then NoAM / EMEA / APJ rows
-- ONE sentence after: highlight which region lags most and what it means for global GSI enablement
 
 ## USE CASE PATTERNS (managed partners only)
 3-4 bullets. Each: **Pattern Name** — one sentence with partner names and EACV.

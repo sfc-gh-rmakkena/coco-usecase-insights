@@ -72,8 +72,12 @@ def _use_case_base(start_date=None, end_date=None):
 USE_CASE_BASE = _use_case_base()
 
 def _theater_filter(region: str) -> str:
+    _noam = ('AMSExpansion', 'USMajors', 'AMSAcquisition', 'USPubSec')
     if not region or region == "Global":
         return ""
+    elif region in _noam:
+        # Theater-level filter (effective_region = theater name)
+        return f" AND THEATER_NAME = '{region}'"
     elif region == "NoAM":
         return " AND THEATER_NAME IN ('AMSExpansion', 'USMajors', 'AMSAcquisition', 'USPubSec')"
     elif region == "EMEA":
@@ -88,6 +92,7 @@ def _source_filter(source: str) -> str:
     elif source == "Feature Flag":
         return " AND COCO_MENTION_SOURCE = 'FEATURE_FLAG'"
     return ""
+
 
 @st.cache_data(ttl=timedelta(minutes=30))
 def get_use_cases(_conn, partner=None, stage=None, region=None, source=None, technical_type=None, start_date=None, end_date=None):
@@ -791,6 +796,31 @@ def get_okr_stage_breakdown(_conn, region=None, start_date=None, end_date=None, 
     return _conn.query(query)
 
 @st.cache_data(ttl=timedelta(minutes=30))
+def get_account_coco_credits(_conn, accounts: tuple, start_date: str) -> "pd.DataFrame":
+    """Q2 CoCo credit consumption per account from CORTEX_CODE_USER_DAY_FACT.
+    Returns ACCOUNT_NAME_UPPER, Q2_CREDITS, ACTIVE_DAYS, LAST_ACTIVE.
+    Credits are account-level — shared across all UCs at the same account.
+    """
+    if not accounts:
+        import pandas as pd
+        return pd.DataFrame(columns=['ACCOUNT_NAME_UPPER', 'Q2_CREDITS', 'ACTIVE_DAYS', 'LAST_ACTIVE'])
+    accts_sql = "','".join(a.replace("'", "''") for a in accounts)
+    query = f"""
+    SELECT
+        UPPER(SALESFORCE_ACCOUNT_NAME)      AS ACCOUNT_NAME_UPPER,
+        ROUND(SUM(TOTAL_TOKEN_CREDITS), 2)  AS Q2_CREDITS,
+        COUNT(DISTINCT DS)                  AS ACTIVE_DAYS,
+        MAX(DS)                             AS LAST_ACTIVE
+    FROM SNOWSCIENCE.LLM.CORTEX_CODE_USER_DAY_FACT
+    WHERE DS >= '{start_date}'
+    AND SNOWFLAKE_ACCOUNT_TYPE = 'Customer'
+    AND TOTAL_DAILY_REQUESTS > 0
+    AND UPPER(SALESFORCE_ACCOUNT_NAME) IN ('{accts_sql}')
+    GROUP BY UPPER(SALESFORCE_ACCOUNT_NAME)
+    """
+    return _conn.query(query)
+
+@st.cache_data(ttl=timedelta(minutes=30))
 def get_partner_credit_consumption(_conn, partners, start_date, end_date=None):
     """Get CoCo credit consumption per partner on customer accounts with Q2-dated use cases."""
     partners_sql = "','".join(partners)
@@ -860,7 +890,7 @@ def _confidence_scored_query(partner_filter_sql, start_date, end_date):
     """Shared SQL body for confidence scoring - used by both single and bulk functions."""
     return f"""
     WITH partner_ucs AS (
-        SELECT uc.USE_CASE_ID, uc.ACCOUNT_NAME, UPPER(uc.ACCOUNT_NAME) AS ACCOUNT_NAME_UPPER,
+        SELECT uc.USE_CASE_ID, uc.USE_CASE_NAME, uc.ACCOUNT_NAME, UPPER(uc.ACCOUNT_NAME) AS ACCOUNT_NAME_UPPER,
             uc.PARTNER_NAME, uc.TECHNICAL_USE_CASE, uc.USE_CASE_STAGE,
             uc.USE_CASE_EACV, uc.IS_COCO, uc.COCO_SOURCE, uc.THEATER_NAME,
             CASE
@@ -1060,7 +1090,7 @@ def get_gsi_wow(_conn):
 def get_noam_si_wow(_conn):
     """WoW engagement (requests) for NoAM managed SIs from OTHER_SI_REGIONAL_METRICS."""
     managed_noam_sis = (
-        "'BlueCloud Services Inc','LTIMindtree','evolv Consulting','Slalom, LLC.',"
+        "'BlueCloud Services Inc','LTM','evolv Consulting','Slalom, LLC.',"
         "'Tredence Inc.','phData, Inc.','Squadron Data Inc','7Rivers, Inc',"
         "'Aimpoint Digital','Infostrux Solutions Inc.','Infosys','KPMG LLP',"
         "'NTT DATA Group Corporation'"
@@ -1209,6 +1239,66 @@ def get_adoption_trend_4w(_conn, partners: tuple, region: str = "NoAM") -> list:
     return result
 
 
+_GSI_VELOCITY_PARTNERS = (
+    "'Accenture','Capgemini Technologies LLC','Cognizant Technology Solutions US Corp',"
+    "'Deloitte Consulting','EY','Ernst & Young (EY)','IBM','IBM Consulting'"
+)
+_NOAM_THEATERS = (
+    "'AMSExpansion','USMajors','AMSAcquisition','USPubSec'"
+)
+
+@st.cache_data(ttl=timedelta(weeks=1))
+def get_partner_velocity_data(_conn, partners_sql: str):
+    """Load and AI-classify managed partner deployed use cases for FY26-FY27 Q2 velocity analysis.
+    GSIs use global (all theaters); RSIs filtered to NoAM theaters only.
+    Cached for 1 week — AI_CLASSIFY on ~1700 UCs takes ~2 min on first load.
+    """
+    return _conn.query(f"""
+    SELECT
+        d.USE_CASE_ID,
+        CASE WHEN d.PARTNER_NAME = 'Ernst & Young (EY)' THEN 'EY'
+             WHEN d.PARTNER_NAME = 'IBM Consulting'     THEN 'IBM'
+             WHEN d.PARTNER_NAME = 'Kipi.ai'            THEN 'kipi.ai'
+             WHEN d.PARTNER_NAME = 'LTI Mindtree'       THEN 'LTM'
+             ELSE d.PARTNER_NAME END                                              AS PARTNER_NAME,
+        sf.ACTUAL_GO_LIVE_DATE_C                                                  AS GO_LIVE_DATE,
+        sf.DECISION_DATE_C                                                        AS DECISION_DATE,
+        DATEDIFF('day', sf.DECISION_DATE_C, sf.ACTUAL_GO_LIVE_DATE_C)            AS DAYS_FULL_CYCLE,
+        CASE
+            WHEN sf.ACTUAL_GO_LIVE_DATE_C BETWEEN '2025-02-01' AND '2025-04-30' THEN 'FY26 Q1'
+            WHEN sf.ACTUAL_GO_LIVE_DATE_C BETWEEN '2025-05-01' AND '2025-07-31' THEN 'FY26 Q2'
+            WHEN sf.ACTUAL_GO_LIVE_DATE_C BETWEEN '2025-08-01' AND '2025-10-31' THEN 'FY26 Q3'
+            WHEN sf.ACTUAL_GO_LIVE_DATE_C BETWEEN '2025-11-01' AND '2026-01-31' THEN 'FY26 Q4'
+            WHEN sf.ACTUAL_GO_LIVE_DATE_C BETWEEN '2026-02-01' AND '2026-04-30' THEN 'FY27 Q1'
+            WHEN sf.ACTUAL_GO_LIVE_DATE_C BETWEEN '2026-05-01' AND '2026-07-31' THEN 'FY27 Q2'
+        END                                                                       AS FISCAL_QUARTER,
+        CASE
+            WHEN sf.ACTUAL_GO_LIVE_DATE_C BETWEEN '2025-02-01' AND '2026-01-31' THEN 'FY26'
+            WHEN sf.ACTUAL_GO_LIVE_DATE_C BETWEEN '2026-02-01' AND '2026-07-31' THEN 'FY27 Q1+Q2'
+        END                                                                       AS COHORT,
+        AI_CLASSIFY(
+            LEFT(TRIM(COALESCE(sf.DESCRIPTION_C,'') || ' ' || COALESCE(sf.USE_CASE_COMMENTS_C,'')), 1000),
+            ARRAY_CONSTRUCT('AI / ML','Data Engineering','DWH / Migration',
+                            'Platform / Governance','Apps / Data Sharing')
+        ):labels[0]::STRING                                                       AS WORKLOAD_CATEGORY,
+        LEFT(COALESCE(sf.DESCRIPTION_C, sf.USE_CASE_COMMENTS_C,''), 180)         AS DESCRIPTION_PREVIEW
+    FROM TEMP.COCO_PARTNER_ADOPTION.DT_OKR_USE_CASES d
+    JOIN FIVETRAN.SALESFORCE.USE_CASE_C sf ON sf.ID = d.USE_CASE_ID
+    WHERE d.PARTNER_NAME IN ({partners_sql})
+      AND sf.STAGE_C = '7 - Deployed'
+      AND sf.ACTUAL_GO_LIVE_DATE_C BETWEEN '2025-02-01' AND '2026-07-31'
+      AND sf.DECISION_DATE_C IS NOT NULL
+      AND sf._FIVETRAN_DELETED IS DISTINCT FROM TRUE
+      AND LEN(TRIM(COALESCE(sf.DESCRIPTION_C,'') || ' ' || COALESCE(sf.USE_CASE_COMMENTS_C,''))) > 30
+      AND DATEDIFF('day', sf.DECISION_DATE_C, sf.ACTUAL_GO_LIVE_DATE_C) BETWEEN 1 AND 730
+      -- GSIs: all theaters (global); RSIs: NoAM theaters only
+      AND (
+          d.PARTNER_NAME IN ({_GSI_VELOCITY_PARTNERS})
+          OR d.THEATER_NAME IN ({_NOAM_THEATERS})
+      )
+    """)
+
+
 @st.cache_data(ttl=timedelta(minutes=30))
 def get_partners_at_target_trend_4w(_conn, partners: tuple, target_pct: float = 50.0) -> list:
     """Return [(week_label, partners_at_target, total_partners), ...] for last 4 weeks.
@@ -1258,22 +1348,23 @@ def get_partners_at_target_trend_4w(_conn, partners: tuple, target_pct: float = 
     return result
 
 
-def save_coco_final_snapshot(_conn, bulk_conf_df) -> bool:
-    """Save this week's IS_COCO_FINAL (Def C) snapshot. Idempotent — skips if already saved.
+def save_coco_final_snapshot(_conn, bulk_conf_df, region='NoAM') -> bool:
+    """Save this week's IS_COCO_FINAL (Def C) snapshot. Idempotent — skips if already saved for this region.
     bulk_conf_df must have IS_COCO_FINAL, PARTNER_NAME, USE_CASE_ID, USE_CASE_EACV columns.
-    Returns True if saved, False if already exists for this week.
+    Returns True if saved, False if already exists for this week+region.
     """
     import pandas as pd
     week_start = pd.Timestamp.now().to_period('W').start_time.date().strftime('%Y-%m-%d')
 
     existing = _conn.query(f"""
         SELECT COUNT(*) AS CNT FROM {SCHEMA}.IS_COCO_FINAL_WEEKLY_SNAPSHOT
-        WHERE WEEK_START = '{week_start}'
+        WHERE WEEK_START = '{week_start}' AND REGION = '{region}'
     """)
     if existing.iloc[0]['CNT'] > 0:
         return False
 
     rows = []
+    safe_region = region.replace("'", "''")
     for partner, grp in bulk_conf_df.groupby('PARTNER_NAME'):
         coco = int(grp['IS_COCO_FINAL'].sum())
         total = len(grp)
@@ -1281,43 +1372,61 @@ def save_coco_final_snapshot(_conn, bulk_conf_df) -> bool:
         eacv = float(grp['USE_CASE_EACV'].sum() or 0)
         coco_eacv = float(grp.loc[grp['IS_COCO_FINAL'], 'USE_CASE_EACV'].sum() or 0)
         safe_partner = partner.replace("'", "''")
-        rows.append(f"('{week_start}', '{safe_partner}', {total}, {coco}, {pct}, {eacv}, {coco_eacv})")
+        rows.append(f"('{week_start}', '{safe_partner}', {total}, {coco}, {pct}, {eacv}, {coco_eacv}, '{safe_region}')")
 
     total_all = len(bulk_conf_df)
     coco_all = int(bulk_conf_df['IS_COCO_FINAL'].sum())
     pct_all = round(coco_all * 100.0 / total_all, 1) if total_all > 0 else 0.0
     eacv_all = float(bulk_conf_df['USE_CASE_EACV'].sum() or 0)
     coco_eacv_all = float(bulk_conf_df.loc[bulk_conf_df['IS_COCO_FINAL'], 'USE_CASE_EACV'].sum() or 0)
-    rows.append(f"('{week_start}', NULL, {total_all}, {coco_all}, {pct_all}, {eacv_all}, {coco_eacv_all})")
+    rows.append(f"('{week_start}', NULL, {total_all}, {coco_all}, {pct_all}, {eacv_all}, {coco_eacv_all}, '{safe_region}')")
 
     _conn.query(f"""
         INSERT INTO {SCHEMA}.IS_COCO_FINAL_WEEKLY_SNAPSHOT
-            (WEEK_START, PARTNER_NAME, TOTAL_UCS, COCO_UCS, COCO_PCT, TOTAL_EACV, COCO_EACV)
+            (WEEK_START, PARTNER_NAME, TOTAL_UCS, COCO_UCS, COCO_PCT, TOTAL_EACV, COCO_EACV, REGION)
         VALUES {', '.join(rows)}
     """)
     return True
 
 
 @st.cache_data(ttl=timedelta(minutes=30))
-def get_coco_final_wow(_conn, partners=None):
-    """WoW CoCo adoption delta from IS_COCO_FINAL_WEEKLY_SNAPSHOT (Def C, NoAM-scoped).
-    No fallback to OKR_PARTNER_WEEKLY_ADOPTION — that table is globally-scoped and would
-    create a NoAM vs global mismatch in the delta.
-    Deduplicates within each WEEK_START to guard against accidental double-saves.
-    Returns NULL WoW columns until 2 distinct weeks of data exist.
+def get_coco_final_wow(_conn, partners=None, gsi_global=False, gsi_names=frozenset()):
+    """WoW CoCo adoption delta from IS_COCO_FINAL_WEEKLY_SNAPSHOT (Def C).
+
+    gsi_global=False (default, OKR summary):
+        All partners use REGION='NoAM'. Backward compatible.
+
+    gsi_global=True (exec email):
+        Partners in gsi_names use REGION='Global'; all others use REGION='NoAM'.
+        Overall NULL row uses REGION='Global'.
+
+    Deduplicates within each (WEEK_START, PARTNER_NAME, REGION).
+    Returns NULL WoW columns until 2 distinct weeks of data exist for a given scope.
     """
     partner_filter = ""
     if partners:
         ps = "','".join(partners)
         partner_filter = f"AND (PARTNER_NAME IN ('{ps}') OR PARTNER_NAME IS NULL)"
+
+    if gsi_global and gsi_names:
+        gsi_list = "','".join(gsi_names)
+        # GSI partners + overall NULL use 'Global'; Regional SIs use 'NoAM'
+        region_filter = f"""AND (
+            (PARTNER_NAME IN ('{gsi_list}') AND COALESCE(REGION,'NoAM') = 'Global')
+            OR (PARTNER_NAME NOT IN ('{gsi_list}') AND COALESCE(REGION,'NoAM') = 'NoAM')
+            OR (PARTNER_NAME IS NULL AND COALESCE(REGION,'NoAM') = 'Global')
+        )"""
+    else:
+        region_filter = "AND COALESCE(REGION,'NoAM') = 'NoAM'"
+
     query = f"""
     WITH deduped AS (
-        -- Keep one row per (WEEK_START, PARTNER_NAME), preferring the earliest SAVED_AT
+        -- Keep one row per (WEEK_START, PARTNER_NAME, REGION), preferring earliest SAVED_AT
         SELECT WEEK_START, PARTNER_NAME, TOTAL_UCS, COCO_UCS, COCO_PCT, TOTAL_EACV, COCO_EACV
         FROM {SCHEMA}.IS_COCO_FINAL_WEEKLY_SNAPSHOT
-        WHERE 1=1 {partner_filter}
+        WHERE 1=1 {partner_filter} {region_filter}
         QUALIFY ROW_NUMBER() OVER (
-            PARTITION BY WEEK_START, COALESCE(PARTNER_NAME, '__OVERALL__')
+            PARTITION BY WEEK_START, COALESCE(PARTNER_NAME, '__OVERALL__'), COALESCE(REGION,'NoAM')
             ORDER BY SAVED_AT
         ) = 1
     ),
