@@ -12,7 +12,7 @@ from utils.queries import (
     get_partner_coco_coverage, get_partner_credit_consumption, get_adoption_overview,
     get_bulk_confidence_scores, get_pipeline_wow, get_gsi_wow, get_noam_si_wow,
     get_recent_wins, get_coco_final_wow, get_coco_final_trend_4w, save_coco_final_snapshot,
-    get_partners_at_target_trend_4w,
+    get_partners_at_target_trend_4w, save_okr_target_count,
     get_partner_velocity_data,
 )
 from utils.cortex_helpers import cortex_complete
@@ -75,7 +75,7 @@ def name_to_email(name):
 
 def generate_heatmap_html(adoption_wow_data: pd.DataFrame, managed_q2_partners: pd.DataFrame) -> str:
     """Build Gmail-compatible partner OKR heat map.
-    Green ≥50%, amber 30-49%, red <30%. Blue border = crossed 50% this week.
+    Green ≥50%, amber 30-49%, red <30%.
     """
     pct_map: dict = {}
     wow_map: dict = {}
@@ -123,15 +123,12 @@ def generate_heatmap_html(adoption_wow_data: pd.DataFrame, managed_q2_partners: 
         else:
             bg, border, val_color = '#fee2e2', '1px solid #fca5a5', '#dc2626'
 
-        crossed = pct >= 50 and wow is not None and wow > 0
-        if crossed:
-            border = '2px solid #0369a1'
+        # crossed = newly crossed 50% this week (was below 50% last week, now at or above)
+        crossed = pct >= 50 and wow is not None and (pct - wow) < 50
 
         wow_html = ''
         if wow is not None and wow != 0:
-            if crossed:
-                wow_html = '<div style="font-size:9px;color:#16a34a;font-weight:700;">&#9650; NEW</div>'
-            elif wow > 0:
+            if wow > 0:
                 wow_html = f'<div style="font-size:9px;color:#16a34a;">&#9650; +{wow:.1f}pp</div>'
             else:
                 wow_html = f'<div style="font-size:9px;color:#dc2626;">&#9660; {wow:.1f}pp</div>'
@@ -158,7 +155,7 @@ def generate_heatmap_html(adoption_wow_data: pd.DataFrame, managed_q2_partners: 
         '<span style="background:#dcfce7;color:#16a34a;padding:3px 9px;border-radius:4px;font-weight:700;">&#9632; &#8805;50%</span>&nbsp;'
         '<span style="background:#fef3c7;color:#d97706;padding:3px 9px;border-radius:4px;font-weight:700;">&#9632; 30&#8211;49%</span>&nbsp;'
         '<span style="background:#fee2e2;color:#dc2626;padding:3px 9px;border-radius:4px;font-weight:700;">&#9632; &lt;30%</span>&nbsp;'
-        '<span style="color:#0369a1;font-weight:700;">&#9733; = WoW change &middot; Blue border = crossed 50% this week</span>'
+        '<span style="color:#0369a1;font-weight:700;">&#9733; = WoW change</span>'
         '</td></tr>'
     )
 
@@ -307,13 +304,27 @@ def generate_partners_target_chart_html(trend_data: list) -> str:
         f'<tr><td width="{Y_W}" height="1" style="width:{Y_W}px;font-size:9px;color:#9ca3af;text-align:right;padding-right:4px;line-height:1;{NB}">0</td></tr>'
         f'</table></td>'
     )
-    y_axis_label_row = (
-        f'<td width="{Y_W}" style="width:{Y_W}px;font-size:9px;color:#9ca3af;text-align:right;padding-right:4px;{NB}">Partners</td>'
+    y_axis_title_cell = (
+        f'<td width="{Y_W}" style="width:{Y_W}px;font-size:9px;color:#9ca3af;text-align:right;padding-right:4px;padding-bottom:2px;{NB}">Partners</td>'
     )
 
     label_cells, bar_cells, date_cells = [], [], []
 
-    for i, (label, count, total) in enumerate(trend_data):
+    import pandas as _pd
+    _current_week_start = _pd.Timestamp.now().to_period('W').start_time.normalize()
+
+    for i, (raw_label, count, total) in enumerate(trend_data):
+        # Format label fresh at render time (not cached)
+        try:
+            ts = _pd.Timestamp(raw_label)
+            if ts.normalize() >= _current_week_start:
+                label = "Current Week"
+            else:
+                day = ts.day
+                suffix = 'th' if 11 <= day <= 13 else {1:'st',2:'nd',3:'rd'}.get(day % 10, 'th')
+                label = f"Week of {ts.strftime('%b')} {day}{suffix}"
+        except Exception:
+            label = raw_label
         fill = '#16a34a' if i == n - 1 else '#29B5E8'
         bar_h = max(4, int(CHART_H * count / MAX_PARTNERS))
         spacer_h = CHART_H - bar_h
@@ -338,15 +349,16 @@ def generate_partners_target_chart_html(trend_data: list) -> str:
 
         date_cells.append(f'<td width="{BAR_W}" align="center" style="width:{BAR_W}px;text-align:center;font-size:10px;color:#374151;padding-top:6px;{NB}">{label}</td>')
 
-    # Rows: value labels, bars, x-axis line, date labels
+    # Rows: Partners label (top), value labels, bars, x-axis line, date labels
+    row_title = f'<tr>{y_axis_title_cell}<td></td></tr>'
     row0 = f'<tr>{y_axis}<td><table border="0" cellpadding="0" cellspacing="0">{"<tr>" + "".join(label_cells) + "</tr>"}</table></td></tr>'
     row1 = f'<tr><td width="{Y_W}" style="width:{Y_W}px;{NB}"></td><td><table border="0" cellpadding="0" cellspacing="0">{"<tr>" + "".join(bar_cells) + "</tr>"}</table></td></tr>'
     row2 = f'<tr><td colspan="2" height="2" bgcolor="#d1d5db" style="height:2px;background-color:#d1d5db;font-size:0;line-height:0;">&nbsp;</td></tr>'
-    row3 = f'<tr>{y_axis_label_row}<td><table border="0" cellpadding="0" cellspacing="0">{"<tr>" + "".join(date_cells) + "</tr>"}</table></td></tr>'
+    row3 = f'<tr><td width="{Y_W}" style="width:{Y_W}px;{NB}"></td><td><table border="0" cellpadding="0" cellspacing="0">{"<tr>" + "".join(date_cells) + "</tr>"}</table></td></tr>'
     row4 = f'<tr><td></td><td align="center" style="font-size:9px;color:#9ca3af;padding-top:2px;">Week</td></tr>'
 
     chart_table = (f'<table width="{total_w}" border="0" cellpadding="0" cellspacing="0" style="width:{total_w}px;border-collapse:collapse;">'
-                   f'{row0}{row1}{row2}{row3}{row4}</table>')
+                   f'{row_title}{row0}{row1}{row2}{row3}{row4}</table>')
 
     return (
         '<table width="600" border="0" cellpadding="0" cellspacing="0" style="font-family:Arial,sans-serif;margin:16px 0;border:1px solid #e5e7eb;">'
@@ -591,10 +603,6 @@ with st.spinner("Loading data..."):
     Q2_END = '2026-07-31'
 
     recent_wins_data = get_recent_wins(conn, MANAGED_PARTNERS, Q2_START, Q2_END)
-    trend_data = get_partners_at_target_trend_4w(
-        conn, tuple(MANAGED_PARTNERS),
-        gsi_names=tuple(_GSI_NAMES)   # GSIs use Global row; RSIs use NoAM row
-    )
 
     # Q2 Credit consumption for managed partners
     credit_data = get_partner_credit_consumption(conn, MANAGED_PARTNERS, Q2_START, Q2_END)
@@ -816,6 +824,20 @@ else:
     partners_meeting_50 = 0
     partners_meeting_list = 'N/A'
     partners_below_50 = managed_total_partners
+
+# Upsert current week's count into COCO_OKR_TARGET_WEEKLY (freezes automatically when week rolls over)
+try:
+    save_okr_target_count(conn, partners_meeting_50, managed_total_partners)
+except Exception as _e:
+    import traceback; traceback.print_exc()
+    st.toast(f"OKR trend save skipped: {_e}", icon="⚠️")
+get_partners_at_target_trend_4w.clear()  # always refresh trend cache
+
+# Fetch trend data after upsert so current week's value is always fresh
+trend_data = get_partners_at_target_trend_4w(
+    conn, tuple(MANAGED_PARTNERS),
+    gsi_names=tuple(_GSI_NAMES)
+)
 
 s = stats.iloc[0]
 go = global_overview.iloc[0]
