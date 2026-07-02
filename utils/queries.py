@@ -1302,65 +1302,40 @@ def get_partner_velocity_data(_conn, partners_sql: str):
 @st.cache_data(ttl=timedelta(minutes=30))
 def get_partners_at_target_trend_4w(_conn, partners: tuple, target_pct: float = 50.0, gsi_names: tuple = ()) -> list:
     """Return [(week_label, partners_at_target, total_partners), ...] for last 4 weeks.
-    Uses IS_COCO_FINAL_WEEKLY_SNAPSHOT (Def C) with OKR_PARTNER_WEEKLY_ADOPTION fallback.
-    Region filter: GSIs use Global row; RSIs use NoAM row — matches heatmap scope.
-    """
-    ps = "','".join(partners)
-    total_partners = len(partners)
-
-    if gsi_names:
-        gsi_sql = "','".join(gsi_names)
-        region_filter = f"""AND (
-            (PARTNER_NAME IN ('{gsi_sql}') AND COALESCE(REGION, 'NoAM') = 'Global')
-            OR (PARTNER_NAME NOT IN ('{gsi_sql}') AND COALESCE(REGION, 'NoAM') = 'NoAM')
-        )"""
-    else:
-        region_filter = "AND COALESCE(REGION, 'NoAM') = 'NoAM'"
-
-    query = f"""
-    WITH primary_src AS (
-        SELECT WEEK_START, PARTNER_NAME, COCO_PCT
-        FROM {SCHEMA}.IS_COCO_FINAL_WEEKLY_SNAPSHOT
-        WHERE PARTNER_NAME IN ('{ps}')
-        {region_filter}
-        QUALIFY ROW_NUMBER() OVER (PARTITION BY WEEK_START, PARTNER_NAME ORDER BY SAVED_AT DESC) = 1
-    ),
-    fallback_src AS (
-        SELECT WEEK_START, PARTNER_NAME, COCO_PCT
-        FROM {SCHEMA}.OKR_PARTNER_WEEKLY_ADOPTION
-        WHERE PARTNER_NAME IN ('{ps}')
-    ),
-    combined AS (
-        SELECT WEEK_START, PARTNER_NAME, COCO_PCT, 1 AS src_priority FROM primary_src
-        UNION ALL
-        SELECT WEEK_START, PARTNER_NAME, COCO_PCT, 2 AS src_priority FROM fallback_src
-    ),
-    deduped AS (
-        SELECT WEEK_START, PARTNER_NAME, COCO_PCT
-        FROM combined
-        QUALIFY ROW_NUMBER() OVER (PARTITION BY WEEK_START, PARTNER_NAME ORDER BY src_priority) = 1
-    ),
-    weekly AS (
-        SELECT WEEK_START,
-            COUNT(DISTINCT CASE WHEN COCO_PCT >= {target_pct} THEN PARTNER_NAME END) AS PARTNERS_AT_TARGET,
-            ROW_NUMBER() OVER (ORDER BY WEEK_START DESC) AS rn
-        FROM deduped
-        GROUP BY WEEK_START
-    )
-    SELECT WEEK_START, PARTNERS_AT_TARGET
-    FROM weekly WHERE rn <= 4
-    ORDER BY WEEK_START ASC
+    Primary source: COCO_OKR_TARGET_WEEKLY (pre-computed, upserted each exec email load for current week).
+    Total partners derived from len(partners).
     """
     import pandas as pd
+    total_partners = len(partners)
+
+    query = f"""
+    SELECT WEEK_START, PARTNERS_AT_TARGET
+    FROM {SCHEMA}.COCO_OKR_TARGET_WEEKLY
+    ORDER BY WEEK_START DESC
+    LIMIT 4
+    """
     df = _conn.query(query)
+    df = df.sort_values('WEEK_START').reset_index(drop=True)
     result = []
     for _, row in df.iterrows():
-        try:
-            label = f"{pd.Timestamp(row['WEEK_START']).month}/{pd.Timestamp(row['WEEK_START']).day}"
-        except Exception:
-            label = str(row['WEEK_START'])[:10]
-        result.append((label, int(row['PARTNERS_AT_TARGET']), total_partners))
+        # Return raw week_start string — label formatting done at render time to avoid cache staleness
+        result.append((str(row['WEEK_START'])[:10], int(row['PARTNERS_AT_TARGET']), total_partners))
     return result
+
+
+def save_okr_target_count(_conn, partners_at_target: int, total_partners: int) -> None:
+    """Upsert current week's partners_at_target into COCO_OKR_TARGET_WEEKLY.
+    Current week is always refreshed (DELETE + INSERT); past weeks are frozen.
+    Uses session().sql().collect() to bypass Streamlit query cache.
+    """
+    import pandas as pd
+    week_start = pd.Timestamp.now().to_period('W').start_time.date().strftime('%Y-%m-%d')
+    session = _conn.session()
+    session.sql(f"DELETE FROM {SCHEMA}.COCO_OKR_TARGET_WEEKLY WHERE WEEK_START = '{week_start}'").collect()
+    session.sql(
+        f"INSERT INTO {SCHEMA}.COCO_OKR_TARGET_WEEKLY (WEEK_START, PARTNERS_AT_TARGET, TOTAL_PARTNERS) "
+        f"VALUES ('{week_start}', {int(partners_at_target)}, {int(total_partners)})"
+    ).collect()
 
 
 def save_coco_final_snapshot(_conn, bulk_conf_df, region='NoAM') -> bool:
