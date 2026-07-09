@@ -1,7 +1,8 @@
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
-from utils.queries import get_partner_coco_coverage, get_okr_stage_breakdown, get_partner_credit_consumption, get_bulk_confidence_scores, get_coco_final_wow
+from utils.queries import get_partner_coco_coverage, get_okr_stage_breakdown, get_partner_credit_consumption, get_bulk_confidence_scores, get_coco_final_wow, get_account_coco_credits
+from utils.cortex_helpers import cortex_complete
 from utils import resolve_partner_filter, resolve_region_theaters, PARTNER_RENAME_MAP
 
 conn = st.session_state.conn
@@ -74,6 +75,28 @@ if include_account_coco and len(coverage) > 0:
         coverage = _cov.merge(conf_summary, on='PARTNER_NAME', how='left').fillna(0)
         coverage['COCO_PCT'] = coverage['COCO_PCT'].astype(float)
         coverage[['TOTAL_PARTNER_UCS', 'COCO_UCS', 'NON_COCO_UCS']] = coverage[['TOTAL_PARTNER_UCS', 'COCO_UCS', 'NON_COCO_UCS']].astype(int)
+
+        # Fetch account-level credits & tokens for IS_COCO_FINAL accounts, aggregated by partner
+        _coco_final_df = bulk_conf[bulk_conf['IS_COCO_FINAL']][['PARTNER_NAME', 'ACCOUNT_NAME_UPPER']].drop_duplicates()
+        _coco_accts = tuple(_coco_final_df['ACCOUNT_NAME_UPPER'].dropna().unique())
+        if _coco_accts:
+            _usage = get_account_coco_credits(conn, _coco_accts, str(start_date))
+            if len(_usage) > 0:
+                _usage_joined = _coco_final_df.merge(_usage, on='ACCOUNT_NAME_UPPER', how='left')
+                _partner_usage = _usage_joined.groupby('PARTNER_NAME').agg(
+                    Q2_CREDITS=('Q2_CREDITS', 'sum'),
+                    Q2_TOKENS=('Q2_TOKENS', 'sum'),
+                    ACCTS_WITH_USAGE=('Q2_CREDITS', lambda x: (x > 0).sum()),
+                ).reset_index()
+                coverage = coverage.merge(_partner_usage, on='PARTNER_NAME', how='left')
+            else:
+                coverage['Q2_CREDITS'] = None
+                coverage['Q2_TOKENS'] = None
+                coverage['ACCTS_WITH_USAGE'] = 0
+        else:
+            coverage['Q2_CREDITS'] = None
+            coverage['Q2_TOKENS'] = None
+            coverage['ACCTS_WITH_USAGE'] = 0
 
         # Recompute stage breakdown with same IS_COCO_FINAL logic
         stage_coco_eacv = bulk_conf[bulk_conf['IS_COCO_FINAL']].groupby(
@@ -359,44 +382,79 @@ with tab_summary:
         display['WOW_COCO_PCT'] = None
         display['WOW_COCO_UCS'] = None
 
+    _display_cols = ['PARTNER_NAME', 'TOTAL_PARTNER_UCS', 'COCO_UCS', 'COCO_PCT', 'WOW_COCO_PCT', 'WOW_COCO_UCS', 'SE_COMMENTS', 'PSE_COMMENTS', 'FEATURE_FLAG', 'MEETS_TARGET', 'GAP']
+    _col_cfg = {
+        'PARTNER_NAME': st.column_config.TextColumn("Partner", width="medium"),
+        'TOTAL_PARTNER_UCS': st.column_config.NumberColumn("Total UCs", format="%d"),
+        'COCO_UCS': st.column_config.NumberColumn("CoCo UCs", format="%d"),
+        'COCO_PCT': st.column_config.ProgressColumn("CoCo %", min_value=0, max_value=100, format="%.1f%%"),
+        'WOW_COCO_PCT': st.column_config.NumberColumn("WoW Δ%", format="%+.1f%%", help="Week-over-week change in CoCo adoption % (available after 2nd weekly snapshot)"),
+        'WOW_COCO_UCS': st.column_config.NumberColumn("WoW Δ UCs", format="%+d", help="Week-over-week change in CoCo use case count"),
+        'SE_COMMENTS': st.column_config.NumberColumn("SE Comments", format="%d", help="SE wrote coco/cortex code in comments"),
+        'PSE_COMMENTS': st.column_config.NumberColumn("PSE Comments", format="%d", help="Partner wrote #coco in comments"),
+        'FEATURE_FLAG': st.column_config.NumberColumn("Feature Flag", format="%d", help="AI - Cortex Code in Prioritized Features"),
+        'MEETS_TARGET': st.column_config.CheckboxColumn(f"≥{TARGET_PCT}%"),
+        'GAP': st.column_config.NumberColumn("UCs to Target", help="Additional CoCo UCs needed to reach 50%"),
+    }
+    if 'Q2_CREDITS' in display.columns:
+        _display_cols += ['Q2_CREDITS', 'Q2_TOKENS', 'ACCTS_WITH_USAGE']
+        _col_cfg['Q2_CREDITS'] = st.column_config.NumberColumn("Q2 Credits", format="$%.0f", help="CoCo token credits on IS_COCO_FINAL customer accounts since Q2 start")
+        _col_cfg['Q2_TOKENS'] = st.column_config.NumberColumn("Q2 Tokens", format="%d", help="Total tokens on IS_COCO_FINAL customer accounts since Q2 start")
+        _col_cfg['ACCTS_WITH_USAGE'] = st.column_config.NumberColumn("Accts w/ Usage", format="%d", help="IS_COCO_FINAL accounts with actual CoCo credit consumption")
     st.dataframe(
-        display[['PARTNER_NAME', 'TOTAL_PARTNER_UCS', 'COCO_UCS', 'COCO_PCT', 'WOW_COCO_PCT', 'WOW_COCO_UCS', 'SE_COMMENTS', 'PSE_COMMENTS', 'FEATURE_FLAG', 'MEETS_TARGET', 'GAP']],
-        column_config={
-            'PARTNER_NAME': st.column_config.TextColumn("Partner", width="medium"),
-            'TOTAL_PARTNER_UCS': st.column_config.NumberColumn("Total UCs", format="%d"),
-            'COCO_UCS': st.column_config.NumberColumn("CoCo UCs", format="%d"),
-            'COCO_PCT': st.column_config.ProgressColumn("CoCo %", min_value=0, max_value=100, format="%.1f%%"),
-            'WOW_COCO_PCT': st.column_config.NumberColumn("WoW Δ%", format="%+.1f%%", help="Week-over-week change in CoCo adoption % (available after 2nd weekly snapshot)"),
-            'WOW_COCO_UCS': st.column_config.NumberColumn("WoW Δ UCs", format="%+d", help="Week-over-week change in CoCo use case count"),
-            'SE_COMMENTS': st.column_config.NumberColumn("SE Comments", format="%d", help="SE wrote coco/cortex code in comments"),
-            'PSE_COMMENTS': st.column_config.NumberColumn("PSE Comments", format="%d", help="Partner wrote #coco in comments"),
-            'FEATURE_FLAG': st.column_config.NumberColumn("Feature Flag", format="%d", help="AI - Cortex Code in Prioritized Features"),
-            'MEETS_TARGET': st.column_config.CheckboxColumn(f"≥{TARGET_PCT}%"),
-            'GAP': st.column_config.NumberColumn("UCs to Target", help="Additional CoCo UCs needed to reach 50%"),
-        },
+        display[[c for c in _display_cols if c in display.columns]],
+        column_config=_col_cfg,
         hide_index=True, use_container_width=True, height=500
     )
     st.caption("Note: Attribution columns may overlap — a use case can have both account-level usage AND comments.")
+    st.caption("Q2 Credits & Tokens are account-level signals summed across IS_COCO_FINAL customer accounts.")
 
     st.divider()
-    st.subheader("CoCo Credit Consumption (Q2)")
-    if len(credit_data) > 0:
-        credit_display = credit_data.copy()
-        credit_display['Q2_TOTAL_CREDITS'] = credit_display['Q2_TOTAL_CREDITS'].apply(lambda x: f"${x:,.0f}" if x else "$0")
-        credit_display['WOW_PCT'] = credit_display['WOW_PCT'].apply(lambda x: f"{x:+.1f}%" if pd.notna(x) else "N/A")
+    st.subheader("CoCo Credit Consumption Trend (Q2)")
+    if 'Q2_CREDITS' in coverage.columns and coverage['Q2_CREDITS'].notna().any():
+        _credit_display = coverage[coverage['Q2_CREDITS'].notna()].copy()
+        _credit_display = _credit_display.sort_values('Q2_CREDITS', ascending=False)
+
+        # AI summary of consumption trend
+        _top3 = _credit_display.head(3)
+        _total_credits = float(_credit_display['Q2_CREDITS'].sum())
+        _total_tokens = float(_credit_display['Q2_TOKENS'].sum())
+        _n_partners = len(_credit_display)
+        _n_accts = int(_credit_display['ACCTS_WITH_USAGE'].sum())
+        _summary_rows = '\n'.join(
+            f"- {r.PARTNER_NAME}: ${float(r.Q2_CREDITS):,.0f} credits, {float(r.Q2_TOKENS)/1e9:.2f}B tokens, {int(r.ACCTS_WITH_USAGE)} accounts"
+            for _, r in _credit_display.iterrows()
+        )
+        _summary_prompt = (
+            f"You are analyzing CoCo (Cortex Code) credit consumption for {_n_partners} managed SI partners in Q2 FY27 (May-Jul 2026).\n"
+            f"Total credits: ${_total_credits:,.0f}. Total tokens: {_total_tokens/1e9:.1f}B. Customer accounts with usage: {_n_accts}.\n"
+            f"Per-partner breakdown:\n{_summary_rows}\n\n"
+            f"Write a 3-4 sentence executive summary highlighting: top consuming partners, any notable token-to-credit ratio anomalies, "
+            f"overall adoption breadth (accounts), and what the trend suggests about CoCo maturity across the partner ecosystem. "
+            f"Be specific with numbers. No bullet points, plain paragraph."
+        )
+        with st.expander("AI Summary", expanded=True):
+            with st.spinner("Generating summary..."):
+                _ai_summary = cortex_complete(conn, "claude-sonnet-4-5", _summary_prompt)
+            st.markdown(_ai_summary)
+
         st.dataframe(
-            credit_display[['PARTNER_NAME', 'COCO_CUSTOMER_ACCOUNTS', 'Q2_TOTAL_CREDITS', 'WOW_PCT', 'ACTIVE_DAYS']],
+            _credit_display[['PARTNER_NAME', 'COCO_UCS', 'ACCTS_WITH_USAGE', 'Q2_CREDITS', 'Q2_TOKENS']],
             column_config={
                 'PARTNER_NAME': st.column_config.TextColumn("Partner", width="medium"),
-                'COCO_CUSTOMER_ACCOUNTS': st.column_config.NumberColumn("Customer Accounts", format="%d"),
-                'Q2_TOTAL_CREDITS': st.column_config.TextColumn("Q2 Total Credits"),
-                'WOW_PCT': st.column_config.TextColumn("WoW %"),
-                'ACTIVE_DAYS': st.column_config.NumberColumn("Active Days", format="%d"),
+                'COCO_UCS': st.column_config.NumberColumn("IS_COCO_FINAL UCs", format="%d"),
+                'ACCTS_WITH_USAGE': st.column_config.NumberColumn("Customer Accounts", format="%d",
+                    help="IS_COCO_FINAL customer accounts with CoCo credit consumption in Q2"),
+                'Q2_CREDITS': st.column_config.NumberColumn("Q2 Credits", format="$%.0f",
+                    help="CoCo token credits on IS_COCO_FINAL customer accounts since Q2 start"),
+                'Q2_TOKENS': st.column_config.NumberColumn("Q2 Tokens", format="%d",
+                    help="Total tokens (input + output + cache) on IS_COCO_FINAL customer accounts since Q2 start"),
             },
             hide_index=True, use_container_width=True
         )
+        st.caption("Credits and tokens are account-level — one account's spend is shared across all its IS_COCO_FINAL use cases.")
     else:
-        st.info("No credit consumption data available.")
+        st.info("No credit consumption data available. Enable 'Account Level CoCo' in the sidebar.")
 
 with tab_detail:
     st.subheader("Partner-by-Partner CoCo Breakdown")

@@ -1,6 +1,7 @@
 import streamlit as st
 from utils.queries import get_distinct_partners
 from utils import PARTNER_GROUPS
+from utils.ask_ai import ask_ai
 from datetime import date
 
 st.set_page_config(
@@ -29,7 +30,10 @@ if "include_account_coco" not in st.session_state:
     st.session_state.include_account_coco = "Yes"
 if "confidence_filter" not in st.session_state:
     st.session_state.confidence_filter = ["High"]
-
+if "ask_ai_history" not in st.session_state:
+    st.session_state.ask_ai_history = []
+if "ask_ai_context" not in st.session_state:
+    st.session_state.ask_ai_context = ""
 with st.sidebar:
     st.selectbox(
         "Region",
@@ -83,6 +87,33 @@ with st.sidebar:
     st.divider()
     st.caption("**CoCo Use Case Intelligence**")
     st.caption("Built by #psegoingcoco")
+
+    # Ask AI chat
+    st.divider()
+    st.markdown("**Ask AI**")
+    conn = st.session_state.conn
+
+    # Display last 3 exchanges
+    history = st.session_state.ask_ai_history
+    for msg in history[-6:]:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+
+    if question := st.chat_input("Ask about the data...", key="ask_ai_input"):
+        with st.chat_message("user"):
+            st.markdown(question)
+        with st.chat_message("assistant"):
+            with st.spinner("Thinking..."):
+                page_ctx = st.session_state.get("ask_ai_context", "")
+                response = ask_ai(conn, question, page_ctx)
+            st.markdown(response)
+        st.session_state.ask_ai_history.append({"role": "user", "content": question})
+        st.session_state.ask_ai_history.append({"role": "assistant", "content": response})
+
+    if history:
+        if st.button("Clear chat", key="ask_ai_clear", use_container_width=True):
+            st.session_state.ask_ai_history = []
+            st.rerun()
 
 page = st.navigation({
     "Overview": [

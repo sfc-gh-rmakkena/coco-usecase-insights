@@ -45,6 +45,16 @@ elif sort_by == "Stage":
 
 st.divider()
 
+# Inject context for Ask AI
+_coco_count = int(df['IS_COCO'].sum()) if 'IS_COCO' in df.columns else 0
+_stage_summary = df.groupby('USE_CASE_STAGE').size().to_dict() if len(df) > 0 else {}
+_stage_str = '; '.join(f"{s}: {c}" for s, c in sorted(_stage_summary.items()))
+st.session_state.ask_ai_context = (
+    f"Current page: Pipeline & Funnel. Region: {region}. Period: {start_date} to {end_date}.\n"
+    f"Total use cases: {len(df)}. Total EACV: ${df['USE_CASE_EACV'].sum()/1_000_000:.1f}M. CoCo tagged: {_coco_count}.\n"
+    f"Stage breakdown: {_stage_str}."
+)
+
 col1, col2 = st.columns([2, 1])
 with col1:
     st.subheader(f"Pipeline ({len(df)} use cases, ${df['USE_CASE_EACV'].sum()/1_000_000:.1f}M EACV)")

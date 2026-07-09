@@ -254,7 +254,22 @@ with tab1:
             for _col in ['FY26', 'FY27 Q1+Q2']:
                 if _col not in _count_pivot.columns:
                     _count_pivot[_col] = 0
-            _count_pivot = _count_pivot[['FY26', 'FY27 Q1+Q2']]
+            # CoCo UCs in FY27 — requires IS_COCO column in df
+            if 'IS_COCO' in cohort_df_t1.columns:
+                _coco_fy27 = (
+                    cohort_df_t1[(cohort_df_t1['COHORT'] == 'FY27 Q1+Q2') & (cohort_df_t1['IS_COCO'] == True)]
+                    .groupby('WORKLOAD_CATEGORY').size().rename('_coco_n')
+                )
+                _count_pivot = _count_pivot.join(_coco_fy27, how='left')
+                _count_pivot['_coco_n'] = _count_pivot['_coco_n'].fillna(0).astype(int)
+                _count_pivot['CoCo UCs (FY27)'] = _count_pivot.apply(
+                    lambda r: f"{r['_coco_n']} ({round(r['_coco_n'] * 100 / r['FY27 Q1+Q2'])}%)" if r['FY27 Q1+Q2'] > 0 else "0",
+                    axis=1
+                )
+                _count_pivot = _count_pivot.drop(columns=['_coco_n'])
+                _count_pivot = _count_pivot[['FY26', 'FY27 Q1+Q2', 'CoCo UCs (FY27)']]
+            else:
+                _count_pivot = _count_pivot[['FY26', 'FY27 Q1+Q2']]
             _count_pivot['Total'] = _count_pivot['FY26'] + _count_pivot['FY27 Q1+Q2']
             _count_pivot.index.name = 'Workload Category'
             st.dataframe(_count_pivot.reset_index(), use_container_width=True, hide_index=True)
