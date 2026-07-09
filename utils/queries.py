@@ -798,19 +798,28 @@ def get_okr_stage_breakdown(_conn, region=None, start_date=None, end_date=None, 
 @st.cache_data(ttl=timedelta(minutes=30))
 def get_account_coco_credits(_conn, accounts: tuple, start_date: str) -> "pd.DataFrame":
     """Q2 CoCo credit consumption per account from CORTEX_CODE_USER_DAY_FACT.
-    Returns ACCOUNT_NAME_UPPER, Q2_CREDITS, ACTIVE_DAYS, LAST_ACTIVE.
+    Returns ACCOUNT_NAME_UPPER, Q2_CREDITS, Q2_TOKENS, ACTIVE_DAYS, LAST_ACTIVE, WOW_CREDITS_PCT.
     Credits are account-level — shared across all UCs at the same account.
     """
     if not accounts:
         import pandas as pd
-        return pd.DataFrame(columns=['ACCOUNT_NAME_UPPER', 'Q2_CREDITS', 'ACTIVE_DAYS', 'LAST_ACTIVE'])
+        return pd.DataFrame(columns=['ACCOUNT_NAME_UPPER', 'Q2_CREDITS', 'Q2_TOKENS', 'ACTIVE_DAYS', 'LAST_ACTIVE', 'WOW_CREDITS_PCT'])
     accts_sql = "','".join(a.replace("'", "''") for a in accounts)
     query = f"""
     SELECT
         UPPER(SALESFORCE_ACCOUNT_NAME)      AS ACCOUNT_NAME_UPPER,
         ROUND(SUM(TOTAL_TOKEN_CREDITS), 2)  AS Q2_CREDITS,
+        SUM(TOTAL_TOKENS)                   AS Q2_TOKENS,
         COUNT(DISTINCT DS)                  AS ACTIVE_DAYS,
-        MAX(DS)                             AS LAST_ACTIVE
+        MAX(DS)                             AS LAST_ACTIVE,
+        CASE
+            WHEN SUM(CASE WHEN DS >= DATEADD('day', -14, CURRENT_DATE()) AND DS < DATEADD('day', -7, CURRENT_DATE()) THEN TOTAL_TOKEN_CREDITS END) > 0
+            THEN ROUND(
+                (SUM(CASE WHEN DS >= DATEADD('day', -7, CURRENT_DATE()) THEN TOTAL_TOKEN_CREDITS END)
+                 - SUM(CASE WHEN DS >= DATEADD('day', -14, CURRENT_DATE()) AND DS < DATEADD('day', -7, CURRENT_DATE()) THEN TOTAL_TOKEN_CREDITS END))
+                / SUM(CASE WHEN DS >= DATEADD('day', -14, CURRENT_DATE()) AND DS < DATEADD('day', -7, CURRENT_DATE()) THEN TOTAL_TOKEN_CREDITS END) * 100, 1)
+            ELSE NULL
+        END AS WOW_CREDITS_PCT
     FROM SNOWSCIENCE.LLM.CORTEX_CODE_USER_DAY_FACT
     WHERE DS >= '{start_date}'
     AND SNOWFLAKE_ACCOUNT_TYPE = 'Customer'
@@ -1023,7 +1032,7 @@ def get_usecase_confidence_scores(_conn, partner, start_date, end_date):
     query += "\n    ORDER BY TOTAL_SCORE DESC, ACCOUNT_NAME"
     return _conn.query(query)
 
-@st.cache_data(ttl=timedelta(minutes=30))
+@st.cache_data(ttl=timedelta(hours=5))
 def get_bulk_confidence_scores(_conn, partners, start_date, end_date):
     """Compute confidence scores for multiple partners in a single query."""
     partners_sql = "','".join(partners)
@@ -1281,7 +1290,8 @@ def get_partner_velocity_data(_conn, partners_sql: str):
             ARRAY_CONSTRUCT('AI / ML','Data Engineering','DWH / Migration',
                             'Platform / Governance','Apps / Data Sharing')
         ):labels[0]::STRING                                                       AS WORKLOAD_CATEGORY,
-        LEFT(COALESCE(sf.DESCRIPTION_C, sf.USE_CASE_COMMENTS_C,''), 180)         AS DESCRIPTION_PREVIEW
+        LEFT(COALESCE(sf.DESCRIPTION_C, sf.USE_CASE_COMMENTS_C,''), 180)         AS DESCRIPTION_PREVIEW,
+        d.IS_COCO
     FROM TEMP.COCO_PARTNER_ADOPTION.DT_OKR_USE_CASES d
     JOIN FIVETRAN.SALESFORCE.USE_CASE_C sf ON sf.ID = d.USE_CASE_ID
     WHERE d.PARTNER_NAME IN ({partners_sql})

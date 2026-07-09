@@ -113,6 +113,20 @@ overall_total = filtered['TOTAL_USE_CASES'].sum()
 overall_pct = round(overall_coco * 100.0 / overall_total, 1) if overall_total > 0 else 0
 high_conf_pct = round(high_conf_coco * 100.0 / overall_total, 1) if overall_total > 0 else 0
 
+# Inject context for Ask AI
+import streamlit as _st_ctx
+_top_partners = filtered.sort_values('COCO_PCT', ascending=False).head(5)
+_top_str = "; ".join(f"{r.PARTNER_NAME} {r.COCO_PCT:.1f}%" for _, r in _top_partners.iterrows())
+_bot_partners = filtered[~filtered['MEETS_TARGET']].sort_values('COCO_PCT', ascending=False).head(5)
+_bot_str = "; ".join(f"{r.PARTNER_NAME} {r.COCO_PCT:.1f}%" for _, r in _bot_partners.iterrows())
+_st_ctx.session_state.ask_ai_context = (
+    f"Current page: OKR CoCo Adoption. Region: {region}. Period: {start_date} to {end_date}.\n"
+    f"Partners tracked: {total_partners}. Meeting {target}% target: {int(meeting_target)}. Below target: {int(not_meeting)}.\n"
+    f"Overall CoCo%: {overall_pct}% ({int(overall_coco)}/{int(overall_total)} UCs).\n"
+    f"Top partners by CoCo%: {_top_str}.\n"
+    f"Partners below target (closest first): {_bot_str}."
+)
+
 c1, c2, c3, c4, c5, c6 = st.columns(6)
 c1.metric("Partners Tracked", total_partners)
 c2.metric(f"Meeting {target}%", int(meeting_target), f"{round(meeting_target*100/total_partners)}%" if total_partners else "0%")
@@ -302,17 +316,24 @@ if selected_partner:
                 coco_display['USE_CASE_STAGE'] = coco_display['USE_CASE_STAGE'].str.extract(r'^(\d+)').iloc[:, 0]
 
                 if len(_credits) > 0:
-                    _credits_map = _credits.set_index('ACCOUNT_NAME_UPPER')[['Q2_CREDITS', 'ACTIVE_DAYS', 'LAST_ACTIVE']]
+                    _credits_map = _credits.set_index('ACCOUNT_NAME_UPPER')[['Q2_CREDITS', 'Q2_TOKENS', 'ACTIVE_DAYS', 'LAST_ACTIVE', 'WOW_CREDITS_PCT']]
                     coco_display['Q2_CREDITS'] = coco_display['ACCOUNT_NAME'].str.upper().map(_credits_map['Q2_CREDITS'])
+                    coco_display['Q2_TOKENS'] = coco_display['ACCOUNT_NAME'].str.upper().map(_credits_map['Q2_TOKENS'])
                     coco_display['ACTIVE_DAYS'] = coco_display['ACCOUNT_NAME'].str.upper().map(_credits_map['ACTIVE_DAYS'])
                     coco_display['LAST_ACTIVE'] = coco_display['ACCOUNT_NAME'].str.upper().map(_credits_map['LAST_ACTIVE'])
+                    coco_display['WOW_CREDITS_PCT'] = coco_display['ACCOUNT_NAME'].str.upper().map(_credits_map['WOW_CREDITS_PCT'])
                     coco_uc_config = {
                         **uc_config,
                         'Q2_CREDITS': st.column_config.NumberColumn("CoCo Q2 Credits", format="$%.0f", width=110, help="Account-level CoCo token credits since Q2 start"),
+                        'Q2_TOKENS': st.column_config.NumberColumn("Q2 Tokens", format="%d", width=100, help="Total tokens consumed (input + output + cache) since Q2 start"),
+                        'WOW_CREDITS_PCT': st.column_config.NumberColumn("WoW %", format="%+.1f%%", width=80, help="Week-over-week % change in CoCo credit spend (last 7 days vs prior 7 days)"),
                         'ACTIVE_DAYS': st.column_config.NumberColumn("Active Days", format="%d", width=90, help="Days with CoCo activity at this account since Q2 start"),
                         'LAST_ACTIVE': st.column_config.DateColumn("Last Active", width=100, help="Last day CoCo was used at this account"),
                     }
-                    st.dataframe(coco_display, hide_index=True, use_container_width=True, column_config=coco_uc_config)
+                    # Explicit column order: WOW_CREDITS_PCT after Q2_TOKENS
+                    _ordered_cols = [c for c in uc_cols] + ['Q2_CREDITS', 'Q2_TOKENS', 'WOW_CREDITS_PCT', 'ACTIVE_DAYS', 'LAST_ACTIVE']
+                    _ordered_cols = [c for c in _ordered_cols if c in coco_display.columns]
+                    st.dataframe(coco_display[_ordered_cols], hide_index=True, use_container_width=True, column_config=coco_uc_config)
                     st.caption("Q2 Credits and Active Days are account-level signals shared across all UCs at the same account.")
                 else:
                     st.dataframe(coco_display, hide_index=True, use_container_width=True, column_config=uc_config)

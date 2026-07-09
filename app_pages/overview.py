@@ -2,7 +2,7 @@ import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
 from utils.queries import get_adoption_overview, get_adoption_by_partner, get_adoption_by_stage, get_adoption_by_region, get_by_technical_type, get_by_account_gvp, get_bulk_confidence_scores, get_partner_coco_coverage
-from utils import resolve_partner_filter
+from utils import resolve_partner_filter, resolve_region_theaters
 
 conn = st.session_state.conn
 region = st.session_state.get("selected_region", "Global")
@@ -64,8 +64,9 @@ if include_account_coco and selected_partners:
     bulk_conf = get_bulk_confidence_scores(conn, partner_names, start_date, end_date)
     if len(bulk_conf) > 0:
         if region and region != 'Global':
-            region_theaters = {'NoAM': ['AMSExpansion', 'USMajors', 'AMSAcquisition', 'USPubSec'], 'EMEA': ['EMEA'], 'APJ': ['APJ']}
-            bulk_conf = bulk_conf[bulk_conf['THEATER_NAME'].isin(region_theaters.get(region, []))]
+            _theaters = resolve_region_theaters(region)
+            if _theaters is not None:
+                bulk_conf = bulk_conf[bulk_conf['THEATER_NAME'].isin(_theaters)]
         bands = confidence_filter if confidence_filter else ['High', 'Medium', 'Low']
         bulk_conf['IS_COCO_FINAL'] = (bulk_conf['IS_COCO'] == True) | (bulk_conf['CONFIDENCE_BAND'].isin(bands))
         coco_count = int(bulk_conf['IS_COCO_FINAL'].sum())
@@ -87,8 +88,9 @@ elif include_account_coco:
         bulk_conf = get_bulk_confidence_scores(conn, all_partner_names, start_date, end_date)
         if len(bulk_conf) > 0:
             if region and region != 'Global':
-                region_theaters = {'NoAM': ['AMSExpansion', 'USMajors', 'AMSAcquisition', 'USPubSec'], 'EMEA': ['EMEA'], 'APJ': ['APJ']}
-                bulk_conf = bulk_conf[bulk_conf['THEATER_NAME'].isin(region_theaters.get(region, []))]
+                _theaters = resolve_region_theaters(region)
+                if _theaters is not None:
+                    bulk_conf = bulk_conf[bulk_conf['THEATER_NAME'].isin(_theaters)]
             bands = confidence_filter if confidence_filter else ['High', 'Medium', 'Low']
             bulk_conf['IS_COCO_FINAL'] = (bulk_conf['IS_COCO'] == True) | (bulk_conf['CONFIDENCE_BAND'].isin(bands))
             coco_count = int(bulk_conf['IS_COCO_FINAL'].sum())
@@ -129,6 +131,13 @@ coco_ucs = coco_count
 total_ucs = total_count if len(bulk_conf) > 0 else int(s['TOTAL_USE_CASES'])
 target_ucs = int(total_ucs * 0.5)
 gap_ucs = max(0, target_ucs - coco_ucs)
+
+# Inject context for Ask AI
+_gap_note = f"Gap to target: {gap_ucs} more CoCo UCs needed." if gap_ucs > 0 else "OKR target MET."
+st.session_state.ask_ai_context = (
+    f"Current page: Adoption Metrics (Overview). Region: {region}. Partner filter: {selected_partners or 'All'}.\n"
+    f"CoCo adoption: {current_pct}% ({coco_ucs}/{total_ucs} UCs). OKR target: 50%. {_gap_note}"
+)
 
 okr_col1, okr_col2 = st.columns([2, 1])
 with okr_col1:

@@ -820,10 +820,20 @@ if len(managed_bulk_conf) > 0:
     partners_meeting_50 = int((_full_partner_summary['COCO_PCT'] >= 50).sum())
     partners_meeting_list = ', '.join(_full_partner_summary[_full_partner_summary['COCO_PCT'] >= 50]['PARTNER_NAME'].tolist())
     partners_below_50 = int((_full_partner_summary['COCO_PCT'] < 50).sum())
+    _below_df = _full_partner_summary[_full_partner_summary['COCO_PCT'] < 50].sort_values('COCO_PCT', ascending=False)
+    _below_str = '; '.join(f"{r.PARTNER_NAME} {r.COCO_PCT:.1f}%" for _, r in _below_df.iterrows())
 else:
     partners_meeting_50 = 0
     partners_meeting_list = 'N/A'
     partners_below_50 = managed_total_partners
+    _below_str = 'N/A'
+
+# Inject context for Ask AI
+st.session_state.ask_ai_context = (
+    f"Current page: Executive Email. 20 managed partners (6 GSI + 14 RSI). Period: FY27 Q2.\n"
+    f"Partners meeting 50% CoCo target: {partners_meeting_50}/20. Partners at 50%+: {partners_meeting_list}.\n"
+    f"Partners below 50% (closest first): {_below_str}."
+)
 
 # Upsert current week's count into COCO_OKR_TARGET_WEEKLY (freezes automatically when week rolls over)
 try:
