@@ -3,6 +3,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from utils.queries import get_partner_coco_coverage, get_okr_stage_breakdown, get_partner_credit_consumption, get_bulk_confidence_scores, get_coco_final_wow, get_account_coco_credits
 from utils.cortex_helpers import cortex_complete
+from utils.ask_ai import build_filter_context
 from utils import resolve_partner_filter, resolve_region_theaters, PARTNER_RENAME_MAP
 
 conn = st.session_state.conn
@@ -113,6 +114,30 @@ if include_account_coco and len(coverage) > 0:
             stage_from_conf['COCO_UCS'] * 100.0 / stage_from_conf['TOTAL_UCS'].replace(0, float('nan')), 1
         ).fillna(0)
         stage_breakdown = stage_from_conf
+
+# Inject context for Ask AI — include partner-level credits/tokens if available
+_ctx_lines = [
+    f"Current page: OKR CoCo Coverage. Region: {region}. Period: {start_date} to {end_date}.",
+    f"Partners: {len(coverage)}. Total UCs: {int(coverage['TOTAL_PARTNER_UCS'].sum())}. "
+    f"CoCo UCs: {int(coverage['COCO_UCS'].sum())}. "
+    f"Overall CoCo%: {round(coverage['COCO_UCS'].sum()*100/coverage['TOTAL_PARTNER_UCS'].sum(),1) if coverage['TOTAL_PARTNER_UCS'].sum()>0 else 0}%.",
+]
+if 'Q2_CREDITS' in coverage.columns and coverage['Q2_CREDITS'].notna().any():
+    _cov_with_credits = coverage[coverage['Q2_CREDITS'].notna()].sort_values('Q2_CREDITS', ascending=False)
+    _total_cred = float(_cov_with_credits['Q2_CREDITS'].sum())
+    _total_tok = float(_cov_with_credits['Q2_TOKENS'].sum()) if 'Q2_TOKENS' in _cov_with_credits else 0
+    _ctx_lines.append(
+        f"CoCo Credit Consumption (IS_COCO_FINAL accounts): Total ${_total_cred:,.0f} credits, {_total_tok/1e9:.1f}B tokens."
+    )
+    _ctx_lines.append("Per-partner credits/tokens/accounts with usage:")
+    for _, _r in _cov_with_credits.iterrows():
+        _ctx_lines.append(
+            f"  {_r.PARTNER_NAME}: CoCo UCs={int(_r.COCO_UCS)}, "
+            f"Credits=${float(_r.Q2_CREDITS):,.0f}, "
+            f"Tokens={float(_r.Q2_TOKENS)/1e9:.2f}B, "
+            f"Accts w/ usage={int(_r.ACCTS_WITH_USAGE)}"
+        )
+st.session_state.ask_ai_context = "\n".join(_ctx_lines) + build_filter_context()
 
 tab_summary, tab_detail = st.tabs(["Summary", "Detail"])
 
