@@ -5,6 +5,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from utils.queries import get_partner_velocity_data
 from utils import resolve_partner_filter
+from utils.ask_ai import build_filter_context
 import datetime
 conn = st.session_state.conn
 selected_partners = st.session_state.get("selected_partners", [])
@@ -82,6 +83,16 @@ _fy27 = df[df['FISCAL_YEAR'] == 'FY27']
 _fy26_med = _fy26['DAYS_FULL_CYCLE'].median()
 _fy27_med = _fy27['DAYS_FULL_CYCLE'].median()
 _delta_overall = _fy26_med - _fy27_med  # positive = faster in FY27
+
+# Inject context for Ask AI
+st.session_state.ask_ai_context = (
+    f"Current page: Partner Velocity. Partners: {df['PARTNER_NAME'].nunique()}. "
+    f"Total deployed UCs: {len(df)} (FY26+FY27).\n"
+    f"FY26 overall median: {_fy26_med:.0f} days ({len(_fy26)} UCs). "
+    f"FY27 overall median: {_fy27_med:.0f} days ({len(_fy27)} UCs). "
+    f"Overall delta: {_delta_overall:+.0f} days (positive = faster in FY27)."
+    + build_filter_context()
+)
 
 # Per-partner FY26 vs FY27 medians (min 3 UCs each cohort)
 _pp = (
@@ -273,6 +284,105 @@ with tab1:
             _count_pivot['Total'] = _count_pivot['FY26'] + _count_pivot['FY27 Q1+Q2']
             _count_pivot.index.name = 'Workload Category'
             st.dataframe(_count_pivot.reset_index(), use_container_width=True, hide_index=True)
+
+            # --- 3-point dumbbell: FY26 all vs FY27 all vs FY27 CoCo ---
+            if 'IS_COCO' in cohort_df_t1.columns:
+                st.subheader("FY26 Baseline vs FY27 CoCo — Delivery Speed by Workload")
+                st.caption(
+                    "Compares median days (decision → go-live) across three groups. "
+                    "Diamond = FY27 CoCo-only UCs (IS_COCO=TRUE). Green = faster than FY26, Red = slower."
+                )
+
+                _cats_order = ['DWH / Migration', 'AI / ML', 'Platform / Governance',
+                               'Apps / Data Sharing', 'Data Engineering']
+
+                _fy26_agg = (cohort_df_t1[cohort_df_t1['COHORT'] == 'FY26']
+                             .groupby('WORKLOAD_CATEGORY')['DAYS_FULL_CYCLE']
+                             .agg(fy26_med='median', fy26_n='count').reset_index())
+                _fy27_agg = (cohort_df_t1[cohort_df_t1['COHORT'] == 'FY27 Q1+Q2']
+                             .groupby('WORKLOAD_CATEGORY')['DAYS_FULL_CYCLE']
+                             .agg(fy27_all_med='median', fy27_all_n='count').reset_index())
+                _coco_agg = (cohort_df_t1[(cohort_df_t1['COHORT'] == 'FY27 Q1+Q2') &
+                                          (cohort_df_t1['IS_COCO'] == True)]
+                             .groupby('WORKLOAD_CATEGORY')['DAYS_FULL_CYCLE']
+                             .agg(fy27_coco_med='median', fy27_coco_n='count').reset_index())
+
+                _dumb = (_fy26_agg
+                         .merge(_fy27_agg, on='WORKLOAD_CATEGORY', how='left')
+                         .merge(_coco_agg, on='WORKLOAD_CATEGORY', how='left'))
+                _dumb = _dumb[_dumb['WORKLOAD_CATEGORY'].isin(_cats_order)].copy()
+                _dumb['WORKLOAD_CATEGORY'] = pd.Categorical(
+                    _dumb['WORKLOAD_CATEGORY'], categories=_cats_order, ordered=True)
+                _dumb = _dumb.sort_values('WORKLOAD_CATEGORY', ascending=False)  # top of chart = first in list
+
+                fig_dumb = go.Figure()
+
+                for _, row in _dumb.iterrows():
+                    cat = row['WORKLOAD_CATEGORY']
+                    fy26 = float(row['fy26_med']) if pd.notna(row['fy26_med']) else None
+                    fy27_all = float(row['fy27_all_med']) if pd.notna(row['fy27_all_med']) else None
+                    fy27_coco = float(row['fy27_coco_med']) if pd.notna(row['fy27_coco_med']) else None
+                    coco_n = int(row['fy27_coco_n']) if pd.notna(row.get('fy27_coco_n', None)) else 0
+
+                    if fy26 and fy27_coco and coco_n >= 3:
+                        coco_color = _GREEN if fy27_coco < fy26 else _RED
+                        x_min = min(v for v in [fy26, fy27_all, fy27_coco] if v)
+                        x_max = max(v for v in [fy26, fy27_all, fy27_coco] if v)
+                        fig_dumb.add_shape(type='line',
+                            x0=x_min, x1=x_max, y0=cat, y1=cat,
+                            line=dict(color='#e2e8f0', width=2))
+                    else:
+                        coco_color = _GRAY
+
+                    is_first = (cat == list(_dumb['WORKLOAD_CATEGORY'])[-1])
+
+                    if fy26:
+                        fig_dumb.add_trace(go.Scatter(
+                            x=[fy26], y=[cat], mode='markers+text',
+                            marker=dict(color='#94a3b8', size=14, symbol='circle'),
+                            text=[f"{int(fy26)}d"], textposition='top center',
+                            textfont=dict(size=9),
+                            name='FY26 All', legendgroup='fy26',
+                            showlegend=is_first,
+                            hovertemplate=f'<b>{cat}</b><br>FY26 All: {int(fy26)}d (n={int(row["fy26_n"])})<extra></extra>'
+                        ))
+
+                    if fy27_all:
+                        fig_dumb.add_trace(go.Scatter(
+                            x=[fy27_all], y=[cat], mode='markers',
+                            marker=dict(color='#29B5E8', size=13, symbol='circle-open',
+                                        line=dict(width=2.5, color='#29B5E8')),
+                            name='FY27 All', legendgroup='fy27all',
+                            showlegend=is_first,
+                            hovertemplate=f'<b>{cat}</b><br>FY27 All: {int(fy27_all)}d (n={int(row["fy27_all_n"])})<extra></extra>'
+                        ))
+
+                    if fy27_coco and coco_n >= 3:
+                        delta_label = f"{int(fy26) - int(fy27_coco):+d}d vs FY26"
+                        fig_dumb.add_trace(go.Scatter(
+                            x=[fy27_coco], y=[cat], mode='markers+text',
+                            marker=dict(color=coco_color, size=14, symbol='diamond'),
+                            text=[f"{int(fy27_coco)}d"], textposition='bottom center',
+                            textfont=dict(size=9, color=coco_color),
+                            name='FY27 CoCo Only', legendgroup='fy27coco',
+                            showlegend=is_first,
+                            hovertemplate=f'<b>{cat}</b><br>FY27 CoCo: {{int(fy27_coco)}}d (n={coco_n})<br>{delta_label}<extra></extra>'
+                        ))
+
+                fig_dumb.update_layout(
+                    height=350,
+                    xaxis=dict(title='Median Days (Decision → Go-Live)', gridcolor='#f1f5f9', zeroline=False),
+                    yaxis=dict(tickfont=dict(size=11)),
+                    plot_bgcolor='#fafafa', paper_bgcolor='white',
+                    legend=dict(orientation='h', y=1.14, font=dict(size=10)),
+                    margin=dict(l=160, r=20, t=50, b=40),
+                )
+                st.plotly_chart(fig_dumb, use_container_width=True)
+                st.caption(
+                    "Circle (gray) = FY26 all UCs baseline  ·  Open circle (blue) = FY27 all UCs  ·  "
+                    "Diamond = FY27 CoCo UCs only (IS_COCO=TRUE, min n=3). "
+                    "Green diamond = CoCo faster than FY26. Red diamond = CoCo slower."
+                )
 
 
 # ============================================================

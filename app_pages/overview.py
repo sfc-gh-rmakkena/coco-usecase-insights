@@ -3,6 +3,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from utils.queries import get_adoption_overview, get_adoption_by_partner, get_adoption_by_stage, get_adoption_by_region, get_by_technical_type, get_by_account_gvp, get_bulk_confidence_scores, get_partner_coco_coverage
 from utils import resolve_partner_filter, resolve_region_theaters
+from utils.ask_ai import build_filter_context
 
 conn = st.session_state.conn
 region = st.session_state.get("selected_region", "Global")
@@ -137,6 +138,7 @@ _gap_note = f"Gap to target: {gap_ucs} more CoCo UCs needed." if gap_ucs > 0 els
 st.session_state.ask_ai_context = (
     f"Current page: Adoption Metrics (Overview). Region: {region}. Partner filter: {selected_partners or 'All'}.\n"
     f"CoCo adoption: {current_pct}% ({coco_ucs}/{total_ucs} UCs). OKR target: 50%. {_gap_note}"
+    + build_filter_context()
 )
 
 okr_col1, okr_col2 = st.columns([2, 1])

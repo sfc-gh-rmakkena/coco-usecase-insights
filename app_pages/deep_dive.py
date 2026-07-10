@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 from utils.queries import get_use_cases, get_distinct_partners, get_by_partner
 from utils.cortex_helpers import cortex_complete
+from utils.ask_ai import build_filter_context
 
 conn = st.session_state.conn
 region = st.session_state.get("selected_region", "Global")
@@ -31,7 +32,19 @@ df = get_use_cases(conn, partner=selected_partner, stage=stage_filter, region=re
 
 if len(df) == 0:
     st.info("No use cases found.")
+    st.session_state.ask_ai_context = (
+        f"Current page: Use Case Explorer. Region: {region}. No data with current filters."
+        + build_filter_context()
+    )
     st.stop()
+
+# Inject context for Ask AI
+st.session_state.ask_ai_context = (
+    f"Current page: Use Case Explorer. Region: {region}. Partner: {selected_partner}. Period: {start_date} to {end_date}.\n"
+    f"Use cases loaded: {len(df)}. Total EACV: ${df['USE_CASE_EACV'].sum()/1_000_000:.1f}M. "
+    f"Deployed: {int(df['IS_DEPLOYED'].sum())}. Won: {int(df['IS_WON'].sum())}."
+    + build_filter_context()
+)
 
 if selected_partner and selected_partner != "All":
     partner_stats = df.agg({

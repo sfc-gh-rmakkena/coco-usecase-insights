@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 from utils.queries import get_comments_with_context, get_distinct_partners
 from utils.cortex_helpers import cortex_complete
+from utils.ask_ai import build_filter_context
 
 conn = st.session_state.conn
 region = st.session_state.get("selected_region", "Global")
@@ -40,6 +41,13 @@ if len(df) == 0:
 st.divider()
 
 st.subheader(f"Comments Overview ({len(df)} use cases)")
+# Inject context for Ask AI
+_partners_shown = df['PARTNER_NAME'].unique().tolist() if len(df) > 0 else []
+st.session_state.ask_ai_context = (
+    f"Current page: Comments & AI Insights. Region: {region}. Partner: {selected_partner}. Period: {start_date} to {end_date}.\n"
+    f"Use cases with comments: {len(df)}. Partners represented: {', '.join(_partners_shown[:10])}."
+    + build_filter_context()
+)
 
 with_se = df[df['SE_COMMENTS'].notna() & (df['SE_COMMENTS'] != '')]
 with_partner = df[df['PARTNER_COMMENTS'].notna() & (df['PARTNER_COMMENTS'] != '')]

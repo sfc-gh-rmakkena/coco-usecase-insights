@@ -3,6 +3,7 @@ import pandas as pd
 import plotly.express as px
 from utils.queries import get_use_cases, get_by_partner, get_by_stage, get_distinct_partners, get_summary_stats
 from utils.cortex_helpers import cortex_complete
+from utils.ask_ai import build_filter_context
 
 conn = st.session_state.conn
 region = st.session_state.get("selected_region", "Global")
@@ -53,6 +54,7 @@ st.session_state.ask_ai_context = (
     f"Current page: Pipeline & Funnel. Region: {region}. Period: {start_date} to {end_date}.\n"
     f"Total use cases: {len(df)}. Total EACV: ${df['USE_CASE_EACV'].sum()/1_000_000:.1f}M. CoCo tagged: {_coco_count}.\n"
     f"Stage breakdown: {_stage_str}."
+    + build_filter_context()
 )
 
 col1, col2 = st.columns([2, 1])

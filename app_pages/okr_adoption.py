@@ -4,6 +4,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime, date
 from utils.queries import get_okr_partner_summary, get_okr_coco_adoption, get_partner_credit_consumption, get_usecase_confidence_scores, get_bulk_confidence_scores, get_account_coco_credits
+from utils.ask_ai import build_filter_context
 from utils import resolve_partner_filter, resolve_region_theaters, PARTNER_RENAME_MAP
 
 conn = st.session_state.conn
@@ -125,6 +126,7 @@ _st_ctx.session_state.ask_ai_context = (
     f"Overall CoCo%: {overall_pct}% ({int(overall_coco)}/{int(overall_total)} UCs).\n"
     f"Top partners by CoCo%: {_top_str}.\n"
     f"Partners below target (closest first): {_bot_str}."
+    + build_filter_context()
 )
 
 c1, c2, c3, c4, c5, c6 = st.columns(6)

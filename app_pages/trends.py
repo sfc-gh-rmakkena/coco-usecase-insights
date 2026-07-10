@@ -3,6 +3,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from utils.queries import get_aging_analysis, get_stalled_use_cases, get_weekly_use_case_metrics, get_by_partner
+from utils.ask_ai import build_filter_context
 
 conn = st.session_state.conn
 region = st.session_state.get("selected_region", "Global")
@@ -12,6 +13,13 @@ end_date = str(st.session_state.get("okr_end_date", "2026-07-31"))
 st.title(":material/trending_up: Use Case Trends & Aging")
 st.caption(f"Track velocity, aging, and stalled use cases | Region: {region} | {start_date} to {end_date}")
 st.caption(":material/info: Partner filter not applied on this page — showing all partners")
+
+# Inject context for Ask AI (loaded before tabs so it's available immediately)
+st.session_state.ask_ai_context = (
+    f"Current page: Trends & Aging. Region: {region}. Period: {start_date} to {end_date}.\n"
+    f"Shows weekly use case trends, aging by stage, and stalled use cases."
+    + build_filter_context()
+)
 
 tab_trends, tab_aging, tab_stalled = st.tabs(["Weekly Trends", "Aging Analysis", "Stalled Use Cases"])
 
