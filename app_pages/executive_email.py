@@ -13,7 +13,7 @@ from utils.queries import (
     get_bulk_confidence_scores, get_pipeline_wow, get_gsi_wow, get_noam_si_wow,
     get_recent_wins, get_coco_final_wow, get_coco_final_trend_4w, save_coco_final_snapshot,
     get_partners_at_target_trend_4w, save_okr_target_count,
-    get_partner_velocity_data,
+    get_partner_velocity_data, get_account_coco_credits,
 )
 from utils.cortex_helpers import cortex_complete
 
@@ -61,7 +61,20 @@ HEATMAP_PARTNERS = [
 ]
 
 
-def name_to_email(name):
+def _fmt_tokens(n):
+    if n is None or n != n:  # NaN check
+        return "-"
+    n = float(n)
+    if n >= 1_000_000_000:
+        return f"{n/1_000_000_000:.2f}B"
+    if n >= 1_000_000:
+        return f"{n/1_000_000:.1f}M"
+    if n >= 1_000:
+        return f"{n/1_000:.1f}K"
+    return f"{int(n)}"
+
+
+
     name = name.strip()
     if '@' in name:
         return name
@@ -604,8 +617,9 @@ with st.spinner("Loading data..."):
 
     recent_wins_data = get_recent_wins(conn, MANAGED_PARTNERS, Q2_START, Q2_END)
 
-    # Q2 Credit consumption for managed partners
-    credit_data = get_partner_credit_consumption(conn, MANAGED_PARTNERS, Q2_START, Q2_END)
+    # Q2 Credit consumption — same as OKR Coverage: IS_COCO_FINAL accounts only
+    # computed after managed_bulk_conf IS_COCO_FINAL is resolved (see below)
+    credit_data = pd.DataFrame()
 
     # GSI global coverage — all regions (not NoAM-filtered), using IS_COCO_FINAL
     GSI_LIST = ['Accenture','Capgemini Technologies LLC','Cognizant Technology Solutions US Corp',
@@ -691,6 +705,21 @@ with st.spinner("Loading data..."):
                       else 'EMEA' if t == 'EMEA' else 'APJ' if t == 'APJ' else 'Other'
         )
         coco_mask = managed_bulk_conf['IS_COCO_FINAL']
+
+        # Q2 Credit consumption — same approach as OKR Coverage page:
+        # fetch account-level credits for IS_COCO_FINAL accounts, aggregate per partner
+        _coco_final_acct_df = managed_bulk_conf[coco_mask][['PARTNER_NAME', 'ACCOUNT_NAME_UPPER']].drop_duplicates()
+        _coco_accts_email = tuple(_coco_final_acct_df['ACCOUNT_NAME_UPPER'].dropna().unique())
+        if _coco_accts_email:
+            _acct_usage = get_account_coco_credits(conn, _coco_accts_email, Q2_START)
+            if len(_acct_usage) > 0:
+                _usage_joined = _coco_final_acct_df.merge(_acct_usage, on='ACCOUNT_NAME_UPPER', how='left')
+                credit_data = _usage_joined.groupby('PARTNER_NAME').agg(
+                    Q2_TOTAL_CREDITS=('Q2_CREDITS', 'sum'),
+                    Q2_TOKENS=('Q2_TOKENS', 'sum'),
+                    ACCTS_WITH_USAGE=('Q2_CREDITS', lambda x: (x > 0).sum()),
+                    WOW_PCT=('WOW_CREDITS_PCT', 'mean'),
+                ).reset_index()
 
         # Q2 headline stats
         managed_q2_stats = pd.DataFrame([{
@@ -863,10 +892,30 @@ if len(coco_coverage) > 0:
             'pct': float(cv['COCO_PCT'] or 0)
         }
 
+_credit_lookup = {}
+if len(credit_data) > 0:
+    for _, cr in credit_data.iterrows():
+        _credit_lookup[str(cr['PARTNER_NAME'])] = {
+            'credits':        cr.get('Q2_TOTAL_CREDITS', 0) or 0,
+            'tokens':         cr.get('Q2_TOKENS', 0) or 0,
+            'accts_w_usage':  int(cr.get('ACCTS_WITH_USAGE', 0) or 0),
+            'wow_pct':        cr.get('WOW_PCT', None),
+        }
+
 partner_ctx = ""
 for _, p in managed_q2_partners.iterrows():
     eacv = p.get('TOTAL_EACV', 0) or 0
-    partner_ctx += f"  {p['PARTNER_NAME']}: {int(p['TOTAL_UCS'])} UCs, {int(p['COCO_UCS'])} CoCo ({int(p['COCO_PCT'])}%), ${eacv/1000:.0f}K, AI={int(p['AI'])}, DE={int(p['DE'])}, Analytics={int(p['ANALYTICS'])}\n"
+    cr = _credit_lookup.get(p['PARTNER_NAME'], {})
+    credits       = cr.get('credits', 0)
+    tokens        = cr.get('tokens', 0)
+    accts_w_usage = cr.get('accts_w_usage', 0)
+    wow_pct       = cr.get('wow_pct', None)
+    wow_str = f"{wow_pct:+.1f}%" if wow_pct is not None and pd.notna(wow_pct) else "-"
+    partner_ctx += (
+        f"  {p['PARTNER_NAME']}: {int(p['TOTAL_UCS'])} UCs, {int(p['COCO_UCS'])} CoCo ({int(p['COCO_PCT'])}%), "
+        f"${eacv/1000:.0f}K, AI={int(p['AI'])}, DE={int(p['DE'])}, Analytics={int(p['ANALYTICS'])}, "
+        f"Q2 Credits=${credits:,.0f}, Q2 Tokens={_fmt_tokens(tokens)}, Credits WoW%={wow_str}\n"
+    )
 
 stage_ctx = ""
 if len(managed_stage_data) > 0 and len(managed_bulk_conf) > 0:
@@ -980,7 +1029,7 @@ credit_ctx = ""
 if len(credit_data) > 0:
     for _, cr in credit_data.head(12).iterrows():
         wow = f"{cr['WOW_PCT']:+.1f}%" if pd.notna(cr['WOW_PCT']) else "N/A"
-        credit_ctx += f"  {cr['PARTNER_NAME']}: Q2 Total=${cr['Q2_TOTAL_CREDITS']:,.0f}, Accounts={int(cr['COCO_CUSTOMER_ACCOUNTS'])}, Active Days={int(cr['ACTIVE_DAYS'])}, WoW={wow}\n"
+        credit_ctx += f"  {cr['PARTNER_NAME']}: Q2 Credits=${cr['Q2_TOTAL_CREDITS']:,.0f}, Q2 Tokens={cr['Q2_TOKENS']:,.0f}, Accts w/ Usage={int(cr['ACCTS_WITH_USAGE'])}, Credits WoW%={wow}\n"
 
 
 
@@ -1269,11 +1318,12 @@ PARTNER CLASSIFICATION:
 - Use stage mapping: Validation (3), Won (4), Implementation (5-6), Deployed (7)
 
 ## PARTNER SCORECARD (all 20 managed partners)
-| Partner | Total UCs | CoCo UCs | CoCo% | WoW Δ% | WoW Δ UCs | EACV | AI | DE | Analytics |
+| Partner | Total UCs | CoCo UCs | CoCo% | WoW Δ% | WoW Δ UCs | EACV | AI | DE | Analytics | Q2 Credits | Q2 Tokens | Credits WoW% |
 - Show ALL 20 managed partners (do not cap or truncate). Sort by EACV descending.
 - **GSIs (6): Total UCs and CoCo UCs are GLOBAL (all regions combined).** RSIs (14): Total UCs and CoCo UCs are NoAM only.
 - "CoCo%" = CoCo/Total for each partner's scoped data.
 - WoW Δ% and WoW Δ UCs from "COCO ADOPTION WoW — PER MANAGED PARTNER" — show "-" if N/A
+- Q2 Credits, Q2 Tokens, Credits WoW% from "Q2 Credits", "Q2 Tokens", "Credits WoW%" fields in PARTNER SCORECARD data — show "-" if not available. Q2 Credits = CoCo token credits on IS_COCO_FINAL customer accounts.
 - Our target is **50% CoCo adoption** per partner. After the table, add ONE sentence listing the partners below 50% in ascending order of CoCo% (closest to 50% first, lowest last) — these need the most enablement focus.
 
 ## USE CASE PATTERNS (managed partners only)

@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-from utils.queries import get_partner_velocity_data
+from utils.queries import get_partner_velocity_data, get_segment_velocity
 from utils import resolve_partner_filter
 from utils.ask_ai import build_filter_context
 import datetime
@@ -17,7 +17,19 @@ _MANAGED_PARTNERS_SQL = (
     "'7Rivers, Inc','Aimpoint Digital','BlueCloud Services Inc','kipi.ai','Kipi.ai',"
     "'evolv Consulting','Infostrux Solutions Inc.','Infosys','KPMG LLP',"
     "'LTM','LTI Mindtree','NTT DATA Group Corporation','phData, Inc.',"
-    "'Slalom, LLC.','Squadron Data Inc','Tredence Inc.'"
+    "'Slalom, LLC.','Squadron Data Inc','Tredence Inc.',"
+    "'Spaulding Ridge','Spaulding Ridge, EMEA','Spaulding Ridge Advisory Spain, S.L.',"
+    "'TEKsystems Global Services, LLC.','TEKsystems - Canada','TEKSYSTEMS GLOBAL SERVICES (UK) LIMITED',"
+    "'Blend360, LLC','Tiger Analytics Inc.','Atrium','SDK Tek Services Ltd.',"
+    "'Perficient Inc.','Perficient India Pvt Ltd',"
+    "'Merkle','Merkle inc USA','Merkle ANZ Pty Ltd','Merkle Switzerland AG',"
+    "'PT Merkle Inovasi Teknologi','Davanti a Merkle Company',"
+    "'Archetype Consulting','Apex Systems',"
+    "'Tata Consultancy Services','TCS','Tata Consultancy Services (TCS)',"
+    "'OneSix','Icon Analytics','Sparq Holdings, Inc.',"
+    "'CitiusTech Inc.','CITIUS TECH',"
+    "'Hexaware Technologies','Hexaware Technologies Limited','Hexaware Technologies Inc',"
+    "'Hexaware Technologies UK Limited','Hexaware Technolgies'"
 )
 
 QUARTER_ORDER = ['FY26 Q1', 'FY26 Q2', 'FY26 Q3', 'FY26 Q4', 'FY27 Q1', 'FY27 Q2']
@@ -141,10 +153,11 @@ with st.expander("Summary", expanded=True):
     for line in _summary_lines:
         st.markdown(f"- {line}")
 
-tab1, tab2, tab3 = st.tabs([
+tab1, tab2, tab3, tab4 = st.tabs([
     ":material/grid_view: Workload Breakdown",
     ":material/leaderboard: Partner Ranking",
     ":material/person_search: Partner Drill-Down",
+    ":material/compare_arrows: Segment Analysis",
 ])
 
 
@@ -667,3 +680,292 @@ with tab3:
                 'DESCRIPTION_PREVIEW': st.column_config.TextColumn('Description', width='large'),
             }
         )
+
+
+# ============================================================
+# TAB 4 — Segment Analysis (Customer-Led vs Managed vs Other)
+# ============================================================
+with tab4:
+    st.subheader("Segment Velocity & EACV — FY27 YTD")
+    st.caption(
+        "Compares **Customer-Led** (no implementation partner), **Managed Partners** (the 20 tracked SIs/GSIs), "
+        "and **Other Partners** across velocity (days decision → go-live) and EACV. "
+        "FY27 YTD = Feb 1 – today. Excludes UCs with invalid cycle times (<1 or >730 days)."
+    )
+
+    with st.spinner("Loading segment data..."):
+        seg_df = get_segment_velocity(conn)
+
+    seg_df.columns = [c.upper() for c in seg_df.columns]
+    seg_df['MEDIAN_DAYS'] = pd.to_numeric(seg_df['MEDIAN_DAYS'], errors='coerce')
+    seg_df['TOTAL_EACV_M'] = pd.to_numeric(seg_df['TOTAL_EACV_M'], errors='coerce')
+    seg_df['AVG_EACV_K']   = pd.to_numeric(seg_df['AVG_EACV_K'], errors='coerce')
+    seg_df['P25_DAYS']     = pd.to_numeric(seg_df['P25_DAYS'], errors='coerce')
+    seg_df['P75_DAYS']     = pd.to_numeric(seg_df['P75_DAYS'], errors='coerce')
+    seg_df['UC_COUNT']     = pd.to_numeric(seg_df['UC_COUNT'], errors='coerce')
+
+    SEGMENT_COLORS = {
+        'Customer-Led':   '#29B5E8',
+        'Managed Partner':'#E74C3C',
+        'Other Partner':  '#F0AB00',
+    }
+    WORKLOAD_ORDER = ['AI / ML', 'Data Engineering', 'Platform / Governance', 'Apps / Data Sharing', 'DWH / Migration', 'Other']
+
+    # ---------- KPI tiles ----------
+    seg_totals = seg_df.groupby('SEGMENT').agg(
+        UC_COUNT=('UC_COUNT', 'sum'),
+        TOTAL_EACV_M=('TOTAL_EACV_M', 'sum'),
+    ).reset_index()
+
+    seg_med = seg_df.groupby('SEGMENT').apply(
+        lambda g: pd.Series({
+            'MEDIAN_DAYS': float(np.median(np.repeat(g['MEDIAN_DAYS'].values.astype(float), g['UC_COUNT'].values.astype(int))))
+        })
+    ).reset_index()
+
+    seg_summary = seg_totals.merge(seg_med, on='SEGMENT')
+
+    cols_kpi = st.columns(3)
+    seg_order = ['Customer-Led', 'Managed Partner', 'Other Partner']
+    for i, seg in enumerate(seg_order):
+        row = seg_summary[seg_summary['SEGMENT'] == seg]
+        if len(row) == 0:
+            continue
+        r = row.iloc[0]
+        with cols_kpi[i]:
+            st.markdown(
+                f"<div style='background:#f8fafc;border-left:4px solid {SEGMENT_COLORS[seg]};"
+                f"padding:12px 16px;border-radius:6px'>"
+                f"<div style='font-size:13px;color:#64748b;font-weight:600'>{seg}</div>"
+                f"<div style='font-size:22px;font-weight:700;color:#1e293b'>{int(r.UC_COUNT):,} UCs</div>"
+                f"<div style='font-size:13px;color:#475569'>${r.TOTAL_EACV_M:.0f}M EACV · "
+                f"{r.MEDIAN_DAYS:.0f}d median</div></div>",
+                unsafe_allow_html=True
+            )
+
+    st.divider()
+
+    # ---------- Row 1: Velocity bar + EACV bar ----------
+    col_v, col_e = st.columns(2)
+
+    with col_v:
+        st.markdown("**Median Days by Segment**")
+        fig_vel = go.Figure()
+        for seg in seg_order:
+            row = seg_summary[seg_summary['SEGMENT'] == seg]
+            if len(row) == 0:
+                continue
+            r = row.iloc[0]
+            fig_vel.add_trace(go.Bar(
+                x=[seg], y=[r.MEDIAN_DAYS],
+                name=seg,
+                marker_color=SEGMENT_COLORS[seg],
+                text=[f"{r.MEDIAN_DAYS:.0f}d"],
+                textposition='outside',
+                textfont=dict(size=13, color='#1e293b'),
+                hovertemplate=f"<b>{seg}</b><br>Median: {r.MEDIAN_DAYS:.0f} days<extra></extra>",
+            ))
+        fig_vel.update_layout(
+            showlegend=False,
+            yaxis=dict(title='Median Days', gridcolor='#f1f5f9'),
+            xaxis=dict(tickfont=dict(size=12)),
+            plot_bgcolor='#fafafa', paper_bgcolor='white',
+            height=300, margin=dict(t=20, b=20, l=50, r=20),
+        )
+        st.plotly_chart(fig_vel, use_container_width=True)
+
+    with col_e:
+        st.markdown("**Total EACV ($M) & Avg EACV ($K) by Segment**")
+        fig_eacv = make_subplots(specs=[[{"secondary_y": True}]])
+        for seg in seg_order:
+            row = seg_summary[seg_summary['SEGMENT'] == seg]
+            if len(row) == 0:
+                continue
+            r = row.iloc[0]
+            avg_k = float(seg_df[seg_df['SEGMENT'] == seg]['AVG_EACV_K'].mean())
+            fig_eacv.add_trace(go.Bar(
+                x=[seg], y=[r.TOTAL_EACV_M],
+                name=seg,
+                marker_color=SEGMENT_COLORS[seg],
+                text=[f"${r.TOTAL_EACV_M:.0f}M"],
+                textposition='outside',
+                textfont=dict(size=11),
+                hovertemplate=f"<b>{seg}</b><br>Total EACV: ${r.TOTAL_EACV_M:.1f}M<br>Avg EACV: ${avg_k:.0f}K<extra></extra>",
+                showlegend=False,
+            ), secondary_y=False)
+            fig_eacv.add_trace(go.Scatter(
+                x=[seg], y=[avg_k],
+                mode='markers',
+                marker=dict(color='#1e293b', size=12, symbol='diamond'),
+                name='Avg EACV ($K)',
+                showlegend=(seg == 'Customer-Led'),
+                hovertemplate=f"<b>{seg}</b><br>Avg EACV: ${avg_k:.0f}K<extra></extra>",
+            ), secondary_y=True)
+        fig_eacv.update_yaxes(title_text="Total EACV ($M)", secondary_y=False, gridcolor='#f1f5f9')
+        fig_eacv.update_yaxes(title_text="Avg EACV ($K)", secondary_y=True)
+        fig_eacv.update_layout(
+            xaxis=dict(tickfont=dict(size=12)),
+            plot_bgcolor='#fafafa', paper_bgcolor='white',
+            height=300, margin=dict(t=20, b=20, l=50, r=60),
+            legend=dict(orientation='h', y=1.12, font=dict(size=10)),
+        )
+        st.plotly_chart(fig_eacv, use_container_width=True)
+
+    st.divider()
+
+    # ---------- Row 2: Velocity by workload + EACV by workload ----------
+    col_vw, col_ew = st.columns(2)
+
+    wl_order = [w for w in WORKLOAD_ORDER if w in seg_df['WORKLOAD_CATEGORY'].unique()]
+
+    with col_vw:
+        st.markdown("**Median Days by Workload & Segment**")
+        fig_vw = go.Figure()
+        for seg in seg_order:
+            sub = seg_df[seg_df['SEGMENT'] == seg].copy()
+            sub['WORKLOAD_CATEGORY'] = pd.Categorical(sub['WORKLOAD_CATEGORY'], categories=wl_order, ordered=True)
+            sub = sub.sort_values('WORKLOAD_CATEGORY')
+            fig_vw.add_trace(go.Bar(
+                name=seg,
+                x=sub['MEDIAN_DAYS'],
+                y=sub['WORKLOAD_CATEGORY'],
+                orientation='h',
+                marker_color=SEGMENT_COLORS[seg],
+                hovertemplate='<b>%{y}</b><br>' + seg + ': %{x:.0f} days<extra></extra>',
+            ))
+        fig_vw.update_layout(
+            barmode='group',
+            xaxis=dict(title='Median Days', gridcolor='#f1f5f9'),
+            yaxis=dict(tickfont=dict(size=11)),
+            legend=dict(orientation='h', y=1.08, font=dict(size=10)),
+            plot_bgcolor='#fafafa', paper_bgcolor='white',
+            height=320, margin=dict(t=40, b=20, l=140, r=20),
+        )
+        st.plotly_chart(fig_vw, use_container_width=True)
+
+    with col_ew:
+        st.markdown("**Total EACV ($M) by Workload & Segment**")
+        fig_ew = go.Figure()
+        for seg in seg_order:
+            sub = seg_df[seg_df['SEGMENT'] == seg].copy()
+            sub['WORKLOAD_CATEGORY'] = pd.Categorical(sub['WORKLOAD_CATEGORY'], categories=wl_order, ordered=True)
+            sub = sub.sort_values('WORKLOAD_CATEGORY')
+            fig_ew.add_trace(go.Bar(
+                name=seg,
+                x=sub['TOTAL_EACV_M'],
+                y=sub['WORKLOAD_CATEGORY'],
+                orientation='h',
+                marker_color=SEGMENT_COLORS[seg],
+                hovertemplate='<b>%{y}</b><br>' + seg + ': $%{x:.1f}M<extra></extra>',
+            ))
+        fig_ew.update_layout(
+            barmode='group',
+            xaxis=dict(title='Total EACV ($M)', gridcolor='#f1f5f9'),
+            yaxis=dict(tickfont=dict(size=11)),
+            legend=dict(orientation='h', y=1.08, font=dict(size=10)),
+            plot_bgcolor='#fafafa', paper_bgcolor='white',
+            height=320, margin=dict(t=40, b=20, l=140, r=20),
+        )
+        st.plotly_chart(fig_ew, use_container_width=True)
+
+    st.divider()
+
+    # ---------- Row 3: Speed vs Value scatter + IQR range chart ----------
+    col_sc, col_iqr = st.columns(2)
+
+    with col_sc:
+        st.markdown("**Speed vs Value — Avg EACV ($K) vs Median Days**")
+        st.caption("Bubble size = UC count. Ideal: upper-left (fast + high value).")
+        fig_sc = go.Figure()
+        for seg in seg_order:
+            sub = seg_df[seg_df['SEGMENT'] == seg]
+            fig_sc.add_trace(go.Scatter(
+                x=sub['MEDIAN_DAYS'],
+                y=sub['AVG_EACV_K'],
+                mode='markers+text',
+                name=seg,
+                marker=dict(
+                    color=SEGMENT_COLORS[seg],
+                    size=np.sqrt(sub['UC_COUNT'].values) * 2.5,
+                    opacity=0.75,
+                    line=dict(color='white', width=1),
+                ),
+                text=sub['WORKLOAD_CATEGORY'].str.replace(' / ', '\n').str.replace(' & ', '\n'),
+                textposition='top center',
+                textfont=dict(size=8, color='#475569'),
+                hovertemplate=(
+                    '<b>%{text}</b><br>' + seg +
+                    '<br>Median: %{x:.0f} days<br>Avg EACV: $%{y:.0f}K<extra></extra>'
+                ),
+            ))
+        fig_sc.update_layout(
+            xaxis=dict(title='Median Days → (faster left)', gridcolor='#f1f5f9'),
+            yaxis=dict(title='Avg EACV ($K) → (higher up)', gridcolor='#f1f5f9'),
+            legend=dict(orientation='h', y=1.08, font=dict(size=10)),
+            plot_bgcolor='#fafafa', paper_bgcolor='white',
+            height=360, margin=dict(t=40, b=40, l=60, r=20),
+        )
+        st.plotly_chart(fig_sc, use_container_width=True)
+
+    with col_iqr:
+        st.markdown("**Velocity Distribution P25–Median–P75 by Segment & Workload**")
+        st.caption("Bars = interquartile range (middle 50%). Tick = median.")
+        fig_iqr = go.Figure()
+        for seg in seg_order:
+            sub = seg_df[seg_df['SEGMENT'] == seg].copy()
+            sub['WORKLOAD_CATEGORY'] = pd.Categorical(sub['WORKLOAD_CATEGORY'], categories=wl_order, ordered=True)
+            sub = sub.sort_values('WORKLOAD_CATEGORY')
+            fig_iqr.add_trace(go.Bar(
+                name=f'{seg} IQR',
+                x=sub['WORKLOAD_CATEGORY'],
+                y=sub['P75_DAYS'] - sub['P25_DAYS'],
+                base=sub['P25_DAYS'],
+                marker_color=SEGMENT_COLORS[seg],
+                opacity=0.4,
+                showlegend=True,
+                hovertemplate=(
+                    '<b>%{x}</b><br>' + seg +
+                    '<br>P25: %{base:.0f}d → P75: %{customdata:.0f}d<extra></extra>'
+                ),
+                customdata=sub['P75_DAYS'],
+            ))
+            fig_iqr.add_trace(go.Scatter(
+                x=sub['WORKLOAD_CATEGORY'],
+                y=sub['MEDIAN_DAYS'],
+                mode='markers',
+                marker=dict(color=SEGMENT_COLORS[seg], size=8, symbol='line-ew', line=dict(width=3, color=SEGMENT_COLORS[seg])),
+                name=f'{seg} Median',
+                showlegend=False,
+                hovertemplate='<b>%{x}</b><br>' + seg + ' Median: %{y:.0f}d<extra></extra>',
+            ))
+        fig_iqr.update_layout(
+            barmode='group',
+            xaxis=dict(tickfont=dict(size=10), tickangle=-20),
+            yaxis=dict(title='Days', gridcolor='#f1f5f9'),
+            legend=dict(orientation='h', y=1.08, font=dict(size=9)),
+            plot_bgcolor='#fafafa', paper_bgcolor='white',
+            height=360, margin=dict(t=40, b=60, l=50, r=20),
+        )
+        st.plotly_chart(fig_iqr, use_container_width=True)
+
+    st.divider()
+
+    # ---------- Full data table ----------
+    st.markdown("**Full Data Table**")
+    st.dataframe(
+        seg_df.rename(columns={
+            'SEGMENT': 'Segment', 'WORKLOAD_CATEGORY': 'Workload',
+            'UC_COUNT': 'UCs', 'TOTAL_EACV_M': 'Total EACV ($M)',
+            'AVG_EACV_K': 'Avg EACV ($K)', 'AVG_DAYS': 'Avg Days',
+            'MEDIAN_DAYS': 'Median Days', 'P25_DAYS': 'P25', 'P75_DAYS': 'P75',
+        }),
+        column_config={
+            'Total EACV ($M)': st.column_config.NumberColumn(format="$%.2fM"),
+            'Avg EACV ($K)':   st.column_config.NumberColumn(format="$%.0fK"),
+            'Avg Days':        st.column_config.NumberColumn(format="%d"),
+            'Median Days':     st.column_config.NumberColumn(format="%d"),
+            'P25':             st.column_config.NumberColumn(format="%d"),
+            'P75':             st.column_config.NumberColumn(format="%d"),
+        },
+        use_container_width=True, hide_index=True,
+    )

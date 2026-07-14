@@ -1041,6 +1041,165 @@ def get_bulk_confidence_scores(_conn, partners, start_date, end_date):
     query += "\n    ORDER BY TOTAL_SCORE DESC, PARTNER_NAME, ACCOUNT_NAME"
     return _conn.query(query)
 
+@st.cache_data(ttl=timedelta(hours=5))
+def get_segment_by_impl_start(_conn):
+    """UC count + EACV by segment and workload for all stages 1-7,
+    scoped by IMPLEMENTATION_START_DATE in FY27 YTD (Feb 1 2026 – today).
+    No velocity — not all UCs have a go-live date yet.
+    """
+    query = f"""
+    WITH hierarchy AS (
+        SELECT PARTNER_NAME, PARENT_PARTNER_NAME FROM {SCHEMA}.PARTNER_HIERARCHY
+    ),
+    managed_parents AS (
+        SELECT VALUE::STRING AS PARENT
+        FROM TABLE(FLATTEN(INPUT => ARRAY_CONSTRUCT(
+            'Accenture','Capgemini Technologies LLC','Cognizant Technology Solutions US Corp',
+            'Deloitte Consulting','EY','Ernst & Young (EY)','IBM','IBM Consulting',
+            '7Rivers, Inc','Aimpoint Digital','BlueCloud Services Inc',
+            'kipi.ai','Kipi.ai','evolv Consulting','Infostrux Solutions Inc.',
+            'Infosys','KPMG LLP','LTM','LTI Mindtree','NTT DATA Group Corporation',
+            'phData, Inc.','Slalom, LLC.','Squadron Data Inc','Tredence Inc.',
+            'Spaulding Ridge','TEKsystems Global Services, LLC.','Blend360, LLC',
+            'Tiger Analytics Inc.','Atrium','Perficient Inc.','SDK Tek Services Ltd.',
+            'Merkle','Archetype Consulting','Apex Systems','Tata Consultancy Services',
+            'OneSix','Icon Analytics','Sparq Holdings, Inc.','CitiusTech Inc.',
+            'Hexaware Technologies'
+        )))
+    ),
+    managed_raw_names AS (
+        SELECT PARENT AS RAW_NAME FROM managed_parents
+        UNION
+        SELECT h.PARTNER_NAME FROM hierarchy h
+        WHERE h.PARENT_PARTNER_NAME IN (SELECT PARENT FROM managed_parents)
+    ),
+    classified AS (
+        SELECT
+            CASE
+                WHEN COALESCE(
+                    NULLIF(ARRAY_TO_STRING(uc.IMPLEMENTATION_SERVICES_PARTNER, ', '), ''),
+                    NULLIF(ARRAY_TO_STRING(uc.CO_SELL_SERVICES_PARTNER, ', '), ''),
+                    NULLIF(uc.PARTNER_NAME, ''),
+                    NULLIF(ARRAY_TO_STRING(uc.USE_CASE_PARTNER, ', '), '')
+                ) IS NULL THEN 'Customer-Led'
+                WHEN EXISTS (
+                    SELECT 1 FROM managed_raw_names m
+                    WHERE ARRAY_TO_STRING(uc.IMPLEMENTATION_SERVICES_PARTNER, ', ') ILIKE '%' || m.RAW_NAME || '%'
+                ) THEN 'Managed Partner'
+                ELSE 'Other Partner'
+            END AS SEGMENT,
+            CASE
+                WHEN uc.TECHNICAL_USE_CASE ILIKE '%AI:%' OR uc.WORKLOADS ILIKE '%AI%' THEN 'AI / ML'
+                WHEN uc.TECHNICAL_USE_CASE ILIKE '%Migration%' OR uc.WORKLOADS ILIKE '%Migration%' THEN 'DWH / Migration'
+                WHEN uc.TECHNICAL_USE_CASE ILIKE '%Apps%' OR uc.WORKLOADS ILIKE '%Applications%' THEN 'Apps / Data Sharing'
+                WHEN uc.TECHNICAL_USE_CASE ILIKE '%Platform%' OR uc.WORKLOADS ILIKE '%Platform%' THEN 'Platform / Governance'
+                WHEN uc.TECHNICAL_USE_CASE ILIKE '%DE:%' OR uc.WORKLOADS ILIKE '%Data Engineering%' OR uc.TECHNICAL_USE_CASE ILIKE '%Analytics%' THEN 'Data Engineering'
+                ELSE 'Other'
+            END AS WORKLOAD_CATEGORY,
+            uc.USE_CASE_STAGE,
+            TRY_CAST(uc.USE_CASE_EACV AS FLOAT) AS EACV
+        FROM MDM.MDM_INTERFACES.DIM_USE_CASE uc
+        WHERE uc.USE_CASE_STAGE NOT IN ('8 - Use Case Lost', '0 - Not In Pursuit')
+        AND uc.IMPLEMENTATION_START_DATE >= '2026-02-01'
+        AND uc.IMPLEMENTATION_START_DATE <= CURRENT_DATE()
+        AND uc.IS_LOST = FALSE
+    )
+    SELECT
+        SEGMENT,
+        WORKLOAD_CATEGORY,
+        USE_CASE_STAGE,
+        COUNT(*)                              AS UC_COUNT,
+        ROUND(SUM(EACV) / 1000000, 2)         AS TOTAL_EACV_M,
+        ROUND(AVG(EACV) / 1000, 1)            AS AVG_EACV_K
+    FROM classified
+    GROUP BY SEGMENT, WORKLOAD_CATEGORY, USE_CASE_STAGE
+    ORDER BY SEGMENT, WORKLOAD_CATEGORY, USE_CASE_STAGE
+    """
+    return _conn.query(query)
+
+
+@st.cache_data(ttl=timedelta(hours=5))
+def get_segment_velocity(_conn):
+    """Velocity + EACV breakdown by segment (Customer-Led / Managed Partner / Other Partner)
+    and workload category for FY27 YTD deployed use cases.
+    Segment is determined by implementation partner field vs managed partner list.
+    Excludes UCs with bad cycle times (< 1 day or > 730 days).
+    """
+    query = f"""
+    WITH hierarchy AS (
+        SELECT PARTNER_NAME, PARENT_PARTNER_NAME FROM {SCHEMA}.PARTNER_HIERARCHY
+    ),
+    managed_parents AS (
+        SELECT VALUE::STRING AS PARENT
+        FROM TABLE(FLATTEN(INPUT => ARRAY_CONSTRUCT(
+            'Accenture','Capgemini Technologies LLC','Cognizant Technology Solutions US Corp',
+            'Deloitte Consulting','EY','Ernst & Young (EY)','IBM','IBM Consulting',
+            '7Rivers, Inc','Aimpoint Digital','BlueCloud Services Inc',
+            'kipi.ai','Kipi.ai','evolv Consulting','Infostrux Solutions Inc.',
+            'Infosys','KPMG LLP','LTM','LTI Mindtree','NTT DATA Group Corporation',
+            'phData, Inc.','Slalom, LLC.','Squadron Data Inc','Tredence Inc.',
+            'Spaulding Ridge','TEKsystems Global Services, LLC.','Blend360, LLC',
+            'Tiger Analytics Inc.','Atrium','Perficient Inc.','SDK Tek Services Ltd.',
+            'Merkle','Archetype Consulting','Apex Systems','Tata Consultancy Services',
+            'OneSix','Icon Analytics','Sparq Holdings, Inc.','CitiusTech Inc.',
+            'Hexaware Technologies'
+        )))
+    ),
+    managed_raw_names AS (
+        SELECT PARENT AS RAW_NAME FROM managed_parents
+        UNION
+        SELECT h.PARTNER_NAME FROM hierarchy h
+        WHERE h.PARENT_PARTNER_NAME IN (SELECT PARENT FROM managed_parents)
+    ),
+    classified AS (
+        SELECT
+            CASE
+                WHEN COALESCE(
+                    NULLIF(ARRAY_TO_STRING(uc.IMPLEMENTATION_SERVICES_PARTNER, ', '), ''),
+                    NULLIF(ARRAY_TO_STRING(uc.CO_SELL_SERVICES_PARTNER, ', '), ''),
+                    NULLIF(uc.PARTNER_NAME, ''),
+                    NULLIF(ARRAY_TO_STRING(uc.USE_CASE_PARTNER, ', '), '')
+                ) IS NULL THEN 'Customer-Led'
+                WHEN EXISTS (
+                    SELECT 1 FROM managed_raw_names m
+                    WHERE ARRAY_TO_STRING(uc.IMPLEMENTATION_SERVICES_PARTNER, ', ') ILIKE '%' || m.RAW_NAME || '%'
+                ) THEN 'Managed Partner'
+                ELSE 'Other Partner'
+            END AS SEGMENT,
+            CASE
+                WHEN uc.TECHNICAL_USE_CASE ILIKE '%AI:%' OR uc.WORKLOADS ILIKE '%AI%' THEN 'AI / ML'
+                WHEN uc.TECHNICAL_USE_CASE ILIKE '%Migration%' OR uc.WORKLOADS ILIKE '%Migration%' THEN 'DWH / Migration'
+                WHEN uc.TECHNICAL_USE_CASE ILIKE '%Apps%' OR uc.WORKLOADS ILIKE '%Applications%' THEN 'Apps / Data Sharing'
+                WHEN uc.TECHNICAL_USE_CASE ILIKE '%Platform%' OR uc.WORKLOADS ILIKE '%Platform%' THEN 'Platform / Governance'
+                WHEN uc.TECHNICAL_USE_CASE ILIKE '%DE:%' OR uc.WORKLOADS ILIKE '%Data Engineering%' OR uc.TECHNICAL_USE_CASE ILIKE '%Analytics%' THEN 'Data Engineering'
+                ELSE 'Other'
+            END AS WORKLOAD_CATEGORY,
+            DATEDIFF('day', uc.DECISION_DATE, uc.GO_LIVE_DATE) AS DAYS_FULL_CYCLE,
+            TRY_CAST(uc.USE_CASE_EACV AS FLOAT) AS EACV
+        FROM MDM.MDM_INTERFACES.DIM_USE_CASE uc
+        WHERE uc.USE_CASE_STAGE = '7 - Deployed'
+        AND uc.GO_LIVE_DATE >= '2026-02-01' AND uc.GO_LIVE_DATE <= CURRENT_DATE()
+        AND uc.IS_LOST = FALSE
+        AND uc.DECISION_DATE IS NOT NULL
+        AND DATEDIFF('day', uc.DECISION_DATE, uc.GO_LIVE_DATE) BETWEEN 1 AND 730
+    )
+    SELECT
+        SEGMENT,
+        WORKLOAD_CATEGORY,
+        COUNT(*)                                                                    AS UC_COUNT,
+        ROUND(SUM(EACV) / 1000000, 2)                                               AS TOTAL_EACV_M,
+        ROUND(AVG(EACV) / 1000, 1)                                                  AS AVG_EACV_K,
+        ROUND(AVG(DAYS_FULL_CYCLE), 0)                                              AS AVG_DAYS,
+        MEDIAN(DAYS_FULL_CYCLE)                                                     AS MEDIAN_DAYS,
+        ROUND(PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY DAYS_FULL_CYCLE), 0)    AS P25_DAYS,
+        ROUND(PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY DAYS_FULL_CYCLE), 0)    AS P75_DAYS
+    FROM classified
+    GROUP BY SEGMENT, WORKLOAD_CATEGORY
+    ORDER BY SEGMENT, TOTAL_EACV_M DESC
+    """
+    return _conn.query(query)
+
+
 @st.cache_data(ttl=timedelta(minutes=30))
 def get_pipeline_wow(_conn):
     """WoW use case count and EACV change (current vs prior week) from CEO_USE_CASE_WEEKLY_METRICS."""
