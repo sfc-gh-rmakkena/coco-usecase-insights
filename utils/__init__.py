@@ -23,6 +23,35 @@ PARTNER_ALIASES = {
     'IBM':     ['IBM', 'IBM Consulting'],
     'kipi.ai': ['kipi.ai', 'Kipi.ai'],
     'LTM':     ['LTM', 'LTI Mindtree'],
+    'Tata Consultancy Services': [
+        'Tata Consultancy Services', 'TCS', 'Tata Consultancy Services (TCS)',
+    ],
+    'Hexaware Technologies': [
+        'Hexaware Technologies', 'Hexaware Technologies Limited',
+        'Hexaware Technologies Inc', 'Hexaware Technologies UK Limited',
+        'Hexaware Technolgies',
+    ],
+    'TEKsystems Global Services, LLC.': [
+        'TEKsystems Global Services, LLC.', 'TEKsystems - Canada',
+        'TEKSYSTEMS GLOBAL SERVICES (UK) LIMITED',
+    ],
+    'Perficient Inc.': ['Perficient Inc.', 'Perficient India Pvt Ltd'],
+    'Merkle': [
+        'Merkle', 'Merkle inc USA', 'Merkle ANZ Pty Ltd', 'Merkle Switzerland AG',
+        'PT Merkle Inovasi Teknologi', 'Davanti a Merkle Company',
+    ],
+    'CitiusTech Inc.':        ['CitiusTech Inc.', 'CITIUS TECH'],
+    'Spaulding Ridge':        ['Spaulding Ridge', 'Spaulding Ridge, EMEA',
+                               'Spaulding Ridge Advisory Spain, S.L.'],
+    'Blend360, LLC':          ['Blend360, LLC'],
+    'Tiger Analytics Inc.':   ['Tiger Analytics Inc.'],
+    'Atrium':                 ['Atrium'],
+    'SDK Tek Services Ltd.':  ['SDK Tek Services Ltd.'],
+    'Archetype Consulting':   ['Archetype Consulting'],
+    'Apex Systems':           ['Apex Systems'],
+    'OneSix':                 ['OneSix'],
+    'Icon Analytics':         ['Icon Analytics'],
+    'Sparq Holdings, Inc.':   ['Sparq Holdings, Inc.'],
     '--- GSIs ---': [
         'Accenture', 'Capgemini Technologies LLC',
         'Cognizant Technology Solutions US Corp', 'Deloitte Consulting',
@@ -35,10 +64,17 @@ PARTNER_ALIASES = {
         'LTM', 'LTI Mindtree', 'NTT DATA Group Corporation', 'phData, Inc.',
         'Slalom, LLC.', 'Squadron Data Inc', 'Tredence Inc.'
     ],
+    '--- PSE Managed Partners ---': [
+        'Spaulding Ridge', 'TEKsystems Global Services, LLC.', 'Blend360, LLC',
+        'Tiger Analytics Inc.', 'Atrium', 'Perficient Inc.', 'SDK Tek Services Ltd.',
+        'Merkle', 'Archetype Consulting', 'Apex Systems', 'Tata Consultancy Services',
+        'OneSix', 'Icon Analytics', 'Sparq Holdings, Inc.', 'CitiusTech Inc.',
+        'Hexaware Technologies',
+    ],
 }
 
 # Group options to show at top of multiselect
-PARTNER_GROUPS = ['--- GSIs ---', '--- Regional SIs ---']
+PARTNER_GROUPS = ['--- GSIs ---', '--- Regional SIs ---', '--- PSE Managed Partners ---']
 
 # Flat alias→canonical map for DataFrame PARTNER_NAME .replace() operations
 # Derived from PARTNER_ALIASES: each non-group entry's aliases beyond the first
