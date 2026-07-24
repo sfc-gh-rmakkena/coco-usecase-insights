@@ -717,9 +717,17 @@ with st.spinner("Loading data..."):
                 credit_data = _usage_joined.groupby('PARTNER_NAME').agg(
                     Q2_TOTAL_CREDITS=('Q2_CREDITS', 'sum'),
                     Q2_TOKENS=('Q2_TOKENS', 'sum'),
+                    LAST7_CREDITS=('LAST7_CREDITS', 'sum'),
+                    PRIOR7_CREDITS=('PRIOR7_CREDITS', 'sum'),
+                    LAST7_TOKENS=('LAST7_TOKENS', 'sum'),
                     ACCTS_WITH_USAGE=('Q2_CREDITS', lambda x: (x > 0).sum()),
-                    WOW_PCT=('WOW_CREDITS_PCT', 'mean'),
                 ).reset_index()
+                # Portfolio WoW% — sum-based, matches Deep Dive header exactly
+                credit_data['WOW_PCT'] = (
+                    (credit_data['LAST7_CREDITS'] - credit_data['PRIOR7_CREDITS'])
+                    / credit_data['PRIOR7_CREDITS'].replace(0, float('nan'))
+                    * 100
+                )
 
         # Q2 headline stats
         managed_q2_stats = pd.DataFrame([{
@@ -896,10 +904,12 @@ _credit_lookup = {}
 if len(credit_data) > 0:
     for _, cr in credit_data.iterrows():
         _credit_lookup[str(cr['PARTNER_NAME'])] = {
-            'credits':        cr.get('Q2_TOTAL_CREDITS', 0) or 0,
-            'tokens':         cr.get('Q2_TOKENS', 0) or 0,
-            'accts_w_usage':  int(cr.get('ACCTS_WITH_USAGE', 0) or 0),
-            'wow_pct':        cr.get('WOW_PCT', None),
+            'credits':       cr.get('Q2_TOTAL_CREDITS', 0) or 0,
+            'tokens':        cr.get('Q2_TOKENS', 0) or 0,
+            'last7_credits': cr.get('LAST7_CREDITS', 0) or 0,
+            'last7_tokens':  cr.get('LAST7_TOKENS', 0) or 0,
+            'accts_w_usage': int(cr.get('ACCTS_WITH_USAGE', 0) or 0),
+            'wow_pct':       cr.get('WOW_PCT', None),
         }
 
 partner_ctx = ""
@@ -908,13 +918,14 @@ for _, p in managed_q2_partners.iterrows():
     cr = _credit_lookup.get(p['PARTNER_NAME'], {})
     credits       = cr.get('credits', 0)
     tokens        = cr.get('tokens', 0)
+    last7_credits = cr.get('last7_credits', 0)
     accts_w_usage = cr.get('accts_w_usage', 0)
     wow_pct       = cr.get('wow_pct', None)
     wow_str = f"{wow_pct:+.1f}%" if wow_pct is not None and pd.notna(wow_pct) else "-"
     partner_ctx += (
         f"  {p['PARTNER_NAME']}: {int(p['TOTAL_UCS'])} UCs, {int(p['COCO_UCS'])} CoCo ({int(p['COCO_PCT'])}%), "
         f"${eacv/1000:.0f}K, AI={int(p['AI'])}, DE={int(p['DE'])}, Analytics={int(p['ANALYTICS'])}, "
-        f"Q2 Credits=${credits:,.0f}, Q2 Tokens={_fmt_tokens(tokens)}, Credits WoW%={wow_str}\n"
+        f"Q2 Credits=${credits:,.0f}, Last 7d Credits=${last7_credits:,.0f}, Q2 Tokens={_fmt_tokens(tokens)}, Credits WoW%={wow_str}\n"
     )
 
 stage_ctx = ""
@@ -1029,7 +1040,8 @@ credit_ctx = ""
 if len(credit_data) > 0:
     for _, cr in credit_data.head(12).iterrows():
         wow = f"{cr['WOW_PCT']:+.1f}%" if pd.notna(cr['WOW_PCT']) else "N/A"
-        credit_ctx += f"  {cr['PARTNER_NAME']}: Q2 Credits=${cr['Q2_TOTAL_CREDITS']:,.0f}, Q2 Tokens={cr['Q2_TOKENS']:,.0f}, Accts w/ Usage={int(cr['ACCTS_WITH_USAGE'])}, Credits WoW%={wow}\n"
+        last7 = cr.get('LAST7_CREDITS', 0) or 0
+        credit_ctx += f"  {cr['PARTNER_NAME']}: Q2 Credits=${cr['Q2_TOTAL_CREDITS']:,.0f}, Last 7d Credits=${last7:,.0f}, Q2 Tokens={cr['Q2_TOKENS']:,.0f}, Accts w/ Usage={int(cr['ACCTS_WITH_USAGE'])}, Credits WoW%={wow}\n"
 
 
 
@@ -1318,12 +1330,12 @@ PARTNER CLASSIFICATION:
 - Use stage mapping: Validation (3), Won (4), Implementation (5-6), Deployed (7)
 
 ## PARTNER SCORECARD (all 20 managed partners)
-| Partner | Total UCs | CoCo UCs | CoCo% | WoW Δ% | WoW Δ UCs | EACV | AI | DE | Analytics | Q2 Credits | Q2 Tokens | Credits WoW% |
+| Partner | Total UCs | CoCo UCs | CoCo% | WoW Δ% | WoW Δ UCs | EACV | AI | DE | Analytics | Q2 Tokens | Q2 Credits | Last 7d Credits | Last 7d Credits WoW% |
 - Show ALL 20 managed partners (do not cap or truncate). Sort by EACV descending.
 - **GSIs (6): Total UCs and CoCo UCs are GLOBAL (all regions combined).** RSIs (14): Total UCs and CoCo UCs are NoAM only.
 - "CoCo%" = CoCo/Total for each partner's scoped data.
 - WoW Δ% and WoW Δ UCs from "COCO ADOPTION WoW — PER MANAGED PARTNER" — show "-" if N/A
-- Q2 Credits, Q2 Tokens, Credits WoW% from "Q2 Credits", "Q2 Tokens", "Credits WoW%" fields in PARTNER SCORECARD data — show "-" if not available. Q2 Credits = CoCo token credits on IS_COCO_FINAL customer accounts.
+- Q2 Credits, Last 7d Credits, Q2 Tokens, Last 7d Credits WoW% from PARTNER SCORECARD data — show "-" if not available. Q2 Tokens comes after Analytics column. Q2 Credits = cumulative CoCo token credits on IS_COCO_FINAL accounts since Q2 start. Last 7d Credits = rolling last 7 days. Last 7d Credits WoW% = (last7 - prior7) / prior7.
 - Our target is **50% CoCo adoption** per partner. After the table, add ONE sentence listing the partners below 50% in ascending order of CoCo% (closest to 50% first, lowest last) — these need the most enablement focus.
 
 ## USE CASE PATTERNS (managed partners only)

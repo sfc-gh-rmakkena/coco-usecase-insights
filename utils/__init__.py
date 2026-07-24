@@ -1,5 +1,56 @@
 _NOAM_THEATERS = ['AMSExpansion', 'USMajors', 'AMSAcquisition', 'USPubSec']
 
+import re as _re
+
+def _normalize_name(s: str) -> str:
+    """Normalize a company name for partner-own-account detection."""
+    s = s.lower()
+    for suffix in [' inc', ' llc', ' ltd', ' corp', ' consulting', ' services',
+                   ' group', ' technologies', ' technology', ' limited', ' solutions',
+                   ' advisory', ' partners', ' global', ' management']:
+        s = s.replace(suffix, '')
+    return _re.sub(r'[^a-z0-9]', '', s)
+
+
+def is_partner_own_account(partner_name: str, account_name: str) -> bool:
+    """Return True if account_name is likely the partner's own company account.
+
+    Catches cases like:
+    - 'BlueCloud Services Inc'  vs 'Blue.cloud'
+    - 'Tata Consultancy Services' vs 'TATA Consultancy Services'
+    - 'Merkle'                  vs 'Merkle, Inc.'
+    - 'Deloitte Consulting'     vs 'Deloitte Services LP'
+    """
+    pn = _normalize_name(partner_name)
+    an = _normalize_name(account_name)
+    if not pn or not an or min(len(pn), len(an)) < 4:
+        return False
+    return pn in an or an in pn
+
+
+def filter_out_partner_own_accounts(df, partner_col: str = 'PARTNER_NAME',
+                                    account_col: str = 'ACCOUNT_NAME_UPPER') -> "pd.DataFrame":
+    """Filter a DataFrame to remove rows where the account is the partner's own company.
+
+    Args:
+        df: DataFrame with partner and account columns.
+        partner_col: column name for partner name.
+        account_col: column name for account name (upper-cased expected).
+    Returns:
+        Filtered DataFrame with partner-own accounts removed.
+    """
+    if df is None or len(df) == 0:
+        return df
+    mask = df.apply(
+        lambda r: not is_partner_own_account(
+            str(r.get(partner_col, '') or ''),
+            str(r.get(account_col, '') or '')
+        ),
+        axis=1
+    )
+    return df[mask].copy()
+
+
 def resolve_region_theaters(region: str) -> list:
     """Map region or theater name to list of THEATER_NAME values for DataFrame filtering.
     Returns None when no filter should be applied (Global).

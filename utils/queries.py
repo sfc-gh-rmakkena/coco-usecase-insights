@@ -798,28 +798,44 @@ def get_okr_stage_breakdown(_conn, region=None, start_date=None, end_date=None, 
 @st.cache_data(ttl=timedelta(minutes=30))
 def get_account_coco_credits(_conn, accounts: tuple, start_date: str) -> "pd.DataFrame":
     """Q2 CoCo credit consumption per account from CORTEX_CODE_USER_DAY_FACT.
-    Returns ACCOUNT_NAME_UPPER, Q2_CREDITS, Q2_TOKENS, ACTIVE_DAYS, LAST_ACTIVE, WOW_CREDITS_PCT.
-    Credits are account-level — shared across all UCs at the same account.
+    Returns ACCOUNT_NAME_UPPER, Q2_CREDITS, Q2_TOKENS, ACTIVE_DAYS, LAST_ACTIVE,
+    LAST7_CREDITS, PRIOR7_CREDITS, LAST7_TOKENS, PRIOR7_TOKENS, WOW_CREDITS_PCT (per-account).
+    Use LAST7/PRIOR7 at partner level for correct portfolio WoW, not the per-account mean.
     """
     if not accounts:
         import pandas as pd
-        return pd.DataFrame(columns=['ACCOUNT_NAME_UPPER', 'Q2_CREDITS', 'Q2_TOKENS', 'ACTIVE_DAYS', 'LAST_ACTIVE', 'WOW_CREDITS_PCT'])
+        return pd.DataFrame(columns=['ACCOUNT_NAME_UPPER', 'Q2_CREDITS', 'Q2_TOKENS',
+                                     'ACTIVE_DAYS', 'LAST_ACTIVE', 'WOW_CREDITS_PCT',
+                                     'LAST7_CREDITS', 'PRIOR7_CREDITS',
+                                     'LAST7_TOKENS', 'PRIOR7_TOKENS'])
     accts_sql = "','".join(a.replace("'", "''") for a in accounts)
     query = f"""
     SELECT
-        UPPER(SALESFORCE_ACCOUNT_NAME)      AS ACCOUNT_NAME_UPPER,
-        ROUND(SUM(TOTAL_TOKEN_CREDITS), 2)  AS Q2_CREDITS,
-        SUM(TOTAL_TOKENS)                   AS Q2_TOKENS,
-        COUNT(DISTINCT DS)                  AS ACTIVE_DAYS,
-        MAX(DS)                             AS LAST_ACTIVE,
+        UPPER(SALESFORCE_ACCOUNT_NAME)                                               AS ACCOUNT_NAME_UPPER,
+        ROUND(SUM(TOTAL_TOKEN_CREDITS), 2)                                           AS Q2_CREDITS,
+        SUM(TOTAL_TOKENS)                                                            AS Q2_TOKENS,
+        COUNT(DISTINCT DS)                                                           AS ACTIVE_DAYS,
+        MAX(DS)                                                                      AS LAST_ACTIVE,
+        -- Per-account WoW (kept for Partner Deep Dive UC-level display)
         CASE
-            WHEN SUM(CASE WHEN DS >= DATEADD('day', -14, CURRENT_DATE()) AND DS < DATEADD('day', -7, CURRENT_DATE()) THEN TOTAL_TOKEN_CREDITS END) > 0
+            WHEN SUM(CASE WHEN DS >= DATEADD('day',-14,CURRENT_DATE()) AND DS < DATEADD('day',-7,CURRENT_DATE()) THEN TOTAL_TOKEN_CREDITS END) > 0
             THEN ROUND(
-                (SUM(CASE WHEN DS >= DATEADD('day', -7, CURRENT_DATE()) THEN TOTAL_TOKEN_CREDITS END)
-                 - SUM(CASE WHEN DS >= DATEADD('day', -14, CURRENT_DATE()) AND DS < DATEADD('day', -7, CURRENT_DATE()) THEN TOTAL_TOKEN_CREDITS END))
-                / SUM(CASE WHEN DS >= DATEADD('day', -14, CURRENT_DATE()) AND DS < DATEADD('day', -7, CURRENT_DATE()) THEN TOTAL_TOKEN_CREDITS END) * 100, 1)
+                (SUM(CASE WHEN DS >= DATEADD('day',-7,CURRENT_DATE()) THEN TOTAL_TOKEN_CREDITS END)
+                 - SUM(CASE WHEN DS >= DATEADD('day',-14,CURRENT_DATE()) AND DS < DATEADD('day',-7,CURRENT_DATE()) THEN TOTAL_TOKEN_CREDITS END))
+                / SUM(CASE WHEN DS >= DATEADD('day',-14,CURRENT_DATE()) AND DS < DATEADD('day',-7,CURRENT_DATE()) THEN TOTAL_TOKEN_CREDITS END) * 100, 1)
             ELSE NULL
-        END AS WOW_CREDITS_PCT
+        END                                                                         AS WOW_CREDITS_PCT,
+        -- Last/prior 7 days for portfolio-level WoW aggregation
+        ROUND(SUM(CASE WHEN DS >= DATEADD('day',-7,CURRENT_DATE())
+                       THEN TOTAL_TOKEN_CREDITS END), 2)                            AS LAST7_CREDITS,
+        ROUND(SUM(CASE WHEN DS >= DATEADD('day',-14,CURRENT_DATE())
+                       AND  DS <  DATEADD('day',-7,CURRENT_DATE())
+                       THEN TOTAL_TOKEN_CREDITS END), 2)                            AS PRIOR7_CREDITS,
+        SUM(CASE WHEN DS >= DATEADD('day',-7,CURRENT_DATE())
+                 THEN TOTAL_TOKENS END)                                             AS LAST7_TOKENS,
+        SUM(CASE WHEN DS >= DATEADD('day',-14,CURRENT_DATE())
+                 AND  DS <  DATEADD('day',-7,CURRENT_DATE())
+                 THEN TOTAL_TOKENS END)                                             AS PRIOR7_TOKENS
     FROM SNOWSCIENCE.LLM.CORTEX_CODE_USER_DAY_FACT
     WHERE DS >= '{start_date}'
     AND SNOWFLAKE_ACCOUNT_TYPE = 'Customer'
@@ -995,6 +1011,40 @@ def _confidence_scored_query(partner_filter_sql, start_date, end_date):
         AND UPPER(f.SALESFORCE_ACCOUNT_NAME) IN (SELECT ACCOUNT_NAME_UPPER FROM partner_ucs)
         GROUP BY UPPER(f.SALESFORCE_ACCOUNT_NAME)
     ),
+    account_credits AS (
+        SELECT
+            UPPER(SALESFORCE_ACCOUNT_NAME)                                               AS ACCOUNT_NAME_UPPER,
+            ROUND(SUM(TOTAL_TOKEN_CREDITS), 2)                                           AS Q2_CREDITS,
+            SUM(TOTAL_TOKENS)                                                            AS Q2_TOKENS,
+            MAX(DS)                                                                      AS LAST_ACTIVE,
+            ROUND(SUM(CASE WHEN DS >= DATEADD('day',-7,CURRENT_DATE())
+                           THEN TOTAL_TOKEN_CREDITS END), 2)                            AS LAST7_CREDITS,
+            ROUND(SUM(CASE WHEN DS >= DATEADD('day',-14,CURRENT_DATE())
+                           AND  DS <  DATEADD('day',-7,CURRENT_DATE())
+                           THEN TOTAL_TOKEN_CREDITS END), 2)                            AS PRIOR7_CREDITS,
+            SUM(CASE WHEN DS >= DATEADD('day',-7,CURRENT_DATE())
+                     THEN TOTAL_TOKENS END)                                             AS LAST7_TOKENS,
+            SUM(CASE WHEN DS >= DATEADD('day',-14,CURRENT_DATE())
+                     AND  DS <  DATEADD('day',-7,CURRENT_DATE())
+                     THEN TOTAL_TOKENS END)                                             AS PRIOR7_TOKENS,
+            -- Surface breakdown: CLI / Desktop / UI
+            ROUND(SUM(COALESCE(CLI_TOKEN_CREDITS, 0)), 2)                              AS CLI_CREDITS,
+            SUM(COALESCE(CLI_TOTAL_TOKENS, 0))                                         AS CLI_TOKENS,
+            SUM(COALESCE(CLI_DAILY_REQUESTS, 0))                                       AS CLI_REQUESTS,
+            ROUND(SUM(COALESCE(DESKTOP_TOKEN_CREDITS, 0)), 2)                          AS DESKTOP_CREDITS,
+            SUM(COALESCE(DESKTOP_TOTAL_TOKENS, 0))                                     AS DESKTOP_TOKENS,
+            SUM(COALESCE(DESKTOP_DAILY_REQUESTS, 0))                                   AS DESKTOP_REQUESTS,
+            ROUND(SUM(COALESCE(UI_TOKEN_CREDITS, 0)), 2)                               AS UI_CREDITS,
+            SUM(COALESCE(UI_TOTAL_TOKENS, 0))                                          AS UI_TOKENS,
+            SUM(COALESCE(UI_DAILY_REQUESTS, 0))                                        AS UI_REQUESTS,
+            SUM(COALESCE(UI_CODING_AGENT_REQUESTS, 0))                                 AS AGENT_REQUESTS
+        FROM SNOWSCIENCE.LLM.CORTEX_CODE_USER_DAY_FACT
+        WHERE SNOWFLAKE_ACCOUNT_TYPE = 'Customer'
+        AND TOTAL_DAILY_REQUESTS > 0
+        AND DS >= '{start_date}'
+        AND UPPER(SALESFORCE_ACCOUNT_NAME) IN (SELECT ACCOUNT_NAME_UPPER FROM partner_ucs)
+        GROUP BY UPPER(SALESFORCE_ACCOUNT_NAME)
+    ),
     scored AS (
         SELECT uc.*,
             CASE WHEN uc.WORKLOAD_CATEGORY = 'AI' THEN COALESCE(rb.ai_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Analytics' THEN COALESCE(rb.analytics_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Data Engineering' THEN COALESCE(rb.de_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Platform' THEN COALESCE(rb.platform_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Apps & Collab' THEN COALESCE(rb.app_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Migration' THEN COALESCE(rb.migration_skill_count, 0) ELSE 0 END AS RELEVANT_SKILL_INVOCATIONS,
@@ -1004,6 +1054,24 @@ def _confidence_scored_query(partner_filter_sql, start_date, end_date):
             COALESCE(pu.active_days, 0) AS ACTIVE_DAYS,
             COALESCE(pu.distinct_users, 0) AS DISTINCT_USERS,
             COALESCE(pu.total_requests, 0) AS TOTAL_REQUESTS,
+            COALESCE(ac.Q2_CREDITS, 0)    AS Q2_CREDITS,
+            COALESCE(ac.Q2_TOKENS, 0)     AS Q2_TOKENS,
+            ac.LAST_ACTIVE,
+            COALESCE(ac.LAST7_CREDITS, 0) AS LAST7_CREDITS,
+            COALESCE(ac.PRIOR7_CREDITS, 0) AS PRIOR7_CREDITS,
+            COALESCE(ac.LAST7_TOKENS, 0)  AS LAST7_TOKENS,
+            COALESCE(ac.PRIOR7_TOKENS, 0) AS PRIOR7_TOKENS,
+            -- Surface breakdown
+            COALESCE(ac.CLI_CREDITS, 0)     AS CLI_CREDITS,
+            COALESCE(ac.CLI_TOKENS, 0)      AS CLI_TOKENS,
+            COALESCE(ac.CLI_REQUESTS, 0)    AS CLI_REQUESTS,
+            COALESCE(ac.DESKTOP_CREDITS, 0) AS DESKTOP_CREDITS,
+            COALESCE(ac.DESKTOP_TOKENS, 0)  AS DESKTOP_TOKENS,
+            COALESCE(ac.DESKTOP_REQUESTS, 0) AS DESKTOP_REQUESTS,
+            COALESCE(ac.UI_CREDITS, 0)      AS UI_CREDITS,
+            COALESCE(ac.UI_TOKENS, 0)       AS UI_TOKENS,
+            COALESCE(ac.UI_REQUESTS, 0)     AS UI_REQUESTS,
+            COALESCE(ac.AGENT_REQUESTS, 0)  AS AGENT_REQUESTS,
             CASE WHEN CASE WHEN uc.WORKLOAD_CATEGORY = 'AI' THEN COALESCE(rb.ai_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Analytics' THEN COALESCE(rb.analytics_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Data Engineering' THEN COALESCE(rb.de_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Platform' THEN COALESCE(rb.platform_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Apps & Collab' THEN COALESCE(rb.app_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Migration' THEN COALESCE(rb.migration_skill_count, 0) ELSE 0 END >= 50 THEN 30 WHEN CASE WHEN uc.WORKLOAD_CATEGORY = 'AI' THEN COALESCE(rb.ai_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Analytics' THEN COALESCE(rb.analytics_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Data Engineering' THEN COALESCE(rb.de_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Platform' THEN COALESCE(rb.platform_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Apps & Collab' THEN COALESCE(rb.app_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Migration' THEN COALESCE(rb.migration_skill_count, 0) ELSE 0 END >= 10 THEN 20 WHEN CASE WHEN uc.WORKLOAD_CATEGORY = 'AI' THEN COALESCE(rb.ai_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Analytics' THEN COALESCE(rb.analytics_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Data Engineering' THEN COALESCE(rb.de_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Platform' THEN COALESCE(rb.platform_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Apps & Collab' THEN COALESCE(rb.app_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Migration' THEN COALESCE(rb.migration_skill_count, 0) ELSE 0 END >= 1 THEN 10 ELSE 0 END AS S1_SCORE,
             CASE WHEN CASE WHEN uc.WORKLOAD_CATEGORY = 'AI' THEN COALESCE(cs.ai_custom_skills, 0) WHEN uc.WORKLOAD_CATEGORY = 'Analytics' THEN COALESCE(cs.analytics_custom_skills, 0) WHEN uc.WORKLOAD_CATEGORY = 'Data Engineering' THEN COALESCE(cs.de_custom_skills, 0) WHEN uc.WORKLOAD_CATEGORY = 'Platform' THEN COALESCE(cs.platform_custom_skills, 0) WHEN uc.WORKLOAD_CATEGORY = 'Apps & Collab' THEN COALESCE(cs.app_custom_skills, 0) WHEN uc.WORKLOAD_CATEGORY = 'Migration' THEN COALESCE(cs.migration_custom_skills, 0) ELSE 0 END >= 3 THEN 35 WHEN CASE WHEN uc.WORKLOAD_CATEGORY = 'AI' THEN COALESCE(cs.ai_custom_skills, 0) WHEN uc.WORKLOAD_CATEGORY = 'Analytics' THEN COALESCE(cs.analytics_custom_skills, 0) WHEN uc.WORKLOAD_CATEGORY = 'Data Engineering' THEN COALESCE(cs.de_custom_skills, 0) WHEN uc.WORKLOAD_CATEGORY = 'Platform' THEN COALESCE(cs.platform_custom_skills, 0) WHEN uc.WORKLOAD_CATEGORY = 'Apps & Collab' THEN COALESCE(cs.app_custom_skills, 0) WHEN uc.WORKLOAD_CATEGORY = 'Migration' THEN COALESCE(cs.migration_custom_skills, 0) ELSE 0 END >= 1 THEN 25 WHEN COALESCE(cs.custom_skill_count, 0) >= 10 THEN 15 WHEN COALESCE(cs.custom_skill_count, 0) >= 1 THEN 8 ELSE 0 END AS S2_SCORE,
             CASE WHEN COALESCE(tu.total_tool_invocations, 0) >= 50000 THEN 20 WHEN COALESCE(tu.total_tool_invocations, 0) >= 10000 THEN 15 WHEN COALESCE(tu.total_tool_invocations, 0) >= 1000 THEN 10 WHEN COALESCE(tu.total_tool_invocations, 0) >= 1 THEN 5 WHEN COALESCE(pu.total_requests, 0) >= 1000 THEN 5 WHEN COALESCE(pu.total_requests, 0) >= 1 THEN 3 ELSE 0 END AS S3_SCORE,
@@ -1013,6 +1081,7 @@ def _confidence_scored_query(partner_filter_sql, start_date, end_date):
         LEFT JOIN custom_skills cs ON uc.ACCOUNT_NAME_UPPER = cs.ACCOUNT_NAME_UPPER
         LEFT JOIN tool_usage tu ON uc.ACCOUNT_NAME_UPPER = tu.ACCOUNT_NAME_UPPER
         LEFT JOIN product_usage pu ON uc.ACCOUNT_NAME_UPPER = pu.ACCOUNT_NAME_UPPER
+        LEFT JOIN account_credits ac ON uc.ACCOUNT_NAME_UPPER = ac.ACCOUNT_NAME_UPPER
     )
     SELECT *,
         S1_SCORE + S2_SCORE + S3_SCORE + S4_SCORE AS TOTAL_SCORE,
@@ -1026,8 +1095,11 @@ def _confidence_scored_query(partner_filter_sql, start_date, end_date):
 
 @st.cache_data(ttl=timedelta(minutes=30))
 def get_usecase_confidence_scores(_conn, partner, start_date, end_date):
-    """Compute confidence scores for a single partner's use cases."""
-    partner_filter = f"uc.PARTNER_NAME = '{partner}'"
+    """Compute confidence scores for a single partner's use cases (all aliases included)."""
+    from utils import PARTNER_ALIASES
+    raw_names = PARTNER_ALIASES.get(partner, [partner])
+    names_sql = "','".join(n.replace("'", "''") for n in raw_names)
+    partner_filter = f"uc.PARTNER_NAME IN ('{names_sql}')"
     query = _confidence_scored_query(partner_filter, start_date, end_date)
     query += "\n    ORDER BY TOTAL_SCORE DESC, ACCOUNT_NAME"
     return _conn.query(query)
@@ -1407,6 +1479,146 @@ def get_adoption_trend_4w(_conn, partners: tuple, region: str = "NoAM") -> list:
     return result
 
 
+@st.cache_data(ttl=timedelta(hours=2))
+def get_partner_surface_trend_4w(_conn, account_partner_pairs: tuple):
+    """Rolling 7-day credit + token consumption per partner for IS_COCO_FINAL accounts.
+    Uses same rolling-window logic as Deep Dive LAST7/PRIOR7 so numbers match exactly.
+    Returns DataFrame with PERIOD_LABEL, PERIOD_ORDER, PARTNER_NAME, WEEKLY_CREDITS, WEEKLY_TOKENS.
+    """
+    if not account_partner_pairs:
+        return pd.DataFrame()
+    # Build VALUES clause from pre-computed IS_COCO_FINAL account list
+    values_rows = ", ".join(
+        f"('{p.replace(chr(39), chr(39)+chr(39))}', '{a.replace(chr(39), chr(39)+chr(39))}')"
+        for p, a in account_partner_pairs
+    )
+    query = f"""
+    WITH coco_final_accounts AS (
+        SELECT column1 AS PARTNER_NAME, column2 AS ACCOUNT_NAME_UPPER
+        FROM VALUES {values_rows}
+    ),
+    raw AS (
+        SELECT
+            ca.PARTNER_NAME,
+            f.TOTAL_TOKEN_CREDITS,
+            f.TOTAL_TOKENS,
+            CASE
+                WHEN f.DS >= DATEADD('day', -7,  CURRENT_DATE()) THEN 1
+                WHEN f.DS >= DATEADD('day', -14, CURRENT_DATE()) THEN 2
+                WHEN f.DS >= DATEADD('day', -21, CURRENT_DATE()) THEN 3
+                WHEN f.DS >= DATEADD('day', -28, CURRENT_DATE()) THEN 4
+            END AS PERIOD_ORDER,
+            CASE
+                WHEN f.DS >= DATEADD('day', -7,  CURRENT_DATE()) THEN
+                    TO_VARCHAR(DATEADD('day',-7, CURRENT_DATE()),'MM/DD') || '-' || TO_VARCHAR(DATEADD('day',-1, CURRENT_DATE()),'MM/DD')
+                WHEN f.DS >= DATEADD('day', -14, CURRENT_DATE()) THEN
+                    TO_VARCHAR(DATEADD('day',-14,CURRENT_DATE()),'MM/DD') || '-' || TO_VARCHAR(DATEADD('day',-8, CURRENT_DATE()),'MM/DD')
+                WHEN f.DS >= DATEADD('day', -21, CURRENT_DATE()) THEN
+                    TO_VARCHAR(DATEADD('day',-21,CURRENT_DATE()),'MM/DD') || '-' || TO_VARCHAR(DATEADD('day',-15,CURRENT_DATE()),'MM/DD')
+                WHEN f.DS >= DATEADD('day', -28, CURRENT_DATE()) THEN
+                    TO_VARCHAR(DATEADD('day',-28,CURRENT_DATE()),'MM/DD') || '-' || TO_VARCHAR(DATEADD('day',-22,CURRENT_DATE()),'MM/DD')
+            END AS PERIOD_LABEL
+        FROM SNOWSCIENCE.LLM.CORTEX_CODE_USER_DAY_FACT f
+        INNER JOIN coco_final_accounts ca
+            ON UPPER(f.SALESFORCE_ACCOUNT_NAME) = ca.ACCOUNT_NAME_UPPER
+        WHERE f.DS >= DATEADD('day', -28, CURRENT_DATE())
+          AND f.SNOWFLAKE_ACCOUNT_TYPE = 'Customer'
+          AND f.TOTAL_DAILY_REQUESTS > 0
+    )
+    SELECT
+        PERIOD_ORDER,
+        PERIOD_LABEL,
+        PARTNER_NAME,
+        ROUND(SUM(TOTAL_TOKEN_CREDITS), 2) AS WEEKLY_CREDITS,
+        SUM(TOTAL_TOKENS)                  AS WEEKLY_TOKENS
+    FROM raw
+    WHERE PERIOD_ORDER IS NOT NULL
+    GROUP BY 1, 2, 3
+    ORDER BY PERIOD_ORDER DESC, PARTNER_NAME
+    """
+    return _conn.query(query)
+
+
+@st.cache_data(ttl=timedelta(hours=2))
+def get_partner_coco_trend_4w(_conn, partners: tuple, region: str = 'All'):
+    """Per-partner CoCo% for last 4 weeks from IS_COCO_FINAL_WEEKLY_SNAPSHOT.
+    Filters to REGION='Global' to avoid double-counting regional rows.
+    Returns DataFrame with WEEK_START, PARTNER_NAME, COCO_PCT, TOTAL_UCS, COCO_UCS.
+    """
+    if not partners:
+        return pd.DataFrame()
+    ps = "','".join(partners)
+    region_clause = ""
+    if region not in ('All', 'Global', ''):
+        region_map = {
+            'NoAM': ('AMSExpansion', 'USMajors', 'AMSAcquisition', 'USPubSec'),
+            'EMEA': ('EMEA',), 'APJ': ('APJ',),
+        }
+        _theaters = "','".join(region_map.get(region, ()))
+        region_clause = f"AND PARTNER_NAME IN (SELECT PARTNER_NAME FROM {SCHEMA}.DT_OKR_USE_CASES WHERE THEATER_NAME IN ('{_theaters}'))"
+    query = f"""
+    WITH deduped AS (
+        SELECT WEEK_START, PARTNER_NAME, TOTAL_UCS, COCO_UCS, COCO_PCT
+        FROM {SCHEMA}.IS_COCO_FINAL_WEEKLY_SNAPSHOT
+        WHERE PARTNER_NAME IN ('{ps}')
+          AND REGION = 'Global'
+          {region_clause}
+        QUALIFY ROW_NUMBER() OVER (
+            PARTITION BY WEEK_START, PARTNER_NAME ORDER BY SAVED_AT ASC
+        ) = 1
+    )
+    SELECT WEEK_START, PARTNER_NAME, TOTAL_UCS, COCO_UCS, COCO_PCT
+    FROM deduped
+    WHERE WEEK_START >= DATEADD('week', -4, CURRENT_DATE())
+    ORDER BY WEEK_START ASC, PARTNER_NAME
+    """
+    return _conn.query(query)
+
+
+@st.cache_data(ttl=timedelta(hours=2))
+def get_partner_weekly_credits_4w(_conn, partners: tuple, start_date: str, end_date: str):
+    """Weekly credit + token consumption per partner for IS_COCO_FINAL accounts, last 4 weeks.
+    Returns DataFrame with WEEK_START, PARTNER_NAME, WEEKLY_CREDITS, WEEKLY_TOKENS.
+    """
+    if not partners:
+        return pd.DataFrame()
+    ps = "','".join(partners)
+    query = f"""
+    WITH partner_coco_accounts AS (
+        SELECT DISTINCT
+            CASE WHEN PARTNER_NAME IN ('IBM','IBM Consulting') THEN 'IBM'
+                 WHEN PARTNER_NAME IN ('EY','Ernst & Young (EY)') THEN 'EY'
+                 WHEN PARTNER_NAME IN ('LTM','LTI Mindtree') THEN 'LTM'
+                 WHEN PARTNER_NAME IN ('kipi.ai','Kipi.ai') THEN 'kipi.ai'
+                 ELSE PARTNER_NAME END AS PARTNER_NAME,
+            UPPER(ACCOUNT_NAME) AS ACCOUNT_NAME_UPPER
+        FROM {SCHEMA}.DT_OKR_USE_CASES
+        WHERE PARTNER_NAME IN ('{ps}')
+          AND IS_COCO = TRUE
+          AND ((USE_CASE_STAGE IN ('3 - Technical / Business Validation','4 - Use Case Won / Migration Plan')
+                AND DECISION_DATE >= '{start_date}' AND DECISION_DATE <= '{end_date}')
+            OR (USE_CASE_STAGE IN ('5 - Implementation In Progress','6 - Implementation Complete','7 - Deployed')
+                AND GO_LIVE_DATE >= '{start_date}' AND GO_LIVE_DATE <= '{end_date}'))
+    )
+    SELECT
+        DATE_TRUNC('week', f.DS)                        AS WEEK_START,
+        pc.PARTNER_NAME,
+        ROUND(SUM(f.TOTAL_TOKEN_CREDITS), 2)            AS WEEKLY_CREDITS,
+        SUM(f.TOTAL_TOKENS)                             AS WEEKLY_TOKENS
+    FROM SNOWSCIENCE.LLM.CORTEX_CODE_USER_DAY_FACT f
+    INNER JOIN partner_coco_accounts pc
+        ON UPPER(f.SALESFORCE_ACCOUNT_NAME) = pc.ACCOUNT_NAME_UPPER
+    WHERE f.DS >= DATEADD('week', -4, CURRENT_DATE())
+      AND f.DS >= '{start_date}'
+      AND f.SNOWFLAKE_ACCOUNT_TYPE = 'Customer'
+      AND f.TOTAL_DAILY_REQUESTS > 0
+    GROUP BY 1, 2
+    ORDER BY 1 ASC, 2
+    """
+    return _conn.query(query)
+
+
+
 _GSI_VELOCITY_PARTNERS = (
     "'Accenture','Capgemini Technologies LLC','Cognizant Technology Solutions US Corp',"
     "'Deloitte Consulting','EY','Ernst & Young (EY)','IBM','IBM Consulting'"
@@ -1465,6 +1677,122 @@ def get_partner_velocity_data(_conn, partners_sql: str):
           d.PARTNER_NAME IN ({_GSI_VELOCITY_PARTNERS})
           OR d.THEATER_NAME IN ({_NOAM_THEATERS})
       )
+    """)
+
+
+@st.cache_data(ttl=timedelta(hours=12))
+def get_velocity_coco_final_flags(_conn, partners_sql: str, fy27_start: str = '2026-02-01'):
+    """Compute IS_COCO_FINAL (S1+S2+S3+S4 >= 75 OR IS_COCO) for all velocity use cases.
+    Returns DataFrame with USE_CASE_ID and IS_COCO_FINAL columns.
+    Uses FY27 product usage data for confidence scoring.
+    """
+    return _conn.query(f"""
+    WITH velocity_ucs AS (
+        SELECT
+            d.USE_CASE_ID,
+            UPPER(d.ACCOUNT_NAME) AS ACCOUNT_NAME_UPPER,
+            d.IS_COCO,
+            CASE
+                WHEN d.TECHNICAL_USE_CASE ILIKE '%AI:%'        THEN 'AI'
+                WHEN d.TECHNICAL_USE_CASE ILIKE '%Analytics:%' THEN 'Analytics'
+                WHEN d.TECHNICAL_USE_CASE ILIKE '%DE:%'        THEN 'Data Engineering'
+                WHEN d.TECHNICAL_USE_CASE ILIKE '%Platform:%'  THEN 'Platform'
+                WHEN d.TECHNICAL_USE_CASE ILIKE '%Apps%'       THEN 'Apps & Collab'
+                WHEN d.TECHNICAL_USE_CASE ILIKE '%Migration%'  THEN 'Migration'
+                ELSE 'Unclassified'
+            END AS WC
+        FROM {DT_OKR} d
+        JOIN FIVETRAN.SALESFORCE.USE_CASE_C sf ON sf.ID = d.USE_CASE_ID
+        WHERE d.PARTNER_NAME IN ({partners_sql})
+          AND sf.STAGE_C = '7 - Deployed'
+          AND sf.ACTUAL_GO_LIVE_DATE_C BETWEEN '2025-02-01' AND '2026-07-31'
+          AND sf._FIVETRAN_DELETED IS DISTINCT FROM TRUE
+          AND (
+              d.PARTNER_NAME IN ({_GSI_VELOCITY_PARTNERS})
+              OR d.THEATER_NAME IN ({_NOAM_THEATERS})
+          )
+    ),
+    account_ids AS (
+        SELECT DISTINCT f.ACCOUNT_ID, UPPER(f.SALESFORCE_ACCOUNT_NAME) AS ACCOUNT_NAME_UPPER
+        FROM SNOWSCIENCE.LLM.CORTEX_CODE_USER_DAY_FACT f
+        WHERE f.SNOWFLAKE_ACCOUNT_TYPE = 'Customer' AND f.DS >= '{fy27_start}'
+        AND UPPER(f.SALESFORCE_ACCOUNT_NAME) IN (SELECT ACCOUNT_NAME_UPPER FROM velocity_ucs)
+    ),
+    rb AS (
+        SELECT a.ACCOUNT_NAME_UPPER,
+            SUM(CASE WHEN r.SKILL_CHOICE ILIKE '%cortex-agent%' OR r.SKILL_CHOICE ILIKE '%cortex-ai-function%' OR r.SKILL_CHOICE ILIKE '%machine-learning%' OR r.SKILL_CHOICE ILIKE '%semantic-view%' THEN 1 ELSE 0 END) AS ai,
+            SUM(CASE WHEN r.SKILL_CHOICE ILIKE '%sql-author%' OR r.SKILL_CHOICE ILIKE '%dashboard%' THEN 1 ELSE 0 END) AS ana,
+            SUM(CASE WHEN r.SKILL_CHOICE ILIKE '%dbt%' OR r.SKILL_CHOICE ILIKE '%dynamic-tables%' OR r.SKILL_CHOICE ILIKE '%iceberg%' THEN 1 ELSE 0 END) AS de,
+            SUM(CASE WHEN r.SKILL_CHOICE ILIKE '%cost-intelligence%' OR r.SKILL_CHOICE ILIKE '%data-governance%' THEN 1 ELSE 0 END) AS plt,
+            SUM(CASE WHEN r.SKILL_CHOICE ILIKE '%streamlit%' OR r.SKILL_CHOICE ILIKE '%notebook%' THEN 1 ELSE 0 END) AS app,
+            SUM(CASE WHEN r.SKILL_CHOICE ILIKE '%migration%' OR r.SKILL_CHOICE ILIKE '%spark%' THEN 1 ELSE 0 END) AS mig
+        FROM SNOWSCIENCE.LLM.CORTEX_CODE_REQUEST_STG r
+        INNER JOIN account_ids a ON r.ACCOUNT_ID = a.ACCOUNT_ID
+        WHERE r.DS >= '{fy27_start}' AND r.SKILL_CHOICE IS NOT NULL AND r.SKILL_CHOICE != ''
+        GROUP BY a.ACCOUNT_NAME_UPPER
+    ),
+    cs AS (
+        SELECT fl.ACCOUNT_NAME_UPPER,
+            COUNT(DISTINCT fl.sn) AS total_cs,
+            COUNT(DISTINCT CASE WHEN LOWER(fl.sn) REGEXP '.*(agent|cortex|llm|ml|model|ai|chat|rag|embed).*'       THEN fl.sn END) AS ai_cs,
+            COUNT(DISTINCT CASE WHEN LOWER(fl.sn) REGEXP '.*(sql|query|analytics|bi|report|dashboard|semantic).*'  THEN fl.sn END) AS ana_cs,
+            COUNT(DISTINCT CASE WHEN LOWER(fl.sn) REGEXP '.*(dbt|airflow|pipeline|etl|lineage|stream|iceberg).*'   THEN fl.sn END) AS de_cs,
+            COUNT(DISTINCT CASE WHEN LOWER(fl.sn) REGEXP '.*(govern|security|access|cost|warehouse|billing|platform).*' THEN fl.sn END) AS plt_cs,
+            COUNT(DISTINCT CASE WHEN LOWER(fl.sn) REGEXP '.*(streamlit|app|frontend|ui|react|spcs|notebook).*'     THEN fl.sn END) AS app_cs,
+            COUNT(DISTINCT CASE WHEN LOWER(fl.sn) REGEXP '.*(migrat|spark|databricks|ssis|legacy).*'               THEN fl.sn END) AS mig_cs
+        FROM (
+            SELECT a.ACCOUNT_NAME_UPPER, sk.value:name::STRING AS sn
+            FROM SNOWSCIENCE.LLM.CORTEX_CODE_REQUEST_STG r
+            INNER JOIN account_ids a ON r.ACCOUNT_ID = a.ACCOUNT_ID,
+            LATERAL FLATTEN(input => TRY_PARSE_JSON(r.TOOL_RESOURCES_SKILL):skills) sk
+            WHERE r.DS >= '{fy27_start}'
+            AND r.TOOL_RESOURCES_SKILL IS NOT NULL AND r.TOOL_RESOURCES_SKILL != '' AND r.TOOL_RESOURCES_SKILL != '[]'
+            AND sk.value:skill_source::STRING = 'user'
+        ) fl
+        GROUP BY fl.ACCOUNT_NAME_UPPER
+    ),
+    tu AS (
+        SELECT a.ACCOUNT_NAME_UPPER, COUNT(*) AS ti
+        FROM SNOWSCIENCE.LLM.CORTEX_CODE_REQUEST_STG r
+        INNER JOIN account_ids a ON r.ACCOUNT_ID = a.ACCOUNT_ID,
+        LATERAL FLATTEN(input => TRY_PARSE_JSON(r.TOOLS_INVOKED_JSON)) f
+        WHERE r.DS >= '{fy27_start}' AND r.TOOLS_INVOKED_JSON IS NOT NULL AND r.TOOLS_INVOKED_JSON != '[]'
+        GROUP BY a.ACCOUNT_NAME_UPPER
+    ),
+    pu AS (
+        SELECT UPPER(f.SALESFORCE_ACCOUNT_NAME) AS ACCOUNT_NAME_UPPER,
+            COUNT(DISTINCT f.DS) AS ad, SUM(f.TOTAL_DAILY_REQUESTS) AS tr
+        FROM SNOWSCIENCE.LLM.CORTEX_CODE_USER_DAY_FACT f
+        WHERE f.SNOWFLAKE_ACCOUNT_TYPE = 'Customer' AND f.DS >= '{fy27_start}' AND f.TOTAL_DAILY_REQUESTS > 0
+        AND UPPER(f.SALESFORCE_ACCOUNT_NAME) IN (SELECT ACCOUNT_NAME_UPPER FROM velocity_ucs)
+        GROUP BY UPPER(f.SALESFORCE_ACCOUNT_NAME)
+    ),
+    account_scores AS (
+        SELECT u.ACCOUNT_NAME_UPPER,
+            CASE WHEN u.WC='AI' THEN COALESCE(rb.ai,0) WHEN u.WC='Analytics' THEN COALESCE(rb.ana,0) WHEN u.WC='Data Engineering' THEN COALESCE(rb.de,0) WHEN u.WC='Platform' THEN COALESCE(rb.plt,0) WHEN u.WC='Apps & Collab' THEN COALESCE(rb.app,0) WHEN u.WC='Migration' THEN COALESCE(rb.mig,0) ELSE 0 END AS rs,
+            CASE WHEN u.WC='AI' THEN COALESCE(cs.ai_cs,0) WHEN u.WC='Analytics' THEN COALESCE(cs.ana_cs,0) WHEN u.WC='Data Engineering' THEN COALESCE(cs.de_cs,0) WHEN u.WC='Platform' THEN COALESCE(cs.plt_cs,0) WHEN u.WC='Apps & Collab' THEN COALESCE(cs.app_cs,0) WHEN u.WC='Migration' THEN COALESCE(cs.mig_cs,0) ELSE 0 END AS rcs,
+            COALESCE(cs.total_cs,0) AS tcs,
+            COALESCE(tu.ti,0)       AS ti,
+            COALESCE(pu.ad,0)       AS ad,
+            COALESCE(pu.tr,0)       AS tr,
+            u.USE_CASE_ID,
+            u.IS_COCO
+        FROM velocity_ucs u
+        LEFT JOIN rb ON u.ACCOUNT_NAME_UPPER = rb.ACCOUNT_NAME_UPPER
+        LEFT JOIN cs ON u.ACCOUNT_NAME_UPPER = cs.ACCOUNT_NAME_UPPER
+        LEFT JOIN tu ON u.ACCOUNT_NAME_UPPER = tu.ACCOUNT_NAME_UPPER
+        LEFT JOIN pu ON u.ACCOUNT_NAME_UPPER = pu.ACCOUNT_NAME_UPPER
+    )
+    SELECT
+        USE_CASE_ID,
+        IS_COCO,
+        (IS_COCO = TRUE OR (
+            CASE WHEN rs>=50 THEN 30 WHEN rs>=10 THEN 20 WHEN rs>=1 THEN 10 ELSE 0 END +
+            CASE WHEN rcs>=3 THEN 35 WHEN rcs>=1 THEN 25 WHEN tcs>=10 THEN 15 WHEN tcs>=1 THEN 8 ELSE 0 END +
+            CASE WHEN ti>=50000 THEN 20 WHEN ti>=10000 THEN 15 WHEN ti>=1000 THEN 10 WHEN ti>=1 THEN 5 WHEN tr>=1000 THEN 5 WHEN tr>=1 THEN 3 ELSE 0 END +
+            CASE WHEN ad=0 THEN 0 WHEN rs/NULLIF(ad,0)>=5 THEN 15 WHEN rs/NULLIF(ad,0)>=1 THEN 10 WHEN rs>0 THEN 5 ELSE 0 END
+        >= 75)) AS IS_COCO_FINAL
+    FROM account_scores
     """)
 
 

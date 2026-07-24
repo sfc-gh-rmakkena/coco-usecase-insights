@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-from utils.queries import get_partner_velocity_data, get_segment_velocity
+from utils.queries import get_partner_velocity_data, get_segment_velocity, get_velocity_coco_final_flags
 from utils import resolve_partner_filter
 from utils.ask_ai import build_filter_context
 import datetime
@@ -72,8 +72,15 @@ with _col_info:
 with st.spinner("Classifying use cases with AI... (cached weekly — first load ~2 min)"):
     raw = get_partner_velocity_data(conn, _MANAGED_PARTNERS_SQL)
 
+with st.spinner("Computing IS_COCO_FINAL confidence scores..."):
+    coco_flags = get_velocity_coco_final_flags(conn, _MANAGED_PARTNERS_SQL)
+    coco_flags.columns = [c.upper() for c in coco_flags.columns]
+
 df = raw.copy()
 df.columns = [c.upper() for c in df.columns]
+if len(coco_flags) > 0 and 'USE_CASE_ID' in coco_flags.columns:
+    df = df.merge(coco_flags[['USE_CASE_ID', 'IS_COCO_FINAL']], on='USE_CASE_ID', how='left')
+    df['IS_COCO'] = df['IS_COCO_FINAL'].fillna(df['IS_COCO'])
 df = df[df['WORKLOAD_CATEGORY'].notna() & df['FISCAL_QUARTER'].notna()]
 df['DAYS_FULL_CYCLE'] = pd.to_numeric(df['DAYS_FULL_CYCLE'], errors='coerce')
 df = df[df['DAYS_FULL_CYCLE'].notna()]
