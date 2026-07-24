@@ -93,6 +93,8 @@ with st.sidebar:
     st.markdown("**Ask AI**")
     conn = st.session_state.conn
 
+    show_debug = st.toggle("SQL debug", value=False, key="ask_ai_debug")
+
     # Display last 3 exchanges
     history = st.session_state.ask_ai_history
     for msg in history[-6:]:
@@ -105,8 +107,27 @@ with st.sidebar:
         with st.chat_message("assistant"):
             with st.spinner("Thinking..."):
                 page_ctx = st.session_state.get("ask_ai_context", "")
-                response = ask_ai(conn, question, page_ctx)
-            st.markdown(response)
+                result = ask_ai(conn, question, page_ctx, debug=show_debug,
+                               chat_history=st.session_state.ask_ai_history)
+
+            if show_debug and isinstance(result, dict):
+                response = result["answer"]
+                st.markdown(response)
+                with st.expander("SQL Debug", expanded=True):
+                    st.write(f"**SQL generated:** {'Yes' if result['sql_needed'] else 'No — answered from page context'}")
+                    if result["sql_needed"] and result["generated_sql"] != "(no SQL extracted — answered from context)":
+                        st.code(result["generated_sql"], language="sql")
+                    else:
+                        st.info(result["generated_sql"])
+                    if result["sql_result"] and result["sql_result"] != "(no result)":
+                        st.write("**SQL result (first 1000 chars):**")
+                        st.text(result["sql_result"][:1000])
+                    st.write("**Step 1 decision:**")
+                    st.text(result["step1_decision"])
+            else:
+                response = result if isinstance(result, str) else result.get("answer", "")
+                st.markdown(response)
+
         st.session_state.ask_ai_history.append({"role": "user", "content": question})
         st.session_state.ask_ai_history.append({"role": "assistant", "content": response})
 

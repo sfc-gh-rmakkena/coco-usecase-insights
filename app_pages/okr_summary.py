@@ -1,10 +1,10 @@
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
-from utils.queries import get_partner_coco_coverage, get_okr_stage_breakdown, get_partner_credit_consumption, get_bulk_confidence_scores, get_coco_final_wow, get_account_coco_credits
+from utils.queries import get_partner_coco_coverage, get_okr_stage_breakdown, get_partner_credit_consumption, get_bulk_confidence_scores, get_coco_final_wow
 from utils.cortex_helpers import cortex_complete
-from utils.ask_ai import build_filter_context
-from utils import resolve_partner_filter, resolve_region_theaters, PARTNER_RENAME_MAP
+from utils.ask_ai import build_filter_context, build_credit_wow_context, build_uc_pattern_context
+from utils import resolve_partner_filter, resolve_region_theaters, PARTNER_RENAME_MAP, filter_out_partner_own_accounts
 
 conn = st.session_state.conn
 region = st.session_state.get("selected_region", "Global")
@@ -77,27 +77,35 @@ if include_account_coco and len(coverage) > 0:
         coverage['COCO_PCT'] = coverage['COCO_PCT'].astype(float)
         coverage[['TOTAL_PARTNER_UCS', 'COCO_UCS', 'NON_COCO_UCS']] = coverage[['TOTAL_PARTNER_UCS', 'COCO_UCS', 'NON_COCO_UCS']].astype(int)
 
-        # Fetch account-level credits & tokens for IS_COCO_FINAL accounts, aggregated by partner
-        _coco_final_df = bulk_conf[bulk_conf['IS_COCO_FINAL']][['PARTNER_NAME', 'ACCOUNT_NAME_UPPER']].drop_duplicates()
-        _coco_accts = tuple(_coco_final_df['ACCOUNT_NAME_UPPER'].dropna().unique())
-        if _coco_accts:
-            _usage = get_account_coco_credits(conn, _coco_accts, str(start_date))
-            if len(_usage) > 0:
-                _usage_joined = _coco_final_df.merge(_usage, on='ACCOUNT_NAME_UPPER', how='left')
-                _partner_usage = _usage_joined.groupby('PARTNER_NAME').agg(
-                    Q2_CREDITS=('Q2_CREDITS', 'sum'),
-                    Q2_TOKENS=('Q2_TOKENS', 'sum'),
-                    ACCTS_WITH_USAGE=('Q2_CREDITS', lambda x: (x > 0).sum()),
-                ).reset_index()
-                coverage = coverage.merge(_partner_usage, on='PARTNER_NAME', how='left')
-            else:
-                coverage['Q2_CREDITS'] = None
-                coverage['Q2_TOKENS'] = None
-                coverage['ACCTS_WITH_USAGE'] = 0
-        else:
-            coverage['Q2_CREDITS'] = None
-            coverage['Q2_TOKENS'] = None
-            coverage['ACCTS_WITH_USAGE'] = 0
+        # Aggregate credits/tokens directly from IS_COCO_FINAL rows in bulk_conf
+        # (credits are now embedded in _confidence_scored_query, no separate DB call needed)
+        _coco_final_df = bulk_conf[bulk_conf['IS_COCO_FINAL']].copy()
+        _coco_final_df = filter_out_partner_own_accounts(_coco_final_df)
+        # Deduplicate: each account counted once per partner to avoid double-counting
+        _credit_dedup = _coco_final_df.drop_duplicates(subset=['PARTNER_NAME', 'ACCOUNT_NAME_UPPER'])
+        for _c in ['Q2_CREDITS','Q2_TOKENS','LAST7_CREDITS','PRIOR7_CREDITS','LAST7_TOKENS','PRIOR7_TOKENS']:
+            _credit_dedup = _credit_dedup.copy()
+            _credit_dedup[_c] = _credit_dedup[_c].apply(lambda x: float(x) if x is not None else 0.0)
+        _partner_usage = _credit_dedup.groupby('PARTNER_NAME').agg(
+            Q2_CREDITS=('Q2_CREDITS', 'sum'),
+            Q2_TOKENS=('Q2_TOKENS', 'sum'),
+            LAST7_CREDITS=('LAST7_CREDITS', 'sum'),
+            PRIOR7_CREDITS=('PRIOR7_CREDITS', 'sum'),
+            LAST7_TOKENS=('LAST7_TOKENS', 'sum'),
+            PRIOR7_TOKENS=('PRIOR7_TOKENS', 'sum'),
+        ).reset_index()
+        _accts_usage = _credit_dedup[_credit_dedup['Q2_CREDITS'] > 0].groupby('PARTNER_NAME')['ACCOUNT_NAME_UPPER'].nunique().reset_index(name='ACCTS_WITH_USAGE')
+        _partner_usage = _partner_usage.merge(_accts_usage, on='PARTNER_NAME', how='left')
+        _partner_usage['ACCTS_WITH_USAGE'] = _partner_usage['ACCTS_WITH_USAGE'].fillna(0).astype(int)
+        _partner_usage['CREDITS_WOW_PCT'] = (
+            (_partner_usage['LAST7_CREDITS'] - _partner_usage['PRIOR7_CREDITS'])
+            * 100.0 / _partner_usage['PRIOR7_CREDITS'].replace(0, float('nan'))
+        ).round(1)
+        _partner_usage['TOKENS_WOW_PCT'] = (
+            (_partner_usage['LAST7_TOKENS'] - _partner_usage['PRIOR7_TOKENS'])
+            * 100.0 / _partner_usage['PRIOR7_TOKENS'].replace(0, float('nan'))
+        ).round(1)
+        coverage = coverage.merge(_partner_usage, on='PARTNER_NAME', how='left')
 
         # Recompute stage breakdown with same IS_COCO_FINAL logic
         stage_coco_eacv = bulk_conf[bulk_conf['IS_COCO_FINAL']].groupby(
@@ -137,7 +145,7 @@ if 'Q2_CREDITS' in coverage.columns and coverage['Q2_CREDITS'].notna().any():
             f"Tokens={float(_r.Q2_TOKENS)/1e9:.2f}B, "
             f"Accts w/ usage={int(_r.ACCTS_WITH_USAGE)}"
         )
-st.session_state.ask_ai_context = "\n".join(_ctx_lines) + build_filter_context()
+st.session_state.ask_ai_context = "\n".join(_ctx_lines) + build_filter_context() + (build_credit_wow_context(coverage) if 'coverage' in dir() and coverage is not None and len(coverage) > 0 else "") + (build_uc_pattern_context(bulk_conf) if 'bulk_conf' in dir() and bulk_conf is not None and len(bulk_conf) > 0 else "")
 
 tab_summary, tab_detail = st.tabs(["Summary", "Detail"])
 
@@ -422,10 +430,12 @@ with tab_summary:
         'GAP': st.column_config.NumberColumn("UCs to Target", help="Additional CoCo UCs needed to reach 50%"),
     }
     if 'Q2_CREDITS' in display.columns:
-        _display_cols += ['Q2_CREDITS', 'Q2_TOKENS', 'ACCTS_WITH_USAGE']
-        _col_cfg['Q2_CREDITS'] = st.column_config.NumberColumn("Q2 Credits", format="$%.0f", help="CoCo token credits on IS_COCO_FINAL customer accounts since Q2 start")
-        _col_cfg['Q2_TOKENS'] = st.column_config.NumberColumn("Q2 Tokens", format="%d", help="Total tokens on IS_COCO_FINAL customer accounts since Q2 start")
-        _col_cfg['ACCTS_WITH_USAGE'] = st.column_config.NumberColumn("Accts w/ Usage", format="%d", help="IS_COCO_FINAL accounts with actual CoCo credit consumption")
+        _display_cols += ['Q2_CREDITS', 'CREDITS_WOW_PCT', 'Q2_TOKENS', 'TOKENS_WOW_PCT', 'ACCTS_WITH_USAGE']
+        _col_cfg['Q2_CREDITS']      = st.column_config.NumberColumn("Q2 Credits", format="$%.0f", help="CoCo token credits on IS_COCO_FINAL customer accounts since Q2 start")
+        _col_cfg['CREDITS_WOW_PCT'] = st.column_config.NumberColumn("Credits WoW%", format="%+.1f%%", help="Portfolio-level WoW change in CoCo credits (last 7d vs prior 7d)")
+        _col_cfg['Q2_TOKENS']       = st.column_config.NumberColumn("Q2 Tokens", format="%d", help="Total tokens on IS_COCO_FINAL customer accounts since Q2 start")
+        _col_cfg['TOKENS_WOW_PCT']  = st.column_config.NumberColumn("Tokens WoW%", format="%+.1f%%", help="Portfolio-level WoW change in token consumption (last 7d vs prior 7d)")
+        _col_cfg['ACCTS_WITH_USAGE']= st.column_config.NumberColumn("Accts w/ Usage", format="%d", help="IS_COCO_FINAL accounts with actual CoCo credit consumption")
     st.dataframe(
         display[[c for c in _display_cols if c in display.columns]],
         column_config=_col_cfg,
@@ -464,16 +474,20 @@ with tab_summary:
             st.markdown(_ai_summary)
 
         st.dataframe(
-            _credit_display[['PARTNER_NAME', 'COCO_UCS', 'ACCTS_WITH_USAGE', 'Q2_CREDITS', 'Q2_TOKENS']],
+            _credit_display[['PARTNER_NAME', 'COCO_UCS', 'ACCTS_WITH_USAGE', 'Q2_CREDITS', 'CREDITS_WOW_PCT', 'Q2_TOKENS', 'TOKENS_WOW_PCT']],
             column_config={
-                'PARTNER_NAME': st.column_config.TextColumn("Partner", width="medium"),
-                'COCO_UCS': st.column_config.NumberColumn("IS_COCO_FINAL UCs", format="%d"),
-                'ACCTS_WITH_USAGE': st.column_config.NumberColumn("Customer Accounts", format="%d",
+                'PARTNER_NAME':      st.column_config.TextColumn("Partner", width="medium"),
+                'COCO_UCS':          st.column_config.NumberColumn("IS_COCO_FINAL UCs", format="%d"),
+                'ACCTS_WITH_USAGE':  st.column_config.NumberColumn("Customer Accounts", format="%d",
                     help="IS_COCO_FINAL customer accounts with CoCo credit consumption in Q2"),
-                'Q2_CREDITS': st.column_config.NumberColumn("Q2 Credits", format="$%.0f",
+                'Q2_CREDITS':        st.column_config.NumberColumn("Q2 Credits", format="$%.0f",
                     help="CoCo token credits on IS_COCO_FINAL customer accounts since Q2 start"),
-                'Q2_TOKENS': st.column_config.NumberColumn("Q2 Tokens", format="%d",
-                    help="Total tokens (input + output + cache) on IS_COCO_FINAL customer accounts since Q2 start"),
+                'CREDITS_WOW_PCT':   st.column_config.NumberColumn("Credits WoW%", format="%+.1f%%",
+                    help="Portfolio-level WoW: (last 7d credits − prior 7d credits) / prior 7d credits"),
+                'Q2_TOKENS':         st.column_config.NumberColumn("Q2 Tokens", format="%d",
+                    help="Total tokens (input + output) on IS_COCO_FINAL customer accounts since Q2 start"),
+                'TOKENS_WOW_PCT':    st.column_config.NumberColumn("Tokens WoW%", format="%+.1f%%",
+                    help="Portfolio-level WoW: (last 7d tokens − prior 7d tokens) / prior 7d tokens"),
             },
             hide_index=True, use_container_width=True
         )
