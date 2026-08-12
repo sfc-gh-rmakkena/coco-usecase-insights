@@ -1,8 +1,9 @@
 import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
-from utils.queries import get_adoption_overview, get_adoption_by_partner, get_adoption_by_stage, get_adoption_by_region, get_by_technical_type, get_by_account_gvp, get_bulk_confidence_scores, get_partner_coco_coverage
-from utils import resolve_partner_filter, resolve_region_theaters
+from utils.queries import get_adoption_overview, get_adoption_by_partner, get_adoption_by_stage, get_adoption_by_region, get_by_technical_type, get_by_account_gvp, get_bulk_confidence_scores, get_partner_coco_coverage, get_all_uc_counts, get_all_uc_counts_by_theatre, get_partner_metrics_by_theatre, get_all_uc_counts_by_region, get_partner_metrics_by_region, get_apj_rsi_adoption, get_emea_rsi_adoption, get_gsi_adoption, get_noam_rsi_adoption
+from utils import resolve_partner_filter, resolve_region_theaters, filter_out_partner_own_accounts
+from utils import APJ_RSI_REGION_MAP, EMEA_RSI_REGION_MAP
 from utils.ask_ai import build_filter_context
 
 conn = st.session_state.conn
@@ -16,6 +17,37 @@ confidence = 'High' if confidence_filter == ['High'] else ('Medium' if confidenc
 
 st.title(":material/monitoring: CoCo Use Case Adoption Overview")
 st.caption(f"High-level metrics across all partner CoCo use cases | Region: {region} | {start_date} to {end_date}")
+
+# ── Snowflake-blue KPI tiles for partner group sections (inside expanders) ───
+st.markdown("""
+<style>
+[data-testid="stExpander"] [data-testid="stMetric"] {
+    background: linear-gradient(135deg, #a8dff5 0%, #6ec5ed 100%) !important;
+    border: none !important;
+    border-radius: 8px !important;
+    box-shadow: 0 1px 4px rgba(41,181,232,.2) !important;
+    padding: 8px 10px !important;
+    min-height: unset !important;
+}
+[data-testid="stExpander"] [data-testid="stMetricLabel"] p,
+[data-testid="stExpander"] [data-testid="stMetricLabel"] span {
+    color: rgba(0,40,70,0.8) !important;
+    font-weight: 700 !important;
+    font-size: 10px !important;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+[data-testid="stExpander"] [data-testid="stMetricValue"] {
+    color: #003a5c !important;
+    font-weight: 800 !important;
+    font-size: 20px !important;
+}
+[data-testid="stExpander"] [data-testid="stMetricDelta"] {
+    color: rgba(0,40,70,0.65) !important;
+    font-size: 10px !important;
+}
+</style>
+""", unsafe_allow_html=True)
 
 with st.expander(":material/info: How Use Cases Are Retrieved", expanded=False):
     st.markdown("""
@@ -114,162 +146,754 @@ else:
     coco_pct = float(s['COCO_PCT'] or 0)
     coco_uc_display = f"{coco_count} ({coco_pct}%)"
 
-c1, c2, c3, c4, c5 = st.columns(5)
-c1.metric("Total Use Cases", int(s['TOTAL_USE_CASES']), f"{int(s['TOTAL_PARTNERS'])} partners")
-c2.metric("Total EACV", f"${s['TOTAL_EACV']/1_000_000:.1f}M" if s['TOTAL_EACV'] else "$0")
-c3.metric("CoCo Use Cases", coco_count, coco_uc_display)
-c4.metric("Avg Days in Stage", f"{s['AVG_DAYS_IN_STAGE']:.0f}" if s['AVG_DAYS_IN_STAGE'] else "N/A")
-c5.metric("Accounts Engaged", int(s['TOTAL_ACCOUNTS']))
+# Compute IS_COCO_FINAL stage breakdowns first (needed for metrics below)
+if len(bulk_conf) > 0 and 'IS_COCO_FINAL' in bulk_conf.columns:
+    _cf = bulk_conf[bulk_conf['IS_COCO_FINAL']]
+    _tech_wins_coco  = int((_cf['USE_CASE_STAGE'] == '4 - Use Case Won / Migration Plan').sum())
+    _in_impl_coco    = int(_cf['USE_CASE_STAGE'].isin(['5 - Implementation In Progress', '6 - Implementation Complete']).sum())
+    _go_live_coco    = int((_cf['USE_CASE_STAGE'] == '7 - Deployed').sum())
+    _all_deployed_partner = int((bulk_conf['USE_CASE_STAGE'] == '7 - Deployed').sum())
+    _coco_eacv       = float(_cf['USE_CASE_EACV'].sum() or 0)
+    _total_eacv      = float(bulk_conf['USE_CASE_EACV'].sum() or 0)
+else:
+    _tech_wins_coco  = int(s.get('WON_COUNT', 0) or 0)
+    _in_impl_coco    = int(s.get('IMPL_COUNT', 0) or 0)
+    _go_live_coco    = int(s.get('DEPLOYED_COUNT', 0) or 0)
+    _all_deployed_partner = _go_live_coco
+    _coco_eacv       = 0
+    _total_eacv      = float(s['TOTAL_EACV'] or 0)
+
+# All UCs (partner + non-partner) from MDM
+_all_uc = get_all_uc_counts(conn, start_date, end_date, region)
+_all_uc_total   = int(_all_uc.iloc[0]['ALL_USE_CASES'])   if len(_all_uc) > 0 else 0
+_all_go_lives   = int(_all_uc.iloc[0]['ALL_GO_LIVES'])    if len(_all_uc) > 0 else 0
+
+# Partner Go Lives % = ALL deployed partner UCs / Total Partner UCs
+_partner_total  = int(s['TOTAL_USE_CASES'])
+_go_lives_pct   = round(_all_deployed_partner * 100.0 / _partner_total, 1) if _partner_total > 0 else 0.0
+# CoCo Partner Go Lives % = IS_COCO_FINAL deployed / IS_COCO_FINAL total
+# Only reliable when bulk_conf is available
+if len(bulk_conf) > 0 and 'IS_COCO_FINAL' in bulk_conf.columns and coco_count > 0:
+    _coco_go_lives_pct = round(_go_live_coco * 100.0 / coco_count, 1)
+else:
+    _coco_go_lives_pct = 0.0
+
+c1, c2, c3, c4, c5, c6 = st.columns(6)
+c1.metric("Total UC",                  _all_uc_total,
+          help="All use cases in scope — partner and non-partner (MDM, Stages 3–7, date range filtered)")
+c2.metric("Total Go-Lives",            _all_go_lives,
+          help="All Stage 7 deployed use cases regardless of partner attachment (MDM)")
+c3.metric("Total Partner UC",          _partner_total,
+          f"{int(s['TOTAL_PARTNERS'])} partners",
+          help="Partner-attached use cases in scope (DT_OKR_USE_CASES)")
+c4.metric("Partner CoCo Usecases",     coco_count,
+          f"{coco_pct:.1f}% IS_COCO_FINAL",
+          help="Partner use cases where IS_COCO_FINAL = true (IS_COCO flag OR confidence band)")
+c5.metric("Total Partner Go-Lives",    f"{_go_lives_pct:.1f}%",
+          f"{_all_deployed_partner} of {_partner_total} partner UCs",
+          help="All Stage 7 partner UCs as % of all partner UCs in scope")
+c6.metric("CoCo Partner Go-Lives",     f"{_coco_go_lives_pct:.1f}%",
+          f"{_go_live_coco} of {coco_count} CoCo UCs",
+          help="IS_COCO_FINAL Stage 7 as % of total IS_COCO_FINAL UCs — deployment rate within CoCo")
+
 
 st.divider()
 
-# OKR Progress Visual
-st.subheader("OKR Progress: 50% CoCo Adoption Target")
-target_pct = 50
-current_pct = coco_pct if include_account_coco else float(s['COCO_PCT'] or 0)
-coco_ucs = coco_count
-# Use IS_COCO_FINAL population as denominator when bulk_conf is available
-total_ucs = total_count if len(bulk_conf) > 0 else int(s['TOTAL_USE_CASES'])
-target_ucs = int(total_ucs * 0.5)
-gap_ucs = max(0, target_ucs - coco_ucs)
+_NOAM_THEATERS = ('AMSExpansion', 'USMajors', 'AMSAcquisition', 'USPubSec')
+
+def _build_partner_theatre_from_bulk(bc):
+    """Derive per-theatre partner CoCo metrics from bulk_conf (IS_COCO_FINAL)."""
+    _bc = bc.copy()
+    _bc['_deployed_coco'] = _bc['IS_COCO_FINAL'] & (_bc['USE_CASE_STAGE'] == '7 - Deployed')
+    _bc['_deployed_all'] = (_bc['USE_CASE_STAGE'] == '7 - Deployed')
+    grp = (
+        _bc.groupby('THEATER_NAME', dropna=True)
+        .agg(TOTAL_PARTNER_UCS=('USE_CASE_ID', 'count'),
+             COCO_UCS=('IS_COCO_FINAL', 'sum'),
+             DEPLOYED_COCO=('_deployed_coco', 'sum'),
+             DEPLOYED_ALL=('_deployed_all', 'sum'))
+        .reset_index()
+    )
+    grp['GO_LIVE_PCT'] = (grp['DEPLOYED_ALL'] * 100.0 /
+                          grp['TOTAL_PARTNER_UCS'].replace(0, float('nan'))).round(1).fillna(0)
+    grp['COCO_GO_LIVE_PCT'] = (grp['DEPLOYED_COCO'] * 100.0 /
+                                grp['COCO_UCS'].replace(0, float('nan'))).round(1).fillna(0)
+    return grp
+
+
+def _build_partner_region_from_bulk(bc):
+    """Derive per-region partner CoCo metrics from bulk_conf (IS_COCO_FINAL)."""
+    _bc = bc.copy()
+    _bc['REGION'] = _bc['THEATER_NAME'].apply(
+        lambda t: 'NoAM' if t in _NOAM_THEATERS else ('EMEA' if t == 'EMEA' else ('APJ' if t == 'APJ' else 'Other'))
+    )
+    _bc['_deployed_coco'] = _bc['IS_COCO_FINAL'] & (_bc['USE_CASE_STAGE'] == '7 - Deployed')
+    _bc['_deployed_all'] = (_bc['USE_CASE_STAGE'] == '7 - Deployed')
+    grp = (
+        _bc.groupby('REGION', dropna=True)
+        .agg(TOTAL_PARTNER_UCS=('USE_CASE_ID', 'count'),
+             COCO_UCS=('IS_COCO_FINAL', 'sum'),
+             DEPLOYED_COCO=('_deployed_coco', 'sum'),
+             DEPLOYED_ALL=('_deployed_all', 'sum'))
+        .reset_index()
+    )
+    grp['GO_LIVE_PCT'] = (grp['DEPLOYED_ALL'] * 100.0 /
+                          grp['TOTAL_PARTNER_UCS'].replace(0, float('nan'))).round(1).fillna(0)
+    grp['COCO_GO_LIVE_PCT'] = (grp['DEPLOYED_COCO'] * 100.0 /
+                                grp['COCO_UCS'].replace(0, float('nan'))).round(1).fillna(0)
+    return grp
+
+# ── Breakdown by Theatre ──────────────────────────────────────────────────────
+with st.expander(":material/table: Breakdown by Theatre", expanded=True):
+    st.caption("Partner CoCo UCs = IS_COCO_FINAL (IS_COCO flag + High confidence band UCs)")
+    _theatre_mdm = get_all_uc_counts_by_theatre(conn, start_date, end_date)
+    # Derive partner side from bulk_conf (IS_COCO_FINAL) when available; SQL fallback otherwise
+    if len(bulk_conf) > 0 and 'IS_COCO_FINAL' in bulk_conf.columns:
+        _theatre_partner = _build_partner_theatre_from_bulk(bulk_conf)
+    else:
+        _theatre_partner = get_partner_metrics_by_theatre(conn, start_date, end_date)
+    if len(_theatre_mdm) > 0:
+        _t = _theatre_mdm.set_index("THEATER_NAME")[["ALL_USE_CASES", "ALL_GO_LIVES"]]
+        if len(_theatre_partner) > 0:
+            _tp = _theatre_partner.set_index("THEATER_NAME")[["TOTAL_PARTNER_UCS", "COCO_UCS", "GO_LIVE_PCT", "COCO_GO_LIVE_PCT"]]
+            _theatre_combined = _t.join(_tp, how="left").reset_index()
+        else:
+            _theatre_combined = _t.reset_index()
+            _theatre_combined["TOTAL_PARTNER_UCS"] = 0
+            _theatre_combined["COCO_UCS"] = 0
+            _theatre_combined["GO_LIVE_PCT"] = 0.0
+            _theatre_combined["COCO_GO_LIVE_PCT"] = 0.0
+        _theatre_combined.columns = ["Theatre", "Overall UCs", "Go Live UCs",
+                                      "Partner UCs", "Partner CoCo UCs", "Partner Go-Lives %", "CoCo Partner Go-Lives %"]
+        _theatre_combined["Partner Go-Lives %"] = (
+            _theatre_combined["Partner Go-Lives %"].fillna(0).apply(lambda x: f"{x:.1f}%")
+        )
+        _theatre_combined["CoCo Partner Go-Lives %"] = (
+            _theatre_combined["CoCo Partner Go-Lives %"].fillna(0).apply(lambda x: f"{x:.1f}%")
+        )
+        st.dataframe(
+            _theatre_combined.fillna(0).astype(
+                {"Overall UCs": int, "Go Live UCs": int, "Partner UCs": int,
+                 "Partner CoCo UCs": int}
+            ),
+            hide_index=True, use_container_width=True,
+        )
+    else:
+        st.info("No theatre-level data available for the selected date range.")
+
+# ── Breakdown by Region ───────────────────────────────────────────────────────
+with st.expander(":material/public: Breakdown by Region", expanded=True):
+    st.caption("Partner CoCo UCs = IS_COCO_FINAL (IS_COCO flag + High confidence band UCs)")
+    _region_mdm = get_all_uc_counts_by_region(conn, start_date, end_date)
+    # Derive partner side from bulk_conf (IS_COCO_FINAL) when available; SQL fallback otherwise
+    if len(bulk_conf) > 0 and 'IS_COCO_FINAL' in bulk_conf.columns:
+        _region_partner = _build_partner_region_from_bulk(bulk_conf)
+    else:
+        _region_partner = get_partner_metrics_by_region(conn, start_date, end_date)
+    if len(_region_mdm) > 0:
+        _r = _region_mdm.set_index("REGION")[["ALL_USE_CASES", "ALL_GO_LIVES"]]
+        if len(_region_partner) > 0:
+            _rp = _region_partner.set_index("REGION")[["TOTAL_PARTNER_UCS", "COCO_UCS", "GO_LIVE_PCT", "COCO_GO_LIVE_PCT"]]
+            _region_combined = _r.join(_rp, how="left").reset_index()
+        else:
+            _region_combined = _r.reset_index()
+            _region_combined["TOTAL_PARTNER_UCS"] = 0
+            _region_combined["COCO_UCS"] = 0
+            _region_combined["GO_LIVE_PCT"] = 0.0
+            _region_combined["COCO_GO_LIVE_PCT"] = 0.0
+        _region_combined.columns = ["Region", "Overall UCs", "Go Live UCs",
+                                     "Partner UCs", "Partner CoCo UCs", "Partner Go-Lives %", "CoCo Partner Go-Lives %"]
+        _region_combined["Partner Go-Lives %"] = (
+            _region_combined["Partner Go-Lives %"].fillna(0).apply(lambda x: f"{x:.1f}%")
+        )
+        _region_combined["CoCo Partner Go-Lives %"] = (
+            _region_combined["CoCo Partner Go-Lives %"].fillna(0).apply(lambda x: f"{x:.1f}%")
+        )
+        st.dataframe(
+            _region_combined.fillna(0).astype(
+                {"Overall UCs": int, "Go Live UCs": int, "Partner UCs": int,
+                 "Partner CoCo UCs": int}
+            ),
+            hide_index=True, use_container_width=True,
+        )
+    else:
+        st.info("No region-level data available for the selected date range.")
+
+st.divider()
+
+# ── Shared helper: render any RSI/GSI section ────────────────────────────────
+def _add_totals_row(display_df, partner_col='Partner', scope_col='Scope',
+                    total_col='Total UCs', coco_col='CoCo UCs',
+                    pct_col=None, eacv_col='Total EACV ($)', coco_eacv_col='CoCo EACV ($)',
+                    status_col='Status'):
+    """Append a TOTAL row to a partner detail DataFrame."""
+    t_ucs  = int(display_df[total_col].sum())
+    c_ucs  = int(display_df[coco_col].sum())
+    t_eacv = display_df[eacv_col].sum()      if eacv_col      in display_df.columns else 0
+    c_eacv = display_df[coco_eacv_col].sum() if coco_eacv_col in display_df.columns else 0
+    pct    = round(c_ucs * 100.0 / t_ucs, 1) if t_ucs > 0 else 0.0
+    row = {partner_col: 'TOTAL', scope_col: '—', total_col: t_ucs, coco_col: c_ucs}
+    if pct_col:                                 row[pct_col]        = pct
+    if eacv_col      in display_df.columns:    row[eacv_col]       = t_eacv
+    if coco_eacv_col in display_df.columns:    row[coco_eacv_col]  = c_eacv
+    if status_col    in display_df.columns:    row[status_col]     = f'{pct:.1f}%'
+    return pd.concat([display_df, pd.DataFrame([row])], ignore_index=True)
+
+
+def _build_token_usage(bc: pd.DataFrame, partner_map: dict) -> pd.DataFrame:
+    """Compute per-partner token stats from bulk_conf — mirrors partner scorecard logic exactly.
+    Filters to IS_COCO_FINAL, removes own-account rows, deduplicates by (PARTNER_NAME, ACCOUNT).
+    """
+    tok_cols = ['Q2_TOKENS', 'LAST7_TOKENS', 'PRIOR7_TOKENS']
+    if bc is None or len(bc) == 0 or not all(c in bc.columns for c in tok_cols):
+        return pd.DataFrame(columns=['PARTNER_LABEL', 'Tokens Consumed', 'Last 7d Tokens', 'Tokens WoW%'])
+    # Step 1: IS_COCO_FINAL only + restrict to this partner group (same as scorecard)
+    _bc = bc[bc['IS_COCO_FINAL'] & bc['PARTNER_NAME'].isin(partner_map.keys())].copy()
+    if len(_bc) == 0:
+        return pd.DataFrame(columns=['PARTNER_LABEL', 'Tokens Consumed', 'Last 7d Tokens', 'Tokens WoW%'])
+    # Step 2: remove partner's own accounts (same as scorecard)
+    _bc = filter_out_partner_own_accounts(_bc)
+    # Step 3: map to display label
+    _bc['_label'] = _bc['PARTNER_NAME'].map({k: v[0] for k, v in partner_map.items()})
+    for c in tok_cols:
+        _bc[c] = pd.to_numeric(_bc[c], errors='coerce').fillna(0)
+    # Step 4: dedup by original PARTNER_NAME + ACCOUNT (same as scorecard) then group by label
+    _dedup = _bc.drop_duplicates(subset=['PARTNER_NAME', 'ACCOUNT_NAME_UPPER'])
+    _agg = _dedup.groupby('_label').agg(
+        _q2=('Q2_TOKENS', 'sum'),
+        _l7=('LAST7_TOKENS', 'sum'),
+        _p7=('PRIOR7_TOKENS', 'sum'),
+    ).reset_index().rename(columns={'_label': 'PARTNER_LABEL'})
+    _agg['Tokens Consumed'] = _agg['_q2'].astype(int)
+    _agg['Last 7d Tokens']  = _agg['_l7'].astype(int)
+    _agg['Tokens WoW%'] = (
+        (_agg['_l7'] - _agg['_p7']) * 100.0 / _agg['_p7'].replace(0, float('nan'))
+    ).round(1)
+    return _agg[['PARTNER_LABEL', 'Tokens Consumed', 'Last 7d Tokens', 'Tokens WoW%']]
+
+
+def _render_coco_funnel(total: int, coco: int, s3: int, s4: int, s5: int, s6: int, s7: int):
+    """Render a vertical flow / funnel summary — all rows in one unified box."""
+    coco_pct_of_total = round(coco * 100.0 / total, 1) if total > 0 else 0.0
+
+    def _pct(n): return f"{round(n * 100.0 / coco, 1):.1f}" if coco > 0 else "0.0"
+
+    # Each row: label left, bold-number + (pct) right — same format as CoCo Usecases header
+    def _num_cell(n, pct_str, num_color="#1a1a1a", pct_color="#888"):
+        return (f'<span style="font-size:18px;font-weight:700;color:{num_color}">{n}</span>'
+                f'<span style="font-size:13px;font-weight:500;color:{pct_color}"> ({pct_str}%)</span>')
+
+    stages = [
+        ("Tech / Biz Validation",      "S3", s3),
+        ("Use Case Won / Migr. Plan",  "S4", s4),
+        ("Implementation In Progress", "S5", s5),
+        ("Implementation Complete",    "S6", s6),
+        ("Deployed",                   "S7", s7),
+    ]
+
+    def _stage_row(name, tag, n):
+        return f"""
+  <div style="display:flex;align-items:center;justify-content:space-between;padding:7px 0;border-top:1px solid #f0f0f0">
+    <span style="font-size:13px;color:#555">{name}</span>
+    <span style="white-space:nowrap">{_num_cell(n, _pct(n))}</span>
+  </div>"""
+
+    stage_rows_html = "".join(_stage_row(name, tag, n) for name, tag, n in stages)
+
+    html = f"""<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+                           border:1.5px solid #29b5e8;border-radius:10px;
+                           padding:14px 18px;background:#fff;max-width:520px">
+  <div style="display:flex;align-items:center;justify-content:space-between;padding-bottom:10px;border-bottom:1px solid #e8e8e8">
+    <span style="font-size:13px;color:#666;font-weight:500">Total Usecases</span>
+    <span style="font-size:22px;font-weight:700;color:#1a1a1a">{total}</span>
+  </div>
+  <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:2px solid #d4eef9">
+    <span style="font-size:13px;color:#0d6e9e;font-weight:600">CoCo Usecases</span>
+    <span style="white-space:nowrap">{_num_cell(coco, f"{coco_pct_of_total:.1f}", "#0d6e9e", "#4a9fc4")}</span>
+  </div>
+  {stage_rows_html}
+</div>"""
+    st.html(html)
+
+
+def _render_partner_section(base_df, bc, bc_partner_map, skeleton_df, target_pct, section_label, detail_label):
+    """Render 6 bordered KPI metrics + collapsible table for any partner group.
+    bc_partner_map: dict {partner_name: (label, region_or_None)} or None for no geo filter.
+    skeleton_df: DataFrame with PARTNER_LABEL, COUNTRY columns (all expected rows).
+    """
+    # Aggregate SQL base (include per-stage counts when present)
+    _stage_sql_cols = ['S3_COCO','S4_COCO','S5_COCO','S6_COCO','S7_COCO']
+    _has_stage_cols = len(base_df) > 0 and all(c in base_df.columns for c in _stage_sql_cols)
+    if len(base_df) > 0:
+        _agg_kwargs = dict(
+            TOTAL_UCS=('TOTAL_UCS','sum'), COCO_UCS_SQL=('COCO_UCS','sum'),
+            VALIDATION_SQL=('VALIDATION_COCO','sum'), IN_PROGRESS_SQL=('IN_PROGRESS_COCO','sum'),
+            IMPL_COMPLETE_DEPLOYED_SQL=('IMPL_COMPLETE_DEPLOYED_COCO','sum'),
+            DEPLOYED_ALL=('DEPLOYED_ALL','sum'), DEPLOYED_COCO_SQL=('DEPLOYED_COCO','sum'),
+            TOTAL_EACV=('TOTAL_EACV','sum'), COCO_EACV_SQL=('COCO_EACV','sum'),
+        )
+        if _has_stage_cols:
+            _agg_kwargs.update({f'{c}_SQL': (c,'sum') for c in _stage_sql_cols})
+        sql_agg = base_df.groupby('PARTNER_LABEL').agg(**_agg_kwargs).reset_index()
+    else:
+        sql_agg = pd.DataFrame(columns=['PARTNER_LABEL','TOTAL_UCS','COCO_UCS_SQL','VALIDATION_SQL',
+                                        'IN_PROGRESS_SQL','IMPL_COMPLETE_DEPLOYED_SQL','DEPLOYED_ALL',
+                                        'DEPLOYED_COCO_SQL','TOTAL_EACV','COCO_EACV_SQL'])
+
+    df = skeleton_df.merge(sql_agg, on='PARTNER_LABEL', how='left').fillna(0)
+    int_cols = ['TOTAL_UCS','COCO_UCS_SQL','VALIDATION_SQL','IN_PROGRESS_SQL',
+                'IMPL_COMPLETE_DEPLOYED_SQL','DEPLOYED_ALL','DEPLOYED_COCO_SQL']
+    if _has_stage_cols:
+        int_cols += [f'{c}_SQL' for c in _stage_sql_cols]
+    df[int_cols] = df[int_cols].astype(int)
+
+    # Enrich with IS_COCO_FINAL from bulk_conf
+    _has_region = 'REGION_NAME' in bc.columns
+    if len(bc) > 0 and 'IS_COCO_FINAL' in bc.columns and bc_partner_map:
+        _bc = bc[bc['PARTNER_NAME'].isin(bc_partner_map.keys())].copy()
+        _bc['_label']   = _bc['PARTNER_NAME'].map({k: v[0] for k, v in bc_partner_map.items()})
+        _bc['_country'] = _bc['PARTNER_NAME'].map({k: v[1] for k, v in bc_partner_map.items()})
+        # Apply geo filter only when REGION_NAME exists AND at least one partner has a country restriction
+        _has_geo = _has_region and _bc['_country'].notna().any()
+        if _has_geo:
+            _bc = _bc[_bc.apply(
+                lambda r: r['REGION_NAME'] == r['_country'] if pd.notna(r['_country']) else True,
+                axis=1,
+            )]
+        _bc['_s3']  = _bc['IS_COCO_FINAL'] & (_bc['USE_CASE_STAGE'] == '3 - Technical / Business Validation')
+        _bc['_s4']  = _bc['IS_COCO_FINAL'] & (_bc['USE_CASE_STAGE'] == '4 - Use Case Won / Migration Plan')
+        _bc['_s5']  = _bc['IS_COCO_FINAL'] & (_bc['USE_CASE_STAGE'] == '5 - Implementation In Progress')
+        _bc['_s6']  = _bc['IS_COCO_FINAL'] & (_bc['USE_CASE_STAGE'] == '6 - Implementation Complete')
+        _bc['_s7']  = _bc['IS_COCO_FINAL'] & (_bc['USE_CASE_STAGE'] == '7 - Deployed')
+        _bc['_tw']  = _bc['_s3'] | _bc['_s4']
+        _bc['_ip']  = _bc['_s5']
+        _bc['_icd'] = _bc['_s6'] | _bc['_s7']
+        _bc['_dep'] = _bc['_s7']
+        _bc['_coco_eacv'] = _bc['USE_CASE_EACV'].where(_bc['IS_COCO_FINAL'], 0)
+        agg = (_bc.groupby('_label').agg(
+            COCO_FINAL_UCS=('IS_COCO_FINAL','sum'),
+            VALIDATION_COCO=('_tw','sum'), IN_PROGRESS_COCO=('_ip','sum'),
+            IMPL_COMPLETE_DEPLOYED_COCO=('_icd','sum'), DEPLOYED_COCO=('_dep','sum'),
+            S3_COCO=('_s3','sum'), S4_COCO=('_s4','sum'), S5_COCO=('_s5','sum'),
+            S6_COCO=('_s6','sum'), S7_COCO=('_s7','sum'),
+            COCO_EACV=('_coco_eacv','sum'),
+        ).reset_index().rename(columns={'_label':'PARTNER_LABEL'}))
+        df = df.merge(agg, on='PARTNER_LABEL', how='left')
+        for c in ['COCO_FINAL_UCS','VALIDATION_COCO','IN_PROGRESS_COCO','IMPL_COMPLETE_DEPLOYED_COCO',
+                  'DEPLOYED_COCO','S3_COCO','S4_COCO','S5_COCO','S6_COCO','S7_COCO']:
+            df[c] = df[c].fillna(0).astype(int)
+        df['COCO_EACV'] = df['COCO_EACV'].fillna(0)
+    else:
+        df['COCO_FINAL_UCS']              = df['COCO_UCS_SQL']
+        df['VALIDATION_COCO']             = df['VALIDATION_SQL']
+        df['IN_PROGRESS_COCO']            = df['IN_PROGRESS_SQL']
+        df['IMPL_COMPLETE_DEPLOYED_COCO'] = df['IMPL_COMPLETE_DEPLOYED_SQL']
+        df['DEPLOYED_COCO']               = df['DEPLOYED_COCO_SQL']
+        df['COCO_EACV']                   = df['COCO_EACV_SQL']
+        for c in _stage_sql_cols:
+            df[c] = df.get(f'{c}_SQL', pd.Series(0, index=df.index))
+
+    df['COCO_PCT'] = (df['COCO_FINAL_UCS'] * 100.0 / df['TOTAL_UCS'].replace(0, float('nan'))).round(1).fillna(0)
+
+    # Vertical funnel summary
+    total = int(df['TOTAL_UCS'].sum())
+    coco  = int(df['COCO_FINAL_UCS'].sum())
+    s3 = int(df['S3_COCO'].sum()) if 'S3_COCO' in df.columns else 0
+    s4 = int(df['S4_COCO'].sum()) if 'S4_COCO' in df.columns else 0
+    s5 = int(df['S5_COCO'].sum()) if 'S5_COCO' in df.columns else int(df['IN_PROGRESS_COCO'].sum())
+    s6 = int(df['S6_COCO'].sum()) if 'S6_COCO' in df.columns else 0
+    s7 = int(df['S7_COCO'].sum()) if 'S7_COCO' in df.columns else int(df['DEPLOYED_COCO'].sum())
+    _render_coco_funnel(total, coco, s3, s4, s5, s6, s7)
+
+    # Collapsible table — sorted desc by CoCo %, colored status, EACV + token columns
+    with st.expander(f":material/table_chart: {detail_label}", expanded=False):
+        _disp = df[['PARTNER_LABEL','COUNTRY','TOTAL_UCS','COCO_FINAL_UCS','COCO_PCT','TOTAL_EACV','COCO_EACV']].copy()
+        # Merge token usage
+        _tok = _build_token_usage(bc, bc_partner_map) if bc_partner_map else pd.DataFrame(columns=['PARTNER_LABEL'])
+        if len(_tok) > 0:
+            _disp = _disp.merge(_tok, on='PARTNER_LABEL', how='left')
+        _disp = _disp.sort_values('COCO_PCT', ascending=False)
+        _disp['Status'] = _disp['COCO_PCT'].apply(
+            lambda p: '✅ On target' if p >= target_pct else (f'⚠️ {target_pct-p:.0f}% to go' if p > 0 else '— No UCs')
+        )
+        _pct_label = f'CoCo % vs {target_pct}% Target'
+        _rename = {
+            'PARTNER_LABEL': 'Partner', 'COUNTRY': 'Scope',
+            'TOTAL_UCS': 'Total UCs', 'COCO_FINAL_UCS': 'CoCo UCs',
+            'COCO_PCT': _pct_label,
+            'TOTAL_EACV': 'Total EACV ($)', 'COCO_EACV': 'CoCo EACV ($)',
+        }
+        _disp = _add_totals_row(_disp.rename(columns=_rename), pct_col=_pct_label)
+        _col_cfg = {
+            _pct_label:         st.column_config.ProgressColumn(min_value=0, max_value=100, format="%.1f%%"),
+            'Total UCs':        st.column_config.NumberColumn(format="%d"),
+            'CoCo UCs':         st.column_config.NumberColumn(format="%d"),
+            'Total EACV ($)':   st.column_config.NumberColumn(format="$%.0f"),
+            'CoCo EACV ($)':    st.column_config.NumberColumn(format="$%.0f"),
+            'Tokens Consumed':  st.column_config.NumberColumn(format="%d"),
+            'Last 7d Tokens':   st.column_config.NumberColumn(format="%d"),
+            'Tokens WoW%':      st.column_config.NumberColumn(format="%+.1f%%"),
+        }
+        st.dataframe(_disp, column_config=_col_cfg, hide_index=True, use_container_width=True)
+
+# ── GSI Adoption (75% Target) ─────────────────────────────────────────────────
+_GSI_NAMES_MAP = {
+    'Accenture': ('Accenture', None), 'Capgemini Technologies LLC': ('Capgemini Technologies LLC', None),
+    'Cognizant Technology Solutions US Corp': ('Cognizant Technology Solutions US Corp', None),
+    'Deloitte Consulting': ('Deloitte Consulting', None),
+    'EY': ('EY', None), 'Ernst & Young (EY)': ('EY', None),
+    'IBM': ('IBM', None), 'IBM Consulting': ('IBM', None),
+}
+_GSI_SKELETON = pd.DataFrame([
+    {'PARTNER_LABEL': p, 'COUNTRY': 'Global'}
+    for p in ['Accenture','Capgemini Technologies LLC','Cognizant Technology Solutions US Corp',
+              'Deloitte Consulting','EY','IBM']
+])
+with st.expander(":material/groups: GSI CoCo Adoption (75% Target)", expanded=True):
+    st.caption("Global scope — all theaters included")
+    _gsi_base = get_gsi_adoption(conn, start_date, end_date)
+    _render_partner_section(_gsi_base, bulk_conf, _GSI_NAMES_MAP, _GSI_SKELETON,
+                            target_pct=75, section_label="GSI", detail_label="Partner detail")
+
+# ── NOAM RSI Adoption (75% Target) ───────────────────────────────────────────
+from utils import PARTNER_ALIASES as _PA
+_NOAM_RSI_NAMES = [p for p in _PA.get('--- NOAM RSIs ---', [])
+                   if not p.startswith('---')]
+_NOAM_RSI_MAP   = {p: (p, None) for p in _NOAM_RSI_NAMES}
+# Merge LTM + kipi.ai aliases in map
+for _alias, _canon in [('LTI Mindtree','LTM'),('Kipi.ai','kipi.ai')]:
+    _NOAM_RSI_MAP[_alias] = (_canon, None)
+_NOAM_RSI_SKELETON = pd.DataFrame([
+    {'PARTNER_LABEL': p, 'COUNTRY': 'NoAM'}
+    for p in sorted({v[0] for v in _NOAM_RSI_MAP.values()})
+])
+with st.expander(":material/location_on: NOAM RSI CoCo Adoption (75% Target)", expanded=True):
+    st.caption("NoAM scope — AMSExpansion, USMajors, AMSAcquisition, USPubSec theaters")
+    _noam_base = get_noam_rsi_adoption(conn, start_date, end_date)
+    _render_partner_section(_noam_base, bulk_conf, _NOAM_RSI_MAP, _NOAM_RSI_SKELETON,
+                            target_pct=75, section_label="NOAM RSI", detail_label="Partner detail")
+
+# ── APJ RSI Adoption (50% CoCo Target) ───────────────────────────────────────
+with st.expander(":material/language: APJ RSI CoCo Adoption (50% Target)", expanded=True):
+    st.caption("Each partner scoped to their assigned country — NTT Data→Japan | Megazone→Korea | Infinite Lambda→ASEAN | Altis→ANZ | Prolim→India")
+    _apj_base = get_apj_rsi_adoption(conn, start_date, end_date)
+
+    # Canonical 5-partner skeleton — all partners always appear even with 0 UCs
+    _APJ_SKELETON = pd.DataFrame([
+        {'PARTNER_LABEL': 'Altis',           'COUNTRY': 'ANZ'},
+        {'PARTNER_LABEL': 'Infinite Lambda', 'COUNTRY': 'ASEAN'},
+        {'PARTNER_LABEL': 'Megazone',        'COUNTRY': 'Korea'},
+        {'PARTNER_LABEL': 'NTT Data',        'COUNTRY': 'Japan'},
+        {'PARTNER_LABEL': 'Prolim',          'COUNTRY': 'India'},
+    ])
+
+    # Aggregate SQL results (may be missing partners with 0 UCs)
+    if len(_apj_base) > 0:
+        _apj_sql_agg = _apj_base.groupby('PARTNER_LABEL').agg(
+            TOTAL_UCS=('TOTAL_UCS', 'sum'),
+            COCO_UCS_SQL=('COCO_UCS', 'sum'),
+            VALIDATION_SQL=('VALIDATION_COCO', 'sum'),
+            IN_PROGRESS_SQL=('IN_PROGRESS_COCO', 'sum'),
+            IMPL_COMPLETE_DEPLOYED_SQL=('IMPL_COMPLETE_DEPLOYED_COCO', 'sum'),
+            DEPLOYED_ALL=('DEPLOYED_ALL', 'sum'),
+            DEPLOYED_COCO_SQL=('DEPLOYED_COCO', 'sum'),
+            TOTAL_EACV=('TOTAL_EACV', 'sum'),
+            COCO_EACV_SQL=('COCO_EACV', 'sum'),
+        ).reset_index()
+    else:
+        _apj_sql_agg = pd.DataFrame(columns=['PARTNER_LABEL','TOTAL_UCS','COCO_UCS_SQL','VALIDATION_SQL','IN_PROGRESS_SQL','IMPL_COMPLETE_DEPLOYED_SQL','DEPLOYED_ALL','DEPLOYED_COCO_SQL','TOTAL_EACV','COCO_EACV_SQL'])
+
+    # Merge skeleton with SQL results — missing partners get 0s
+    _apj_df = _APJ_SKELETON.merge(_apj_sql_agg, on='PARTNER_LABEL', how='left').fillna(0)
+    _apj_df[['TOTAL_UCS','COCO_UCS_SQL','VALIDATION_SQL','IN_PROGRESS_SQL','IMPL_COMPLETE_DEPLOYED_SQL','DEPLOYED_ALL','DEPLOYED_COCO_SQL']] = \
+        _apj_df[['TOTAL_UCS','COCO_UCS_SQL','VALIDATION_SQL','IN_PROGRESS_SQL','IMPL_COMPLETE_DEPLOYED_SQL','DEPLOYED_ALL','DEPLOYED_COCO_SQL']].astype(int)
+    if 'TOTAL_EACV' not in _apj_df.columns: _apj_df['TOTAL_EACV'] = 0.0
+    if 'COCO_EACV_SQL' not in _apj_df.columns: _apj_df['COCO_EACV_SQL'] = 0.0
+
+    # Enrich COCO_UCS with IS_COCO_FINAL from bulk_conf where available
+    if len(bulk_conf) > 0 and 'IS_COCO_FINAL' in bulk_conf.columns:
+        _apj_rsi_names = list(APJ_RSI_REGION_MAP.keys())
+        _apj_bc = bulk_conf[bulk_conf['PARTNER_NAME'].isin(_apj_rsi_names)].copy()
+        _apj_bc['_label'] = _apj_bc['PARTNER_NAME'].map({k: v[0] for k, v in APJ_RSI_REGION_MAP.items()})
+        _apj_bc['_country'] = _apj_bc['PARTNER_NAME'].map({k: v[1] for k, v in APJ_RSI_REGION_MAP.items()})
+        _apj_bc = _apj_bc[_apj_bc['REGION_NAME'] == _apj_bc['_country']]
+        _apj_bc['_s3']  = _apj_bc['IS_COCO_FINAL'] & (_apj_bc['USE_CASE_STAGE'] == '3 - Technical / Business Validation')
+        _apj_bc['_s4']  = _apj_bc['IS_COCO_FINAL'] & (_apj_bc['USE_CASE_STAGE'] == '4 - Use Case Won / Migration Plan')
+        _apj_bc['_s5']  = _apj_bc['IS_COCO_FINAL'] & (_apj_bc['USE_CASE_STAGE'] == '5 - Implementation In Progress')
+        _apj_bc['_s6']  = _apj_bc['IS_COCO_FINAL'] & (_apj_bc['USE_CASE_STAGE'] == '6 - Implementation Complete')
+        _apj_bc['_s7']  = _apj_bc['IS_COCO_FINAL'] & (_apj_bc['USE_CASE_STAGE'] == '7 - Deployed')
+        _bc_agg = (
+            _apj_bc.groupby('_label')
+            .agg(COCO_FINAL_UCS=('IS_COCO_FINAL', 'sum'),
+                 S3_COCO=('_s3','sum'), S4_COCO=('_s4','sum'), S5_COCO=('_s5','sum'),
+                 S6_COCO=('_s6','sum'), S7_COCO=('_s7','sum'),
+                 DEPLOYED_COCO=('_s7','sum'))
+            .reset_index().rename(columns={'_label': 'PARTNER_LABEL'})
+        )
+        _apj_df = _apj_df.merge(_bc_agg, on='PARTNER_LABEL', how='left')
+        for _c in ['COCO_FINAL_UCS','S3_COCO','S4_COCO','S5_COCO','S6_COCO','S7_COCO','DEPLOYED_COCO']:
+            _apj_df[_c] = _apj_df[_c].fillna(0).astype(int)
+        _apj_bc_eacv = _apj_bc.assign(_coco_eacv=_apj_bc['USE_CASE_EACV'].where(_apj_bc['IS_COCO_FINAL'], 0)).groupby('_label').agg(COCO_EACV=('_coco_eacv', 'sum')).reset_index().rename(columns={'_label':'PARTNER_LABEL'})
+        _apj_df = _apj_df.merge(_apj_bc_eacv, on='PARTNER_LABEL', how='left')
+        _apj_df['COCO_EACV'] = _apj_df['COCO_EACV'].fillna(0)
+    else:
+        _apj_df['COCO_FINAL_UCS'] = _apj_df['COCO_UCS_SQL']
+        _apj_df['COCO_EACV']      = _apj_df['COCO_EACV_SQL']
+        for _c in ['S3_COCO','S4_COCO','S5_COCO','S6_COCO','S7_COCO']:
+            _apj_df[_c] = _apj_df.get(f'{_c}_SQL', pd.Series(0, index=_apj_df.index)).fillna(0).astype(int)
+        _apj_df['DEPLOYED_COCO'] = _apj_df['S7_COCO']
+
+    _apj_df['COCO_PCT'] = (
+        _apj_df['COCO_FINAL_UCS'] * 100.0 /
+        _apj_df['TOTAL_UCS'].replace(0, float('nan'))
+    ).round(1).fillna(0)
+
+    APJ_TARGET = 50
+    _apj_df['Status'] = _apj_df['COCO_PCT'].apply(
+        lambda p: '✅ On target' if p >= APJ_TARGET else (f'⚠️ {APJ_TARGET-p:.0f}% to go' if p > 0 else '— No UCs')
+    )
+
+    _render_coco_funnel(
+        total=int(_apj_df['TOTAL_UCS'].sum()),
+        coco=int(_apj_df['COCO_FINAL_UCS'].sum()),
+        s3=int(_apj_df['S3_COCO'].sum()) if 'S3_COCO' in _apj_df.columns else 0,
+        s4=int(_apj_df['S4_COCO'].sum()) if 'S4_COCO' in _apj_df.columns else 0,
+        s5=int(_apj_df['S5_COCO'].sum()) if 'S5_COCO' in _apj_df.columns else 0,
+        s6=int(_apj_df['S6_COCO'].sum()) if 'S6_COCO' in _apj_df.columns else 0,
+        s7=int(_apj_df['S7_COCO'].sum()) if 'S7_COCO' in _apj_df.columns else 0,
+    )
+
+    with st.expander(":material/table_chart: Partner detail", expanded=False):
+        _apj_display = _apj_df[['PARTNER_LABEL','COUNTRY','TOTAL_UCS','COCO_FINAL_UCS','COCO_PCT','TOTAL_EACV','COCO_EACV','Status']].copy()
+        _apj_tok = _build_token_usage(bulk_conf, APJ_RSI_REGION_MAP)
+        if len(_apj_tok) > 0:
+            _apj_display = _apj_display.merge(_apj_tok, on='PARTNER_LABEL', how='left')
+        _apj_display = _apj_display.sort_values('COCO_PCT', ascending=False)
+        _apj_display['Status'] = _apj_display['COCO_PCT'].apply(
+            lambda p: '✅ On target' if p >= APJ_TARGET else (f'⚠️ {APJ_TARGET-p:.0f}% to go' if p > 0 else '— No UCs')
+        )
+        _apj_display = _add_totals_row(
+            _apj_display.rename(columns={
+                'PARTNER_LABEL': 'Partner', 'COUNTRY': 'Country',
+                'TOTAL_UCS': 'Total UCs', 'COCO_FINAL_UCS': 'CoCo UCs',
+                'COCO_PCT': 'CoCo % vs 50% Target',
+                'TOTAL_EACV': 'Total EACV ($)', 'COCO_EACV': 'CoCo EACV ($)',
+            }),
+            scope_col='Country', pct_col='CoCo % vs 50% Target',
+        )
+        st.dataframe(
+            _apj_display,
+            column_config={
+                'CoCo % vs 50% Target': st.column_config.ProgressColumn(min_value=0, max_value=100, format="%.1f%%"),
+                'Total UCs':       st.column_config.NumberColumn(format="%d"),
+                'CoCo UCs':        st.column_config.NumberColumn(format="%d"),
+                'Total EACV ($)':  st.column_config.NumberColumn(format="$%.0f"),
+                'CoCo EACV ($)':   st.column_config.NumberColumn(format="$%.0f"),
+                'Tokens Consumed': st.column_config.NumberColumn(format="%d"),
+                'Last 7d Tokens':  st.column_config.NumberColumn(format="%d"),
+                'Tokens WoW%':     st.column_config.NumberColumn(format="%+.1f%%"),
+            },
+            hide_index=True, use_container_width=True,
+        )
+
+st.divider()
+
+# ── EMEA RSI Adoption (50% CoCo Target) ──────────────────────────────────────
+with st.expander(":material/globe_uk: EMEA RSI CoCo Adoption (50% Target)", expanded=True):
+    st.caption("Each partner scoped to their assigned region — Infomotion→CentralEMEA | Civica→SouthEMEA (Spain) | Kubrick→UK | KPC→SouthEMEA (France)")
+    _emea_base = get_emea_rsi_adoption(conn, start_date, end_date)
+
+    # Canonical 4-partner skeleton — all partners always appear even with 0 UCs
+    _EMEA_SKELETON = pd.DataFrame([
+        {'PARTNER_LABEL': 'Civica',     'COUNTRY': 'SouthEMEA (Spain)'},
+        {'PARTNER_LABEL': 'Infomotion', 'COUNTRY': 'CentralEMEA'},
+        {'PARTNER_LABEL': 'KPC',        'COUNTRY': 'SouthEMEA (France)'},
+        {'PARTNER_LABEL': 'Kubrick',    'COUNTRY': 'UK'},
+    ])
+
+    if len(_emea_base) > 0:
+        _emea_sql_agg = _emea_base.groupby('PARTNER_LABEL').agg(
+            TOTAL_UCS=('TOTAL_UCS', 'sum'),
+            COCO_UCS_SQL=('COCO_UCS', 'sum'),
+            VALIDATION_SQL=('VALIDATION_COCO', 'sum'),
+            IN_PROGRESS_SQL=('IN_PROGRESS_COCO', 'sum'),
+            IMPL_COMPLETE_DEPLOYED_SQL=('IMPL_COMPLETE_DEPLOYED_COCO', 'sum'),
+            DEPLOYED_ALL=('DEPLOYED_ALL', 'sum'),
+            DEPLOYED_COCO_SQL=('DEPLOYED_COCO', 'sum'),
+            TOTAL_EACV=('TOTAL_EACV', 'sum'),
+            COCO_EACV_SQL=('COCO_EACV', 'sum'),
+        ).reset_index()
+    else:
+        _emea_sql_agg = pd.DataFrame(columns=['PARTNER_LABEL','TOTAL_UCS','COCO_UCS_SQL','VALIDATION_SQL','IN_PROGRESS_SQL','IMPL_COMPLETE_DEPLOYED_SQL','DEPLOYED_ALL','DEPLOYED_COCO_SQL','TOTAL_EACV','COCO_EACV_SQL'])
+
+    _emea_df = _EMEA_SKELETON.merge(_emea_sql_agg, on='PARTNER_LABEL', how='left').fillna(0)
+    _emea_df[['TOTAL_UCS','COCO_UCS_SQL','VALIDATION_SQL','IN_PROGRESS_SQL','IMPL_COMPLETE_DEPLOYED_SQL','DEPLOYED_ALL','DEPLOYED_COCO_SQL']] = \
+        _emea_df[['TOTAL_UCS','COCO_UCS_SQL','VALIDATION_SQL','IN_PROGRESS_SQL','IMPL_COMPLETE_DEPLOYED_SQL','DEPLOYED_ALL','DEPLOYED_COCO_SQL']].astype(int)
+    if 'TOTAL_EACV' not in _emea_df.columns: _emea_df['TOTAL_EACV'] = 0.0
+    if 'COCO_EACV_SQL' not in _emea_df.columns: _emea_df['COCO_EACV_SQL'] = 0.0
+
+    # Enrich COCO_UCS with IS_COCO_FINAL from bulk_conf where available
+    if len(bulk_conf) > 0 and 'IS_COCO_FINAL' in bulk_conf.columns:
+        _emea_rsi_names = list(EMEA_RSI_REGION_MAP.keys())
+        _emea_bc = bulk_conf[bulk_conf['PARTNER_NAME'].isin(_emea_rsi_names)].copy()
+        _emea_bc['_label']   = _emea_bc['PARTNER_NAME'].map({k: v[0] for k, v in EMEA_RSI_REGION_MAP.items()})
+        _emea_bc['_country'] = _emea_bc['PARTNER_NAME'].map({k: v[1] for k, v in EMEA_RSI_REGION_MAP.items()})
+        _emea_bc = _emea_bc[_emea_bc['REGION_NAME'] == _emea_bc['_country']]
+        _emea_bc['_s3']  = _emea_bc['IS_COCO_FINAL'] & (_emea_bc['USE_CASE_STAGE'] == '3 - Technical / Business Validation')
+        _emea_bc['_s4']  = _emea_bc['IS_COCO_FINAL'] & (_emea_bc['USE_CASE_STAGE'] == '4 - Use Case Won / Migration Plan')
+        _emea_bc['_s5']  = _emea_bc['IS_COCO_FINAL'] & (_emea_bc['USE_CASE_STAGE'] == '5 - Implementation In Progress')
+        _emea_bc['_s6']  = _emea_bc['IS_COCO_FINAL'] & (_emea_bc['USE_CASE_STAGE'] == '6 - Implementation Complete')
+        _emea_bc['_s7']  = _emea_bc['IS_COCO_FINAL'] & (_emea_bc['USE_CASE_STAGE'] == '7 - Deployed')
+        _ebc_agg = (
+            _emea_bc.groupby('_label')
+            .agg(COCO_FINAL_UCS=('IS_COCO_FINAL', 'sum'),
+                 S3_COCO=('_s3','sum'), S4_COCO=('_s4','sum'), S5_COCO=('_s5','sum'),
+                 S6_COCO=('_s6','sum'), S7_COCO=('_s7','sum'),
+                 DEPLOYED_COCO=('_s7','sum'))
+            .reset_index().rename(columns={'_label': 'PARTNER_LABEL'})
+        )
+        _emea_df = _emea_df.merge(_ebc_agg, on='PARTNER_LABEL', how='left')
+        for _c in ['COCO_FINAL_UCS','S3_COCO','S4_COCO','S5_COCO','S6_COCO','S7_COCO','DEPLOYED_COCO']:
+            _emea_df[_c] = _emea_df[_c].fillna(0).astype(int)
+        _emea_bc_eacv = _emea_bc.assign(_coco_eacv=_emea_bc['USE_CASE_EACV'].where(_emea_bc['IS_COCO_FINAL'], 0)).groupby('_label').agg(COCO_EACV=('_coco_eacv', 'sum')).reset_index().rename(columns={'_label':'PARTNER_LABEL'})
+        _emea_df = _emea_df.merge(_emea_bc_eacv, on='PARTNER_LABEL', how='left')
+        _emea_df['COCO_EACV'] = _emea_df['COCO_EACV'].fillna(0)
+    else:
+        _emea_df['COCO_FINAL_UCS'] = _emea_df['COCO_UCS_SQL']
+        _emea_df['COCO_EACV']      = _emea_df['COCO_EACV_SQL']
+        for _c in ['S3_COCO','S4_COCO','S5_COCO','S6_COCO','S7_COCO']:
+            _emea_df[_c] = _emea_df.get(f'{_c}_SQL', pd.Series(0, index=_emea_df.index)).fillna(0).astype(int)
+        _emea_df['DEPLOYED_COCO'] = _emea_df['S7_COCO']
+
+    _emea_df['COCO_PCT'] = (
+        _emea_df['COCO_FINAL_UCS'] * 100.0 /
+        _emea_df['TOTAL_UCS'].replace(0, float('nan'))
+    ).round(1).fillna(0)
+
+    EMEA_TARGET = 50
+    _emea_df['Status'] = _emea_df['COCO_PCT'].apply(
+        lambda p: '✅ On target' if p >= EMEA_TARGET else (f'⚠️ {EMEA_TARGET-p:.0f}% to go' if p > 0 else '— No UCs')
+    )
+
+    _render_coco_funnel(
+        total=int(_emea_df['TOTAL_UCS'].sum()),
+        coco=int(_emea_df['COCO_FINAL_UCS'].sum()),
+        s3=int(_emea_df['S3_COCO'].sum()) if 'S3_COCO' in _emea_df.columns else 0,
+        s4=int(_emea_df['S4_COCO'].sum()) if 'S4_COCO' in _emea_df.columns else 0,
+        s5=int(_emea_df['S5_COCO'].sum()) if 'S5_COCO' in _emea_df.columns else 0,
+        s6=int(_emea_df['S6_COCO'].sum()) if 'S6_COCO' in _emea_df.columns else 0,
+        s7=int(_emea_df['S7_COCO'].sum()) if 'S7_COCO' in _emea_df.columns else 0,
+    )
+
+    with st.expander(":material/table_chart: Partner detail", expanded=False):
+        _emea_display = _emea_df[['PARTNER_LABEL','COUNTRY','TOTAL_UCS','COCO_FINAL_UCS','COCO_PCT','TOTAL_EACV','COCO_EACV','Status']].copy()
+        _emea_tok = _build_token_usage(bulk_conf, EMEA_RSI_REGION_MAP)
+        if len(_emea_tok) > 0:
+            _emea_display = _emea_display.merge(_emea_tok, on='PARTNER_LABEL', how='left')
+        _emea_display = _emea_display.sort_values('COCO_PCT', ascending=False)
+        _emea_display = _add_totals_row(
+            _emea_display.rename(columns={
+                'PARTNER_LABEL': 'Partner', 'COUNTRY': 'Country',
+                'TOTAL_UCS': 'Total UCs', 'COCO_FINAL_UCS': 'CoCo UCs',
+                'COCO_PCT': 'CoCo % vs 50% Target',
+                'TOTAL_EACV': 'Total EACV ($)', 'COCO_EACV': 'CoCo EACV ($)',
+            }),
+            scope_col='Country', pct_col='CoCo % vs 50% Target',
+        )
+        st.dataframe(
+            _emea_display,
+            column_config={
+                'CoCo % vs 50% Target': st.column_config.ProgressColumn(min_value=0, max_value=100, format="%.1f%%"),
+                'Total UCs':       st.column_config.NumberColumn(format="%d"),
+                'CoCo UCs':        st.column_config.NumberColumn(format="%d"),
+                'Total EACV ($)':  st.column_config.NumberColumn(format="$%.0f"),
+                'CoCo EACV ($)':   st.column_config.NumberColumn(format="$%.0f"),
+                'Tokens Consumed': st.column_config.NumberColumn(format="%d"),
+                'Last 7d Tokens':  st.column_config.NumberColumn(format="%d"),
+                'Tokens WoW%':     st.column_config.NumberColumn(format="%+.1f%%"),
+            },
+            hide_index=True, use_container_width=True,
+        )
+
+st.divider()
 
 # Inject context for Ask AI
-_gap_note = f"Gap to target: {gap_ucs} more CoCo UCs needed." if gap_ucs > 0 else "OKR target MET."
 st.session_state.ask_ai_context = (
     f"Current page: Adoption Metrics (Overview). Region: {region}. Partner filter: {selected_partners or 'All'}.\n"
-    f"CoCo adoption: {current_pct}% ({coco_ucs}/{total_ucs} UCs). OKR target: 50%. {_gap_note}"
+    f"CoCo adoption: {coco_pct:.1f}% ({coco_count}/{int(s['TOTAL_USE_CASES'])} UCs). OKR target: 75%."
     + build_filter_context()
 )
 
-okr_col1, okr_col2 = st.columns([2, 1])
-with okr_col1:
-    fig = go.Figure(go.Indicator(
-        mode="gauge+number+delta",
-        value=current_pct,
-        delta={'reference': target_pct, 'suffix': '%', 'increasing': {'color': '#2ecc71'}, 'decreasing': {'color': '#e74c3c'}},
-        gauge={
-            'axis': {'range': [0, 100], 'ticksuffix': '%'},
-            'bar': {'color': '#29B5E8'},
-            'steps': [
-                {'range': [0, 25], 'color': 'rgba(231,76,60,0.15)'},
-                {'range': [25, 50], 'color': 'rgba(243,156,18,0.15)'},
-                {'range': [50, 75], 'color': 'rgba(241,196,15,0.15)'},
-                {'range': [75, 100], 'color': 'rgba(46,204,113,0.15)'},
-            ],
-            'threshold': {'line': {'color': 'red', 'width': 3}, 'thickness': 0.8, 'value': target_pct}
-        },
-        number={'suffix': '%'},
-        title={'text': f"CoCo Adoption (Target: {target_pct}%)"}
-    ))
-    fig.update_layout(height=280, margin=dict(t=40, b=0))
-    st.plotly_chart(fig, use_container_width=True)
-with okr_col2:
-    if current_pct >= target_pct:
-        st.success(f"TARGET MET: {current_pct}%")
-    else:
-        st.warning(f"Below target: {current_pct}%")
-    st.metric("CoCo UCs", f"{coco_ucs} / {total_ucs}")
-    st.metric("Target (50%)", f"{target_ucs} UCs")
-    st.metric("Gap", f"{gap_ucs} UCs needed" if gap_ucs > 0 else "Met!")
-
-st.divider()
-
-st.subheader("Pipeline Stages")
-c1, c2, c3, c4 = st.columns(4)
-c1.metric("Validation (3)", int(s['VALIDATION_COUNT']), f"${s['VALIDATION_EACV']/1_000_000:.1f}M" if s['VALIDATION_EACV'] else "$0")
-c2.metric("Won (4)", int(s['WON_COUNT']), f"${s['WON_EACV']/1_000_000:.1f}M" if s['WON_EACV'] else "$0")
-c3.metric("In Implementation (5-6)", int(s['IMPL_COUNT']), f"${s['IMPL_EACV']/1_000_000:.1f}M" if s['IMPL_EACV'] else "$0")
-c4.metric("Deployed (7)", int(s['DEPLOYED_COUNT']), f"${s['DEPLOYED_EACV']/1_000_000:.1f}M" if s['DEPLOYED_EACV'] else "$0")
-
-st.divider()
-
-st.subheader("CoCo Detection Source Breakdown")
-src_col1, src_col2 = st.columns([1, 1])
-conf_desc = 'High' if confidence_filter == ['High'] else 'High + Medium' if confidence_filter else 'All account-level'
-with src_col1:
-    st.metric(":material/chat: SE Comments", int(s['SE_CONFIRMED_COUNT']))
-    st.metric(":material/handshake: Partner Comments", int(s['PARTNER_CONFIRMED_COUNT']))
-with src_col2:
-    st.metric(":material/flag: Feature Flag", int(s['FEATURE_FLAG_COUNT']))
-    st.metric(f":material/cloud: Account-Level ({conf_desc})", account_level_count)
-st.divider()
-
-col1, col2 = st.columns(2)
-
-with col1:
-    st.subheader("Pipeline by Stage")
-    stage_data = get_adoption_by_stage(conn, start_date=start_date, end_date=end_date, region=region, include_account_coco=include_account_coco, confidence=confidence)
-    if len(stage_data) > 0:
-        fig = px.bar(
-            stage_data, x='USE_CASE_STAGE', y='TOTAL_EACV',
-            color='TOTAL_USE_CASES', text='TOTAL_USE_CASES',
-            labels={'TOTAL_EACV': 'EACV ($)', 'USE_CASE_STAGE': 'Stage', 'TOTAL_USE_CASES': 'Count'},
-            color_continuous_scale='Blues'
-        )
-        fig.update_layout(height=380, showlegend=False)
-        fig.update_yaxes(tickformat="$,.0f")
-        fig.update_traces(textposition='outside')
-        st.plotly_chart(fig, use_container_width=True)
-
-with col2:
-    st.subheader("EACV by Region")
-    region_data = get_adoption_by_region(conn, start_date=start_date, end_date=end_date, include_account_coco=include_account_coco, confidence=confidence)
-    if len(region_data) > 0:
-        fig = px.pie(
-            region_data, values='TOTAL_EACV', names='REGION', hole=0.4,
-            color_discrete_sequence=px.colors.qualitative.Set2
-        )
-        fig.update_layout(height=380)
-        st.plotly_chart(fig, use_container_width=True)
-
-st.divider()
-
-col1, col2 = st.columns(2)
-
-with col1:
-    st.subheader("Top Partners by EACV")
-    partner_data = get_adoption_by_partner(conn, start_date=start_date, end_date=end_date, region=region, include_account_coco=include_account_coco, confidence=confidence)
-    if selected_partners and 'PARTNER_NAME' in partner_data.columns:
-        partner_names = resolve_partner_filter(selected_partners)
-        partner_data = partner_data[partner_data['PARTNER_NAME'].isin(partner_names)]
-    if len(partner_data) > 0:
-        top = partner_data.head(15)
-        fig = px.bar(
-            top, x='TOTAL_EACV', y='PARTNER_NAME', orientation='h',
-            color='COCO_PCT',
-            labels={'TOTAL_EACV': 'EACV ($)', 'PARTNER_NAME': '', 'COCO_PCT': 'CoCo %'},
-            color_continuous_scale='Blues',
-            text=top['TOTAL_USE_CASES'].apply(lambda x: f"{int(x)} UCs")
-        )
-        fig.update_layout(height=500, yaxis={'categoryorder': 'total ascending'})
-        fig.update_xaxes(tickformat="$,.0f")
-        st.plotly_chart(fig, use_container_width=True)
-
-with col2:
-    st.subheader("Top Technical Use Case Types")
-    tech_data = get_by_technical_type(conn, region=region, start_date=start_date, end_date=end_date)
-    if len(tech_data) > 0:
-        fig = px.bar(
-            tech_data.head(12), x='TOTAL_EACV', y='TECHNICAL_USE_CASE', orientation='h',
-            color='USE_CASE_COUNT',
-            labels={'TOTAL_EACV': 'EACV ($)', 'TECHNICAL_USE_CASE': '', 'USE_CASE_COUNT': 'Count'},
-            color_continuous_scale='Greens'
-        )
-        fig.update_layout(height=500, yaxis={'categoryorder': 'total ascending'})
-        fig.update_xaxes(tickformat="$,.0f")
-        st.plotly_chart(fig, use_container_width=True)
-
-st.divider()
-
-st.subheader("Top GVP Organizations")
-gvp_data = get_by_account_gvp(conn, region=region)
-if len(gvp_data) > 0:
-    fig = px.bar(
-        gvp_data.head(10), x='ACCOUNT_GVP', y='TOTAL_EACV',
-        color='USE_CASE_COUNT', text='USE_CASE_COUNT',
-        labels={'TOTAL_EACV': 'EACV ($)', 'ACCOUNT_GVP': 'GVP', 'USE_CASE_COUNT': 'Count'}
+st.subheader("CoCo % by Stage Breakdown")
+# Build stage agg from bulk_conf (IS_COCO_FINAL) when available, else fall back to SQL stats
+if len(bulk_conf) > 0 and 'IS_COCO_FINAL' in bulk_conf.columns:
+    _bc = bulk_conf.copy()
+    _bc['_is_coco_final'] = _bc['IS_COCO_FINAL'].astype(bool)
+    _stage_agg = (
+        _bc.groupby('USE_CASE_STAGE', dropna=True)
+        .agg(TOTAL_UCS=('USE_CASE_ID', 'count'),
+             COCO_UCS=('_is_coco_final', 'sum'),
+             TOTAL_EACV=('USE_CASE_EACV', 'sum'))
+        .reset_index()
     )
-    fig.update_layout(height=350, showlegend=False)
-    fig.update_yaxes(tickformat="$,.0f")
-    fig.update_traces(textposition='outside')
-    st.plotly_chart(fig, use_container_width=True)
+    _stage_agg['COCO_EACV'] = (
+        _bc[_bc['_is_coco_final']].groupby('USE_CASE_STAGE')['USE_CASE_EACV'].sum()
+        .reindex(_stage_agg['USE_CASE_STAGE']).fillna(0).values
+    )
+else:
+    # Fallback: build from summary stats (no EACV split available)
+    _stage_agg = pd.DataFrame([
+        {'USE_CASE_STAGE': '3 - Technical / Business Validation',
+         'TOTAL_UCS': int(s['VALIDATION_COUNT']), 'COCO_UCS': int(s.get('VALIDATION_COCO_COUNT', 0)),
+         'TOTAL_EACV': float(s['VALIDATION_EACV'] or 0), 'COCO_EACV': 0},
+        {'USE_CASE_STAGE': '4 - Use Case Won / Migration Plan',
+         'TOTAL_UCS': int(s['WON_COUNT']), 'COCO_UCS': _tech_wins_coco,
+         'TOTAL_EACV': float(s['WON_EACV'] or 0), 'COCO_EACV': 0},
+        {'USE_CASE_STAGE': '5-6 - Implementation',
+         'TOTAL_UCS': int(s['IMPL_COUNT']), 'COCO_UCS': _in_impl_coco,
+         'TOTAL_EACV': float(s['IMPL_EACV'] or 0), 'COCO_EACV': 0},
+        {'USE_CASE_STAGE': '7 - Deployed',
+         'TOTAL_UCS': int(s['DEPLOYED_COUNT']), 'COCO_UCS': _go_live_coco,
+         'TOTAL_EACV': float(s['DEPLOYED_EACV'] or 0), 'COCO_EACV': _coco_eacv},
+    ])
+
+if len(_stage_agg) > 0:
+    _stage_agg['COCO_PCT'] = (
+        _stage_agg['COCO_UCS'] * 100.0 /
+        _stage_agg['TOTAL_UCS'].replace(0, float('nan'))
+    ).round(1).fillna(0)
+    _stage_agg['NON_COCO'] = _stage_agg['TOTAL_UCS'] - _stage_agg['COCO_UCS']
+    _stage_agg['STAGE_SHORT'] = _stage_agg['USE_CASE_STAGE'].str.replace(r'^\d+ - ', '', regex=True)
+    _stage_agg = _stage_agg.sort_values('USE_CASE_STAGE')
+
+    import plotly.graph_objects as go
+    _sfig = go.Figure()
+    _sfig.add_trace(go.Bar(
+        name='CoCo (IS_COCO_FINAL)', x=_stage_agg['STAGE_SHORT'], y=_stage_agg['COCO_UCS'],
+        marker_color='#29B5E8', text=_stage_agg['COCO_UCS'], textposition='inside'))
+    _sfig.add_trace(go.Bar(
+        name='Non-CoCo', x=_stage_agg['STAGE_SHORT'], y=_stage_agg['NON_COCO'],
+        marker_color='#e0e0e0', text=_stage_agg['NON_COCO'], textposition='inside'))
+    _sfig.update_layout(barmode='stack', height=360, xaxis_title='', yaxis_title='Use Cases',
+        legend=dict(orientation='h', y=1.12))
+    for _, _row in _stage_agg.iterrows():
+        _sfig.add_annotation(x=_row['STAGE_SHORT'], y=_row['TOTAL_UCS'],
+            text=f"{_row['COCO_PCT']:.0f}%", showarrow=False, yshift=14,
+            font=dict(size=13, color='#29B5E8', weight='bold'))
+    st.plotly_chart(_sfig, use_container_width=True)
+
+    st.dataframe(
+        _stage_agg[['USE_CASE_STAGE', 'TOTAL_UCS', 'COCO_UCS', 'COCO_PCT', 'TOTAL_EACV', 'COCO_EACV']].rename(columns={
+            'USE_CASE_STAGE': 'Stage', 'TOTAL_UCS': 'Total UCs', 'COCO_UCS': 'CoCo UCs (IS_COCO_FINAL)',
+            'COCO_PCT': 'CoCo %', 'TOTAL_EACV': 'Total EACV', 'COCO_EACV': 'CoCo EACV',
+        }),
+        column_config={
+            'CoCo %': st.column_config.ProgressColumn(min_value=0, max_value=100, format="%.1f%%"),
+            'Total EACV': st.column_config.NumberColumn(format="$%.0f"),
+            'CoCo EACV': st.column_config.NumberColumn(format="$%.0f"),
+        },
+        hide_index=True, use_container_width=True,
+    )
+
+st.divider()
+

@@ -23,14 +23,15 @@ if "selected_theater" not in st.session_state:
 if "selected_partners" not in st.session_state:
     st.session_state.selected_partners = []
 if "okr_start_date" not in st.session_state:
-    st.session_state.okr_start_date = date(2026, 5, 1)
+    st.session_state.okr_start_date = date(2026, 8, 1)
 if "okr_end_date" not in st.session_state:
-    st.session_state.okr_end_date = date(2026, 7, 31)
+    st.session_state.okr_end_date = date(2026, 10, 31)
 if "include_account_coco" not in st.session_state:
     st.session_state.include_account_coco = "Yes"
 if "confidence_filter" not in st.session_state:
     st.session_state.confidence_filter = ["High"]
-if "ask_ai_history" not in st.session_state:
+if "selected_stages" not in st.session_state:
+    st.session_state.selected_stages = []
     st.session_state.ask_ai_history = []
 if "ask_ai_context" not in st.session_state:
     st.session_state.ask_ai_context = ""
@@ -63,7 +64,19 @@ with st.sidebar:
         "Partners",
         options=partner_options,
         key="selected_partners",
-        help="Select group (GSIs/Regional SIs) or individual partners. Leave empty for all."
+        help="Select group (GSIs/NOAM RSIs) or individual partners. Leave empty for all."
+    )
+    st.multiselect(
+        "Use Case Stage",
+        options=[
+            "3 - Technical / Business Validation",
+            "4 - Use Case Won / Migration Plan",
+            "5 - Implementation In Progress",
+            "6 - Implementation Complete",
+            "7 - Deployed",
+        ],
+        key="selected_stages",
+        help="Filter by use case stage. Leave empty to include all stages."
     )
     st.divider()
     st.date_input("OKR Start Date", key="okr_start_date", help="Start of reporting period")
@@ -147,10 +160,8 @@ page = st.navigation({
         st.Page("app_pages/trends.py", title="Trends & Aging", icon=":material/trending_up:"),
     ],
     "OKR & Reports": [
-        st.Page("app_pages/okr_summary.py", title="OKR: CoCo Coverage", icon=":material/dashboard:"),
-        st.Page("app_pages/okr_adoption.py", title="OKR: CoCo Adoption", icon=":material/check_circle:"),
-        st.Page("app_pages/partner_velocity.py", title="Partner Velocity", icon=":material/speed:"),
-        st.Page("app_pages/executive_email.py", title="Executive Email", icon=":material/mail:"),
+        st.Page("app_pages/okr_adoption.py",    title="OKR: CoCo Adoption",      icon=":material/check_circle:"),
+        st.Page("app_pages/executive_email.py", title="Executive Email",          icon=":material/mail:"),
     ],
 })
 

@@ -22,14 +22,19 @@ MANAGED_PARTNERS = [
     'Accenture', 'Capgemini Technologies LLC',
     'Cognizant Technology Solutions US Corp', 'Deloitte Consulting', 'EY', 'Ernst & Young (EY)',
     'IBM', 'IBM Consulting',
-    # Regional Managed Partners
+    # NOAM RSIs (former Regional SIs + PSE Managed Partners — all NoAM scope)
     '7Rivers, Inc', 'Aimpoint Digital', 'BlueCloud Services Inc', 'kipi.ai', 'Kipi.ai',
     'evolv Consulting', 'Infostrux Solutions Inc.', 'Infosys', 'KPMG LLP',
     'LTM', 'LTI Mindtree', 'NTT DATA Group Corporation', 'phData, Inc.',
-    'Slalom, LLC.', 'Squadron Data Inc', 'Tredence Inc.'
+    'Slalom, LLC.', 'Squadron Data Inc', 'Tredence Inc.',
+    'Spaulding Ridge', 'TEKsystems Global Services, LLC.', 'Blend360, LLC',
+    'Tiger Analytics Inc.', 'Atrium', 'Perficient Inc.', 'SDK Tek Services Ltd.',
+    'Merkle', 'Archetype Consulting', 'Apex Systems', 'Tata Consultancy Services',
+    'OneSix', 'Icon Analytics', 'Sparq Holdings, Inc.', 'CitiusTech Inc.',
+    'Hexaware Technologies',
 ]
 
-# GSIs report globally (all theaters); Regional SIs report NoAM only.
+# GSIs report globally (all theaters); NOAM RSIs report NoAM only.
 # Aliases: EY=Ernst & Young (EY), IBM=IBM Consulting, kipi.ai=Kipi.ai, LTM=LTI Mindtree
 _GSI_NAMES = frozenset({
     'Accenture', 'Capgemini Technologies LLC', 'Cognizant Technology Solutions US Corp',
@@ -88,7 +93,7 @@ def _fmt_tokens(n):
 
 def generate_heatmap_html(adoption_wow_data: pd.DataFrame, managed_q2_partners: pd.DataFrame) -> str:
     """Build Gmail-compatible partner OKR heat map.
-    Green ≥50%, amber 30-49%, red <30%.
+    Green ≥75%, amber 50-74%, red <50%.
     """
     pct_map: dict = {}
     wow_map: dict = {}
@@ -121,7 +126,7 @@ def generate_heatmap_html(adoption_wow_data: pd.DataFrame, managed_q2_partners: 
 
     def tier_order(item):
         _, pct, _ = item
-        if pct >= 50: return (0, -pct)
+        if pct >= 75: return (0, -pct)
         if pct >= 30: return (1, -pct)
         return (2, -pct)
 
@@ -129,15 +134,15 @@ def generate_heatmap_html(adoption_wow_data: pd.DataFrame, managed_q2_partners: 
 
     tiles = []
     for display_name, pct, wow in partner_items:
-        if pct >= 50:
+        if pct >= 75:
             bg, border, val_color = '#dcfce7', '1px solid #86efac', '#16a34a'
         elif pct >= 30:
             bg, border, val_color = '#fef3c7', '1px solid #fbbf24', '#d97706'
         else:
             bg, border, val_color = '#fee2e2', '1px solid #fca5a5', '#dc2626'
 
-        # crossed = newly crossed 50% this week (was below 50% last week, now at or above)
-        crossed = pct >= 50 and wow is not None and (pct - wow) < 50
+        # crossed = newly crossed 75% this week (was below 75% last week, now at or above)
+        crossed = pct >= 75 and wow is not None and (pct - wow) < 75
 
         wow_html = ''
         if wow is not None and wow != 0:
@@ -165,7 +170,7 @@ def generate_heatmap_html(adoption_wow_data: pd.DataFrame, managed_q2_partners: 
 
     legend_row = (
         '<tr><td colspan="5" style="padding:0 0 8px 0;font-size:11px;">'
-        '<span style="background:#dcfce7;color:#16a34a;padding:3px 9px;border-radius:4px;font-weight:700;">&#9632; &#8805;50%</span>&nbsp;'
+        '<span style="background:#dcfce7;color:#16a34a;padding:3px 9px;border-radius:4px;font-weight:700;">&#9632; &#8805;75%</span>&nbsp;'
         '<span style="background:#fef3c7;color:#d97706;padding:3px 9px;border-radius:4px;font-weight:700;">&#9632; 30&#8211;49%</span>&nbsp;'
         '<span style="background:#fee2e2;color:#dc2626;padding:3px 9px;border-radius:4px;font-weight:700;">&#9632; &lt;30%</span>&nbsp;'
         '<span style="color:#0369a1;font-weight:700;">&#9733; = WoW change</span>'
@@ -182,7 +187,7 @@ def generate_heatmap_html(adoption_wow_data: pd.DataFrame, managed_q2_partners: 
 
 
 def generate_trend_chart_html(trend_data: list) -> str:
-    """Gmail-safe 4-week CoCo adoption % bar chart with 50% reference line."""
+    """Gmail-safe 4-week CoCo adoption % bar chart with 75% reference line."""
     if not trend_data:
         return ''
 
@@ -203,7 +208,7 @@ def generate_trend_chart_html(trend_data: list) -> str:
                 '&#9660;' if trend_data[-1][1] < trend_data[-2][1] else '&#8212;')
     else:
         arrow = '&#8212;'
-    pct_color = '#16a34a' if current_pct >= 50 else ('#f59e0b' if current_pct >= 30 else '#dc2626')
+    pct_color = '#16a34a' if current_pct >= 75 else ('#f59e0b' if current_pct >= 30 else '#dc2626')
 
     def bar_fill(i):
         return '#16a34a' if i == n - 1 else '#29B5E8'
@@ -249,7 +254,7 @@ def generate_trend_chart_html(trend_data: list) -> str:
     row0 = '<tr>' + ''.join(label_cells) + lbl_col_e + '</tr>'
     row1 = '<tr>' + ''.join(above_cells) + lbl_col_w + '</tr>'
     row2 = (f'<tr><td colspan="{n_cols}" height="2" style="height:2px;border-bottom:2px dashed #dc2626;font-size:0;line-height:0;"></td>'
-            f'<td width="35" height="2" style="width:35px;height:2px;border-bottom:2px dashed #dc2626;padding:0 0 2px 4px;font-size:10px;color:#dc2626;font-weight:bold;vertical-align:bottom;white-space:nowrap;">50%</td></tr>')
+            f'<td width="35" height="2" style="width:35px;height:2px;border-bottom:2px dashed #dc2626;padding:0 0 2px 4px;font-size:10px;color:#dc2626;font-weight:bold;vertical-align:bottom;white-space:nowrap;">75%</td></tr>')
     row3 = '<tr>' + ''.join(below_cells) + lbl_col_e + '</tr>'
     row4 = f'<tr><td colspan="{n_cols + 1}" height="2" bgcolor="#d1d5db" style="height:2px;background-color:#d1d5db;font-size:0;line-height:0;">&nbsp;</td></tr>'
     row5 = '<tr>' + ''.join(date_cells) + lbl_col_e + '</tr>'
@@ -266,13 +271,13 @@ def generate_trend_chart_html(trend_data: list) -> str:
         f'<tr><td style="padding:8px 16px 8px;background-color:#ffffff;">{chart_table}'
         '<table width="100%" border="0" cellpadding="0" cellspacing="0" style="margin-top:6px;">'
         '<tr><td style="font-size:10px;color:#6b7280;padding-top:2px;">'
-        '&#8212;&#8212; Dashed red = 50% OKR target &nbsp;&middot;&nbsp; <span style="color:#16a34a;font-weight:bold;">&#9646;</span> = current week'
+        '&#8212;&#8212; Dashed red = 75% OKR target &nbsp;&middot;&nbsp; <span style="color:#16a34a;font-weight:bold;">&#9646;</span> = current week'
         '</td></tr></table></td></tr></table>'
     )
 
 
 def generate_partners_target_chart_html(trend_data: list) -> str:
-    """Gmail-safe bar chart showing count of partners meeting the 50% CoCo target per week.
+    """Gmail-safe bar chart showing count of partners meeting the 75% CoCo target per week.
     trend_data: [(week_label, partners_at_target, total_partners), ...]
     """
     if not trend_data:
@@ -376,7 +381,7 @@ def generate_partners_target_chart_html(trend_data: list) -> str:
     return (
         '<table width="600" border="0" cellpadding="0" cellspacing="0" style="font-family:Arial,sans-serif;margin:16px 0;border:1px solid #e5e7eb;">'
         '<tr><td style="padding:12px 16px;background-color:#f9fafb;border-bottom:1px solid #e5e7eb;">'
-        f'<span style="font-size:13px;font-weight:bold;color:#111827;">&#127942; Partners Meeting 50% Target &#8212; {n}-Week Trend</span>'
+        f'<span style="font-size:13px;font-weight:bold;color:#111827;">&#127942; Partners Meeting 75% Target &#8212; {n}-Week Trend</span>'
         f'&nbsp;&nbsp;<span style="font-size:12px;color:{pct_color};font-weight:bold;">Current: {current_count}/{MAX_PARTNERS} {arrow}</span>'
         f'{wow_label}'
         '</td></tr>'
@@ -536,7 +541,7 @@ def generate_velocity_dumbbell_html(fy26_map: dict, fy27_map: dict) -> str:
 
 
 def inject_velocity_chart(html_email: str, chart_html: str) -> str:
-    """Insert dumbbell chart before USE CASE PATTERNS so the scorecard 50% sentence stays above."""
+    """Insert dumbbell chart before USE CASE PATTERNS so the scorecard 75% sentence stays above."""
     import re
     # Primary: just before USE CASE PATTERNS heading (matches any h2/h3 containing those words)
     m = re.search(r'(<h[23][^>]*>[^<]*USE\s+CASE\s+PATTERN[^<]*</h[23]>)', html_email, re.IGNORECASE)
@@ -678,22 +683,22 @@ with st.spinner("Loading data..."):
     _EMAIL_BANDS = ['High']
     managed_bulk_conf = get_bulk_confidence_scores(conn, MANAGED_PARTNERS, Q2_START, Q2_END)
     # GSIs: global scope (all theaters), EY aliases merged.
-    # Regional SIs: NoAM only (consistent with OKR tracking scope).
+    # NOAM RSIs: NoAM only (consistent with OKR tracking scope).
     if len(managed_bulk_conf) > 0:
         _gsi_rows = managed_bulk_conf[managed_bulk_conf['PARTNER_NAME'].isin(_GSI_NAMES)].copy()
-        _regional_rows = managed_bulk_conf[~managed_bulk_conf['PARTNER_NAME'].isin(_GSI_NAMES)].copy()
-        # Regional SIs → NoAM only
-        _regional_rows = _regional_rows[
-            _regional_rows['THEATER_NAME'].isin(['AMSExpansion', 'USMajors', 'AMSAcquisition', 'USPubSec'])
+        _noam_rsi_rows = managed_bulk_conf[~managed_bulk_conf['PARTNER_NAME'].isin(_GSI_NAMES)].copy()
+        # NOAM RSIs → NoAM only
+        _noam_rsi_rows = _noam_rsi_rows[
+            _noam_rsi_rows['THEATER_NAME'].isin(['AMSExpansion', 'USMajors', 'AMSAcquisition', 'USPubSec'])
         ]
         # Merge aliases into canonical names
         _gsi_rows['PARTNER_NAME'] = _gsi_rows['PARTNER_NAME'].replace(
             {'Ernst & Young (EY)': 'EY', 'IBM Consulting': 'IBM'}
         )
-        _regional_rows['PARTNER_NAME'] = _regional_rows['PARTNER_NAME'].replace(
+        _noam_rsi_rows['PARTNER_NAME'] = _noam_rsi_rows['PARTNER_NAME'].replace(
             {'Kipi.ai': 'kipi.ai', 'LTI Mindtree': 'LTM'}
         )
-        managed_bulk_conf = pd.concat([_gsi_rows, _regional_rows], ignore_index=True)
+        managed_bulk_conf = pd.concat([_gsi_rows, _noam_rsi_rows], ignore_index=True)
 
     if len(managed_bulk_conf) > 0:
         managed_bulk_conf['IS_COCO_FINAL'] = (
@@ -845,7 +850,7 @@ managed_inactive_partners = 35 - managed_total_partners
 managed_inactive_names = [p for p in MANAGED_PARTNERS if p not in partner_data['PARTNER_NAME'].values]
 
 # Compute full per-partner OKR summary (all managed partners, not capped at 15)
-# Used to accurately report partners meeting/below the 50% target
+# Used to accurately report partners meeting/below the 75% target
 if len(managed_bulk_conf) > 0:
     _full_partner_summary = managed_bulk_conf.groupby('PARTNER_NAME').agg(
         TOTAL_UCS=('USE_CASE_ID', 'count'),
@@ -854,13 +859,13 @@ if len(managed_bulk_conf) > 0:
     _full_partner_summary['COCO_PCT'] = round(
         _full_partner_summary['COCO_UCS'] * 100.0 / _full_partner_summary['TOTAL_UCS'].replace(0, float('nan')), 1
     ).fillna(0)
-    partners_meeting_50 = int((_full_partner_summary['COCO_PCT'] >= 50).sum())
-    partners_meeting_list = ', '.join(_full_partner_summary[_full_partner_summary['COCO_PCT'] >= 50]['PARTNER_NAME'].tolist())
+    partners_meeting_75 = int((_full_partner_summary['COCO_PCT'] >= 75).sum())
+    partners_meeting_list = ', '.join(_full_partner_summary[_full_partner_summary['COCO_PCT'] >= 75]['PARTNER_NAME'].tolist())
     partners_below_50 = int((_full_partner_summary['COCO_PCT'] < 50).sum())
     _below_df = _full_partner_summary[_full_partner_summary['COCO_PCT'] < 50].sort_values('COCO_PCT', ascending=False)
     _below_str = '; '.join(f"{r.PARTNER_NAME} {r.COCO_PCT:.1f}%" for _, r in _below_df.iterrows())
 else:
-    partners_meeting_50 = 0
+    partners_meeting_75 = 0
     partners_meeting_list = 'N/A'
     partners_below_50 = managed_total_partners
     _below_str = 'N/A'
@@ -868,13 +873,13 @@ else:
 # Inject context for Ask AI
 st.session_state.ask_ai_context = (
     f"Current page: Executive Email. 20 managed partners (6 GSI + 14 RSI). Period: FY27 Q2.\n"
-    f"Partners meeting 50% CoCo target: {partners_meeting_50}/20. Partners at 50%+: {partners_meeting_list}.\n"
-    f"Partners below 50% (closest first): {_below_str}."
+    f"Partners meeting 75% CoCo target: {partners_meeting_75}/20. Partners at 75%+: {partners_meeting_list}.\n"
+    f"Partners below 75% (closest first): {_below_str}."
 )
 
 # Upsert current week's count into COCO_OKR_TARGET_WEEKLY (freezes automatically when week rolls over)
 try:
-    save_okr_target_count(conn, partners_meeting_50, managed_total_partners)
+    save_okr_target_count(conn, partners_meeting_75, managed_total_partners)
 except Exception as _e:
     import traceback; traceback.print_exc()
     st.toast(f"OKR trend save skipped: {_e}", icon="⚠️")
@@ -1069,11 +1074,11 @@ _live_pct   = round(_live_coco * 100.0 / _live_total, 1) if _live_total > 0 else
 
 # Pre-compute OKR headline targets so LLM doesn't need to infer them
 import math as _math
-_okr_target_ucs = _math.ceil(_live_total * 0.50)   # target = 50% of total UCs
+_okr_target_ucs = _math.ceil(_live_total * 0.75)   # target = 75% of total UCs
 _okr_gap_ucs    = _live_coco - _okr_target_ucs      # negative = short of target
-_okr_target_pct = 50.0
+_okr_target_pct = 75.0
 _okr_gap_pct    = round(_live_pct - _okr_target_pct, 1)
-# Partners meeting 50% per partner — computed from managed_bulk_conf
+# Partners meeting 75% per partner — computed from managed_bulk_conf
 _p_meeting_50 = 0
 if len(managed_bulk_conf) > 0:
     _pm = (managed_bulk_conf.groupby('PARTNER_NAME')
@@ -1086,11 +1091,11 @@ okr_headline_ctx = (
     f"  Total Use Cases: {_live_total}\n"
     f"  CoCo Use Cases (Current): {_live_coco}\n"
     f"  CoCo Adoption % (Current): {_live_pct}%\n"
-    f"  Target CoCo UCs (50% of total): {_okr_target_ucs}\n"
+    f"  Target CoCo UCs (75% of total): {_okr_target_ucs}\n"
     f"  Target CoCo Adoption %: {_okr_target_pct}%\n"
     f"  Gap (UCs): {_okr_gap_ucs:+d}\n"
     f"  Gap (Adoption %): {_okr_gap_pct:+.1f}pp\n"
-    f"  Partners Meeting 50% Target: {_p_meeting_50}/20\n"
+    f"  Partners Meeting 75% Target: {_p_meeting_50}/20\n"
 )
 
 if len(adoption_wow_data) > 0:
@@ -1223,7 +1228,7 @@ MANAGED PARTNERS Q2 HEADLINE:
   Total EACV: ${managed_total_eacv/1_000_000:.1f}M
   CoCo EACV: ${managed_coco_eacv/1_000_000:.1f}M
   CoCo Deployed: {managed_coco_deployed}
-  Partners Meeting 50% Target: {partners_meeting_50} ({partners_meeting_list})
+  Partners Meeting 75% Target: {partners_meeting_75} ({partners_meeting_list})
   Partners Below 50% Target: {partners_below_50}
 CoCo Active: {managed_total_partners} of 20 managed partners have Q2 activity
 No Q2 Activity ({managed_inactive_partners} partners): {', '.join(managed_inactive_names)}
@@ -1244,7 +1249,7 @@ COCO CREDIT CONSUMPTION (Q2, managed partners):
 REGIONAL BREAKDOWN (Managed and Unmanaged):
 {region_ctx}
 
-PARTNER SCORECARD (all 20 managed partners, by EACV, with CoCo coverage — target 50%):
+PARTNER SCORECARD (all 20 managed partners, by EACV, with CoCo coverage — target 75%):
 {partner_ctx}
 
 COCO ADOPTION WoW — OVERALL (from weekly snapshot table):
@@ -1296,7 +1301,7 @@ SCOPE: Focus on the 20 managed partners. **GSIs (6) report GLOBAL numbers (NoAM 
 
 Follow this EXACT structure with 8 sections:
 
-## **Note: Mixed scope — 6 GSIs report globally (all regions) | 14 Regional SIs report NoAM only.**
+## **Note: Mixed scope — 6 GSIs report globally (all regions) | NOAM RSIs report NoAM only.**
 
 ## EXECUTIVE SUMMARY
 2-3 sentences maximum, then exactly 6 bullets.
@@ -1305,7 +1310,7 @@ Follow this EXACT structure with 8 sections:
 - Bullet 1: "**Leading use case types:** [top 3 by count]"
 - Bullet 2: "**CoCo Adoption (mixed scope):** [X]% overall — GSIs globally: [GSI CoCo UCs]/[GSI Total UCs] UCs | RSIs NoAM: [RSI CoCo UCs]/[RSI Total UCs] UCs"
 - Bullet 3: "**Top Global SIs by EACV:** ([top 3 global partners by EACV])"
-- Bullet 4: "**Top Regional SIs by EACV:** ([top 3 regional managed partners by EACV])"
+- Bullet 4: "**Top NOAM RSIs by EACV:** ([top 3 NOAM RSI managed partners by EACV])"
 - Bullet 5: "**Competitive displacement:** [top 3 competitors by count]"
 - Bullet 6: "**[Detailed Partner CoCo usecase dashboard](https://app.snowflake.com/sfcogsops/snowhouse_aws_us_west_2/#/streamlit-apps/TEMP.COCO_PARTNER_ADOPTION.COCO_USECASE_INSIGHTS)**"
 
@@ -1314,7 +1319,7 @@ PARTNER CLASSIFICATION:
 - Regional Managed Partners (14): 7Rivers, Aimpoint Digital, BlueCloud, kipi.ai (incl. Kipi.ai), evolv Consulting, Infostrux, Infosys, KPMG, LTM (incl. LTI Mindtree), NTT DATA, phData, Slalom, Squadron Data, Tredence
 
 ## OKR PROGRESS — REGIONAL BREAKDOWN
-| Region | Scope | Total UCs | CoCo UCs | CoCo Usecase % | Partners Meeting 50% |
+| Region | Scope | Total UCs | CoCo UCs | CoCo Usecase % | Partners Meeting 75% |
 - Show 3 rows: NoAM, EMEA, APJ
 - Use "OKR PROGRESS — REGIONAL BREAKDOWN" data from context
 - NoAM row: all 20 GSI+RSI partners (NoAM scope for all)
@@ -1336,7 +1341,7 @@ PARTNER CLASSIFICATION:
 - "CoCo%" = CoCo/Total for each partner's scoped data.
 - WoW Δ% and WoW Δ UCs from "COCO ADOPTION WoW — PER MANAGED PARTNER" — show "-" if N/A
 - Q2 Credits, Last 7d Credits, Q2 Tokens, Last 7d Credits WoW% from PARTNER SCORECARD data — show "-" if not available. Q2 Tokens comes after Analytics column. Q2 Credits = cumulative CoCo token credits on IS_COCO_FINAL accounts since Q2 start. Last 7d Credits = rolling last 7 days. Last 7d Credits WoW% = (last7 - prior7) / prior7.
-- Our target is **50% CoCo adoption** per partner. After the table, add ONE sentence listing the partners below 50% in ascending order of CoCo% (closest to 50% first, lowest last) — these need the most enablement focus.
+- Our target is **75% CoCo adoption** per partner. After the table, add ONE sentence listing the partners below 75% in ascending order of CoCo% (closest to 75% first, lowest last) — these need the most enablement focus.
 
 ## USE CASE PATTERNS (managed partners only)
 3-4 bullets. Each: **Pattern Name** — one sentence with partner names and EACV.

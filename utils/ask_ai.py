@@ -73,20 +73,20 @@ GSIs (6, global scope — all theaters):
   'Accenture', 'Capgemini Technologies LLC', 'Cognizant Technology Solutions US Corp',
   'Deloitte Consulting', 'EY', 'Ernst & Young (EY)', 'IBM', 'IBM Consulting'
 
-RSIs (regional SIs, NoAM scope):
+RSIs → NOAM RSIs (all NoAM scope — Regional SIs + PSE Managed Partners merged):
   '7Rivers, Inc', 'Aimpoint Digital', 'BlueCloud Services Inc', 'kipi.ai', 'Kipi.ai',
   'evolv Consulting', 'Infostrux Solutions Inc.', 'Infosys', 'KPMG LLP',
   'LTM', 'LTI Mindtree', 'NTT DATA Group Corporation', 'phData, Inc.', 'Slalom, LLC.',
   'Squadron Data Inc', 'Tredence Inc.'
 
-PSE Managed Partners:
+PSE Managed Partners (now merged into NOAM RSIs above — NoAM scope):
   'Spaulding Ridge', 'TEKsystems Global Services, LLC.', 'Blend360, LLC',
   'Tiger Analytics Inc.', 'Atrium', 'Perficient Inc.', 'SDK Tek Services Ltd.',
   'Merkle', 'Archetype Consulting', 'Apex Systems', 'Tata Consultancy Services',
   'OneSix', 'Icon Analytics', 'Sparq Holdings, Inc.', 'CitiusTech Inc.',
   'Hexaware Technologies'
 
-ALL MANAGED (use for "all partners" questions — combine GSI + RSI + PSE):
+ALL MANAGED (use for "all partners" questions — combine GSI + NOAM RSIs):
   'Accenture','Capgemini Technologies LLC','Cognizant Technology Solutions US Corp',
   'Deloitte Consulting','EY','Ernst & Young (EY)','IBM','IBM Consulting',
   '7Rivers, Inc','Aimpoint Digital','BlueCloud Services Inc','kipi.ai','Kipi.ai',
@@ -120,7 +120,7 @@ KEY CONCEPTS:
     S3 (0–20): Tool invocations (file edits, terminal runs — proves deep usage)
     S4 (0–15): Active days × skill rate (sustained, consistent usage over time)
 
-- COCO_PCT = COCO_UCS / TOTAL_UCS * 100. OKR target = 50% per partner.
+- COCO_PCT = COCO_UCS / TOTAL_UCS * 100. OKR target = 75% per partner.
 - GSIs (global scope): Accenture, Capgemini, Cognizant, Deloitte, EY, IBM
 - RSIs (NoAM scope): remaining 14 partners
 - Current period: FY27 Q2 (May 1 – Jul 31, 2026). FY27 Q1 = Feb 1 – Apr 30, 2026.
@@ -837,21 +837,24 @@ def build_filter_context() -> str:
 
 _GSI_PARTNERS = frozenset({'Accenture','Capgemini Technologies LLC','Cognizant Technology Solutions US Corp',
                             'Deloitte Consulting','EY','IBM'})
-_RSI_PARTNERS = frozenset({'7Rivers, Inc','Aimpoint Digital','BlueCloud Services Inc','kipi.ai',
-                            'evolv Consulting','Infostrux Solutions Inc.','Infosys','KPMG LLP',
-                            'LTM','NTT DATA Group Corporation','phData, Inc.','Slalom, LLC.',
-                            'Squadron Data Inc','Tredence Inc.'})
-_PSE_PARTNERS = frozenset({'Spaulding Ridge','TEKsystems Global Services, LLC.','Blend360, LLC',
-                            'Tiger Analytics Inc.','Atrium','Perficient Inc.','SDK Tek Services Ltd.',
-                            'Merkle','Archetype Consulting','Apex Systems','Tata Consultancy Services',
-                            'OneSix','Icon Analytics','Sparq Holdings, Inc.','CitiusTech Inc.',
-                            'Hexaware Technologies'})
+_NOAM_RSI_PARTNERS = frozenset({
+    # Former Regional SIs
+    '7Rivers, Inc','Aimpoint Digital','BlueCloud Services Inc','kipi.ai',
+    'evolv Consulting','Infostrux Solutions Inc.','Infosys','KPMG LLP',
+    'LTM','NTT DATA Group Corporation','phData, Inc.','Slalom, LLC.',
+    'Squadron Data Inc','Tredence Inc.',
+    # Former PSE Managed Partners
+    'Spaulding Ridge','TEKsystems Global Services, LLC.','Blend360, LLC',
+    'Tiger Analytics Inc.','Atrium','Perficient Inc.','SDK Tek Services Ltd.',
+    'Merkle','Archetype Consulting','Apex Systems','Tata Consultancy Services',
+    'OneSix','Icon Analytics','Sparq Holdings, Inc.','CitiusTech Inc.',
+    'Hexaware Technologies',
+})
 
 
 def _partner_segment(name: str) -> str:
     if name in _GSI_PARTNERS: return 'GSI'
-    if name in _RSI_PARTNERS: return 'RSI'
-    if name in _PSE_PARTNERS: return 'PSE'
+    if name in _NOAM_RSI_PARTNERS: return 'NOAM RSI'
     return 'Other'
 
 
@@ -888,7 +891,7 @@ def build_credit_wow_context(summary_df=None, partner_name: str = None) -> str:
         lines.append(f"{pname:<40} {seg:<5} {q2c} {cwow} {cdelta} {qtok} {twow}")
 
     # Totals by segment
-    for seg_label, seg_set in [('GSI', _GSI_PARTNERS), ('RSI', _RSI_PARTNERS), ('PSE', _PSE_PARTNERS), ('ALL', None)]:
+    for seg_label, seg_set in [('GSI', _GSI_PARTNERS), ('NOAM RSI', _NOAM_RSI_PARTNERS), ('ALL', None)]:
         seg_df = df[df['PARTNER_NAME'].isin(seg_set)] if seg_set else df
         if len(seg_df) == 0: continue
         tot_q2c  = seg_df['Q2_CREDITS'].sum()    if 'Q2_CREDITS'  in seg_df.columns else 0

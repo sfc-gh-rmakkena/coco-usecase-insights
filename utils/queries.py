@@ -3,68 +3,69 @@ from datetime import timedelta
 from utils.config import get_schema
 
 SCHEMA = get_schema()
+DT_OKR = f"{SCHEMA}.DT_OKR_USE_CASES"
 
 def _use_case_base(start_date=None, end_date=None):
-    """Generate USE_CASE_BASE CTE with configurable date filter."""
+    """Generate USE_CASE_BASE CTE.
+    Drives partner resolution + IS_COCO from DT_OKR_USE_CASES; enriches with
+    MDM comments/flags via USE_CASE_ID join.
+    """
     if start_date and end_date:
         date_filter = f"""(
-            (UC.USE_CASE_STAGE IN ('1 - Discovery', '2 - Scoping', '3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan') AND UC.DECISION_DATE >= '{start_date}' AND UC.DECISION_DATE <= '{end_date}')
-            OR (UC.USE_CASE_STAGE IN ('5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed') AND UC.GO_LIVE_DATE >= '{start_date}' AND UC.GO_LIVE_DATE <= '{end_date}')
+            (uc.USE_CASE_STAGE IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan')
+             AND uc.DECISION_DATE >= '{start_date}' AND uc.DECISION_DATE <= '{end_date}')
+            OR (uc.USE_CASE_STAGE IN ('5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed')
+             AND uc.GO_LIVE_DATE >= '{start_date}' AND uc.GO_LIVE_DATE <= '{end_date}')
         )"""
     else:
         date_filter = """(
-            (UC.USE_CASE_STAGE IN ('1 - Discovery', '2 - Scoping', '3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan') AND UC.DECISION_DATE > '2025-11-20')
-            OR (UC.USE_CASE_STAGE IN ('5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed') AND UC.GO_LIVE_DATE > '2025-11-20')
+            (uc.USE_CASE_STAGE IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan')
+             AND uc.DECISION_DATE > '2025-11-20')
+            OR (uc.USE_CASE_STAGE IN ('5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed')
+             AND uc.GO_LIVE_DATE > '2025-11-20')
         )"""
     return f"""
-    WITH hierarchy AS (
-        SELECT PARTNER_NAME, PARENT_PARTNER_NAME FROM {SCHEMA}.PARTNER_HIERARCHY
-    ),
-    stage_days AS (
-        SELECT USE_CASE_ID, DATEDIFF('day', MOVEIN_DATE, CURRENT_DATE()) AS DAYS_IN_CURRENT_STAGE
-        FROM MDM.MDM_INTERFACES.FACT_USE_CASE_STAGE_MOVEMENT
-        QUALIFY ROW_NUMBER() OVER (PARTITION BY USE_CASE_ID ORDER BY MOVEIN_DATE DESC) = 1
-    ),
-    raw AS (
-        SELECT 
-            UC.USE_CASE_ID, UC.USE_CASE_NUMBER, UC.ACCOUNT_NAME, UC.USE_CASE_NAME, UC.USE_CASE_STAGE, UC.USE_CASE_EACV,
-            TRY_CAST(UC.ACCOUNT_BASE_RENEWAL_ACV AS FLOAT) AS ACCOUNT_ARR, UC.TECHNICAL_USE_CASE, UC.ACCOUNT_LEAD_SE_NAME,
-            UC.ACCOUNT_GVP, UC.THEATER_NAME, UC.REGION_NAME, UC.DECISION_DATE, UC.GO_LIVE_DATE, UC.POC_END_DATE, UC.POC_START_DATE,
-            UC.SE_COMMENTS, UC.MEDDPICC_METRICS, UC.MEDDPICC_IDENTIFY_PAIN, UC.COMPETITORS, UC.NEXT_STEPS, UC.PRIORITIZED_FEATURES,
-            UC.WORKLOADS, UC.SPECIALIST_COMMENTS,
-            COALESCE(
-                NULLIF(ARRAY_TO_STRING(UC.IMPLEMENTATION_SERVICES_PARTNER, ', '), ''),
-                NULLIF(ARRAY_TO_STRING(UC.CO_SELL_SERVICES_PARTNER, ', '), ''),
-                NULLIF(UC.PARTNER_NAME, ''),
-                ARRAY_TO_STRING(UC.USE_CASE_PARTNER, ', ')
-            ) AS RAW_PARTNER_NAME,
-            UC.PARTNER_COMMENTS, UC.IS_WON, UC.IS_DEPLOYED, UC.IS_LOST, UC.CREATED_DATE, UC.ACTUAL_USE_CASE_WON_DATE,
-            UC.ACTUAL_USE_CASE_DEPLOYMENT_DATE, UC.LOSS_DATE, UC.DAYS_IN_STAGE,
-            CASE 
-                WHEN UC.PARTNER_COMMENTS ILIKE '%#coco%' THEN 'PARTNER_COMMENTS'
-                WHEN UC.SE_COMMENTS ILIKE '%coco%' OR UC.SE_COMMENTS ILIKE '%cortex code%' THEN 'SE_COMMENTS'
-                WHEN UC.PRIORITIZED_FEATURES ILIKE '%AI - Cortex Code%' THEN 'FEATURE_FLAG'
-                ELSE 'MULTIPLE'
-            END AS COCO_MENTION_SOURCE
-        FROM MDM.MDM_INTERFACES.DIM_USE_CASE AS UC
-        WHERE (UC.SE_COMMENTS ILIKE '%coco%' OR UC.SE_COMMENTS ILIKE '%cortex code%' OR UC.PARTNER_COMMENTS ILIKE '%#coco%' OR UC.PRIORITIZED_FEATURES ILIKE '%AI - Cortex Code%')
-        AND {date_filter}
-    ),
-    use_cases AS (
-        SELECT 
-            r.USE_CASE_ID, r.USE_CASE_NUMBER, r.ACCOUNT_NAME, r.USE_CASE_NAME, r.USE_CASE_STAGE, r.USE_CASE_EACV,
-            r.ACCOUNT_ARR, r.TECHNICAL_USE_CASE, r.ACCOUNT_LEAD_SE_NAME, r.ACCOUNT_GVP, r.THEATER_NAME, r.REGION_NAME,
-            r.DECISION_DATE, r.GO_LIVE_DATE, r.POC_END_DATE, r.POC_START_DATE, r.SE_COMMENTS, r.MEDDPICC_METRICS,
-            r.MEDDPICC_IDENTIFY_PAIN, r.COMPETITORS, r.NEXT_STEPS, r.PRIORITIZED_FEATURES, r.WORKLOADS, r.SPECIALIST_COMMENTS,
-            COALESCE(h.PARENT_PARTNER_NAME, r.RAW_PARTNER_NAME) AS PARTNER_NAME,
-            r.PARTNER_COMMENTS, r.IS_WON, r.IS_DEPLOYED, r.IS_LOST, r.CREATED_DATE, r.ACTUAL_USE_CASE_WON_DATE,
-            r.ACTUAL_USE_CASE_DEPLOYMENT_DATE, r.LOSS_DATE, r.DAYS_IN_STAGE, r.COCO_MENTION_SOURCE,
-            COALESCE(sd.DAYS_IN_CURRENT_STAGE, r.DAYS_IN_STAGE) AS DAYS_IN_CURRENT_STAGE
-        FROM raw r
-        LEFT JOIN stage_days sd ON r.USE_CASE_ID = sd.USE_CASE_ID
-        LEFT JOIN hierarchy h ON r.RAW_PARTNER_NAME = h.PARTNER_NAME
-        WHERE r.RAW_PARTNER_NAME IS NOT NULL AND TRIM(r.RAW_PARTNER_NAME) != ''
-        AND r.RAW_PARTNER_NAME NOT IN ('Sigma Computing, Inc.', 'Bloomberg Finance L.P. - DCP Account')
+    WITH use_cases AS (
+        SELECT
+            uc.PARTNER_NAME,
+            uc.USE_CASE_ID,
+            uc.USE_CASE_NUMBER,
+            uc.ACCOUNT_NAME,
+            uc.USE_CASE_NAME,
+            uc.USE_CASE_STAGE,
+            uc.USE_CASE_EACV,
+            uc.TECHNICAL_USE_CASE,
+            uc.ACCOUNT_LEAD_SE_NAME,
+            uc.ACCOUNT_GVP,
+            uc.THEATER_NAME,
+            uc.REGION_NAME,
+            uc.DECISION_DATE,
+            uc.GO_LIVE_DATE,
+            uc.DAYS_IN_STAGE,
+            uc.DAYS_IN_CURRENT_STAGE,
+            uc.WORKLOADS,
+            uc.COMPETITORS,
+            uc.IS_COCO,
+            uc.COCO_SOURCE AS COCO_MENTION_SOURCE,
+            -- Enrich with MDM for comment/flag fields not in DT_OKR
+            mdm.SE_COMMENTS,
+            mdm.PARTNER_COMMENTS,
+            mdm.SPECIALIST_COMMENTS,
+            mdm.NEXT_STEPS,
+            mdm.PRIORITIZED_FEATURES,
+            mdm.MEDDPICC_METRICS,
+            mdm.MEDDPICC_IDENTIFY_PAIN,
+            TRY_CAST(mdm.ACCOUNT_BASE_RENEWAL_ACV AS FLOAT) AS ACCOUNT_ARR,
+            mdm.IS_WON,
+            mdm.IS_DEPLOYED,
+            mdm.IS_LOST,
+            mdm.CREATED_DATE,
+            mdm.ACTUAL_USE_CASE_WON_DATE,
+            mdm.ACTUAL_USE_CASE_DEPLOYMENT_DATE,
+            mdm.LOSS_DATE
+        FROM {DT_OKR} uc
+        LEFT JOIN MDM.MDM_INTERFACES.DIM_USE_CASE mdm ON uc.USE_CASE_ID = mdm.USE_CASE_ID
+        WHERE {date_filter}
     )
 """
 
@@ -193,45 +194,166 @@ def get_by_technical_type(_conn, region=None, source=None, start_date=None, end_
     """
     return _conn.query(query)
 
-DT_OKR = f"{SCHEMA}.DT_OKR_USE_CASES"
-
 def _coco_accounts_cte(start_date, include_account_coco=True, confidence=None):
-    """CTE for customer accounts with actual CoCo product usage since start_date.
-    confidence: None=all accounts, 'High'=only accounts with skill invocations, 'Medium'=accounts with any tool activity
+    """No-op CTE placeholder. IS_COCO_FINAL is now applied in Python via bulk_conf.
+    Kept for SQL structural compatibility only — returns no rows.
     """
-    if not include_account_coco:
-        return "coco_active_accounts AS (SELECT NULL AS ACCOUNT_NAME_UPPER WHERE FALSE)"
-    if confidence == 'High':
-        return f"""coco_active_accounts AS (
-            SELECT DISTINCT UPPER(f.salesforce_account_name) AS ACCOUNT_NAME_UPPER
-            FROM snowscience.llm.cortex_code_user_day_fact f
-            WHERE f.ds >= '{start_date}' AND f.snowflake_account_type = 'Customer' AND f.total_daily_requests > 0
-            AND f.ACCOUNT_ID IN (
-                SELECT DISTINCT ACCOUNT_ID FROM SNOWSCIENCE.LLM.CORTEX_CODE_REQUEST_STG
-                WHERE ds >= '{start_date}' AND SKILL_CHOICE IS NOT NULL AND SKILL_CHOICE != ''
-            )
-        )"""
-    if confidence == 'Medium':
-        return f"""coco_active_accounts AS (
-            SELECT DISTINCT UPPER(f.salesforce_account_name) AS ACCOUNT_NAME_UPPER
-            FROM snowscience.llm.cortex_code_user_day_fact f
-            WHERE f.ds >= '{start_date}' AND f.snowflake_account_type = 'Customer' AND f.total_daily_requests > 0
-            AND f.ACCOUNT_ID IN (
-                SELECT DISTINCT ACCOUNT_ID FROM SNOWSCIENCE.LLM.CORTEX_CODE_REQUEST_STG
-                WHERE ds >= '{start_date}' AND TOOLS_INVOKED_JSON IS NOT NULL AND TOOLS_INVOKED_JSON != '[]'
-            )
-        )"""
-    return f"""coco_active_accounts AS (
-        SELECT DISTINCT UPPER(salesforce_account_name) AS ACCOUNT_NAME_UPPER
-        FROM snowscience.llm.cortex_code_user_day_fact
-        WHERE ds >= '{start_date}' AND snowflake_account_type = 'Customer' AND total_daily_requests > 0
-    )"""
+    return "coco_active_accounts AS (SELECT NULL::VARCHAR AS ACCOUNT_NAME_UPPER WHERE FALSE)"
 
 def _is_coco_expanded():
-    """SQL expression for expanded CoCo detection (IS_COCO OR account has CoCo usage)."""
-    return "(uc.IS_COCO OR caa.ACCOUNT_NAME_UPPER IS NOT NULL)"
+    """SQL expression for CoCo detection using the pre-computed DT_OKR flag.
+    IS_COCO_FINAL (IS_COCO + High confidence band) is applied in Python via bulk_conf.
+    """
+    return "uc.IS_COCO"
 
 @st.cache_data(ttl=timedelta(minutes=30))
+def get_all_uc_counts(_conn, start_date: str, end_date: str, region: str = None):
+    """All use cases (partner + non-partner) total and go-live counts from DIM_USE_CASE."""
+    theater_cond = ""
+    if region and region not in ("Global", ""):
+        region_map = {
+            "NoAM": ("AMSExpansion","USMajors","AMSAcquisition","USPubSec"),
+            "EMEA": ("EMEA",), "APJ": ("APJ",),
+        }
+        theaters = region_map.get(region)
+        if theaters:
+            t = "','".join(theaters)
+            theater_cond = f" AND THEATER_NAME IN ('{t}')"
+    return _conn.query(f"""
+    SELECT
+        COUNT(*)                                                        AS ALL_USE_CASES,
+        SUM(CASE WHEN IS_PARTNER_ATTACHED THEN 1 ELSE 0 END)           AS PARTNER_ATTACHED,
+        SUM(CASE WHEN USE_CASE_STAGE = '7 - Deployed'
+                  AND GO_LIVE_DATE >= '{start_date}'
+                  AND GO_LIVE_DATE <= '{end_date}' THEN 1 ELSE 0 END)  AS ALL_GO_LIVES
+    FROM MDM.MDM_INTERFACES.DIM_USE_CASE
+    WHERE USE_CASE_STAGE IN (
+        '3 - Technical / Business Validation',
+        '4 - Use Case Won / Migration Plan',
+        '5 - Implementation In Progress',
+        '6 - Implementation Complete',
+        '7 - Deployed'
+    )
+    AND (
+        (USE_CASE_STAGE IN ('3 - Technical / Business Validation','4 - Use Case Won / Migration Plan')
+         AND DECISION_DATE >= '{start_date}' AND DECISION_DATE <= '{end_date}')
+        OR (USE_CASE_STAGE IN ('5 - Implementation In Progress','6 - Implementation Complete','7 - Deployed')
+         AND GO_LIVE_DATE >= '{start_date}' AND GO_LIVE_DATE <= '{end_date}')
+    )
+    {theater_cond}
+    """)
+
+
+@st.cache_data(ttl=timedelta(minutes=30))
+def get_all_uc_counts_by_theatre(_conn, start_date: str, end_date: str):
+    """Overall UCs and go-live counts from MDM broken down by THEATER_NAME."""
+    return _conn.query(f"""
+    SELECT
+        THEATER_NAME,
+        COUNT(*)                                                                  AS ALL_USE_CASES,
+        SUM(CASE WHEN USE_CASE_STAGE = '7 - Deployed'
+                  AND GO_LIVE_DATE >= '{start_date}'
+                  AND GO_LIVE_DATE <= '{end_date}' THEN 1 ELSE 0 END)            AS ALL_GO_LIVES
+    FROM MDM.MDM_INTERFACES.DIM_USE_CASE
+    WHERE THEATER_NAME IS NOT NULL
+      AND USE_CASE_STAGE IN (
+          '3 - Technical / Business Validation','4 - Use Case Won / Migration Plan',
+          '5 - Implementation In Progress','6 - Implementation Complete','7 - Deployed')
+      AND ((USE_CASE_STAGE IN ('3 - Technical / Business Validation','4 - Use Case Won / Migration Plan')
+            AND DECISION_DATE >= '{start_date}' AND DECISION_DATE <= '{end_date}')
+           OR (USE_CASE_STAGE IN ('5 - Implementation In Progress','6 - Implementation Complete','7 - Deployed')
+            AND GO_LIVE_DATE >= '{start_date}' AND GO_LIVE_DATE <= '{end_date}'))
+    GROUP BY THEATER_NAME
+    ORDER BY ALL_USE_CASES DESC
+    """)
+
+
+@st.cache_data(ttl=timedelta(minutes=30))
+def get_partner_metrics_by_theatre(_conn, start_date, end_date, include_account_coco=True, confidence=None):
+    """Partner UC counts, CoCo UCs, and go-live % from DT_OKR broken down by THEATER_NAME.
+    Uses uc.IS_COCO (pre-computed DT_OKR flag) for consistency with the top-bar metric.
+    """
+    date_filter = f"""(
+        (uc.USE_CASE_STAGE IN ('3 - Technical / Business Validation','4 - Use Case Won / Migration Plan')
+         AND uc.DECISION_DATE >= '{start_date}' AND uc.DECISION_DATE <= '{end_date}')
+        OR (uc.USE_CASE_STAGE IN ('5 - Implementation In Progress','6 - Implementation Complete','7 - Deployed')
+         AND uc.GO_LIVE_DATE >= '{start_date}' AND uc.GO_LIVE_DATE <= '{end_date}')
+    )"""
+    return _conn.query(f"""
+    SELECT
+        uc.THEATER_NAME,
+        COUNT(*)                                                                                          AS TOTAL_PARTNER_UCS,
+        SUM(CASE WHEN uc.IS_COCO THEN 1 ELSE 0 END)                                                      AS COCO_UCS,
+        SUM(CASE WHEN uc.USE_CASE_STAGE = '7 - Deployed' AND uc.IS_COCO THEN 1 ELSE 0 END)               AS DEPLOYED_COCO,
+        ROUND(SUM(CASE WHEN uc.USE_CASE_STAGE = '7 - Deployed' AND uc.IS_COCO THEN 1 ELSE 0 END)
+              * 100.0 / NULLIF(COUNT(*), 0), 1)                                                           AS GO_LIVE_PCT
+    FROM {DT_OKR} uc
+    WHERE {date_filter}
+      AND uc.THEATER_NAME IS NOT NULL
+    GROUP BY uc.THEATER_NAME
+    ORDER BY TOTAL_PARTNER_UCS DESC
+    """)
+
+
+@st.cache_data(ttl=timedelta(minutes=30))
+def get_all_uc_counts_by_region(_conn, start_date: str, end_date: str):
+    """Overall UCs and go-live counts from MDM broken down by macro-region (NoAM/EMEA/APJ)."""
+    return _conn.query(f"""
+    SELECT
+        CASE
+            WHEN THEATER_NAME IN ('AMSExpansion','USMajors','AMSAcquisition','USPubSec') THEN 'NoAM'
+            WHEN THEATER_NAME = 'EMEA' THEN 'EMEA'
+            WHEN THEATER_NAME = 'APJ'  THEN 'APJ'
+            ELSE 'Other'
+        END AS REGION,
+        COUNT(*)                                                                  AS ALL_USE_CASES,
+        SUM(CASE WHEN USE_CASE_STAGE = '7 - Deployed'
+                  AND GO_LIVE_DATE >= '{start_date}'
+                  AND GO_LIVE_DATE <= '{end_date}' THEN 1 ELSE 0 END)            AS ALL_GO_LIVES
+    FROM MDM.MDM_INTERFACES.DIM_USE_CASE
+    WHERE USE_CASE_STAGE IN (
+          '3 - Technical / Business Validation','4 - Use Case Won / Migration Plan',
+          '5 - Implementation In Progress','6 - Implementation Complete','7 - Deployed')
+      AND ((USE_CASE_STAGE IN ('3 - Technical / Business Validation','4 - Use Case Won / Migration Plan')
+            AND DECISION_DATE >= '{start_date}' AND DECISION_DATE <= '{end_date}')
+           OR (USE_CASE_STAGE IN ('5 - Implementation In Progress','6 - Implementation Complete','7 - Deployed')
+            AND GO_LIVE_DATE >= '{start_date}' AND GO_LIVE_DATE <= '{end_date}'))
+    GROUP BY REGION
+    ORDER BY ALL_USE_CASES DESC
+    """)
+
+
+@st.cache_data(ttl=timedelta(minutes=30))
+def get_partner_metrics_by_region(_conn, start_date, end_date, include_account_coco=True, confidence=None):
+    """Partner UC counts, CoCo UCs, and go-live % from DT_OKR broken down by macro-region.
+    Uses uc.IS_COCO (pre-computed DT_OKR flag) for consistency with the top-bar metric.
+    """
+    date_filter = f"""(
+        (uc.USE_CASE_STAGE IN ('3 - Technical / Business Validation','4 - Use Case Won / Migration Plan')
+         AND uc.DECISION_DATE >= '{start_date}' AND uc.DECISION_DATE <= '{end_date}')
+        OR (uc.USE_CASE_STAGE IN ('5 - Implementation In Progress','6 - Implementation Complete','7 - Deployed')
+         AND uc.GO_LIVE_DATE >= '{start_date}' AND uc.GO_LIVE_DATE <= '{end_date}')
+    )"""
+    return _conn.query(f"""
+    SELECT
+        CASE
+            WHEN uc.THEATER_NAME IN ('AMSExpansion','USMajors','AMSAcquisition','USPubSec') THEN 'NoAM'
+            WHEN uc.THEATER_NAME = 'EMEA' THEN 'EMEA'
+            WHEN uc.THEATER_NAME = 'APJ'  THEN 'APJ'
+            ELSE 'Other'
+        END AS REGION,
+        COUNT(*)                                                                                          AS TOTAL_PARTNER_UCS,
+        SUM(CASE WHEN uc.IS_COCO THEN 1 ELSE 0 END)                                                      AS COCO_UCS,
+        SUM(CASE WHEN uc.USE_CASE_STAGE = '7 - Deployed' AND uc.IS_COCO THEN 1 ELSE 0 END)               AS DEPLOYED_COCO,
+        ROUND(SUM(CASE WHEN uc.USE_CASE_STAGE = '7 - Deployed' AND uc.IS_COCO THEN 1 ELSE 0 END)
+              * 100.0 / NULLIF(COUNT(*), 0), 1)                                                           AS GO_LIVE_PCT
+    FROM {DT_OKR} uc
+    WHERE {date_filter}
+    GROUP BY REGION
+    ORDER BY TOTAL_PARTNER_UCS DESC
+    """)
+
+
 def get_adoption_overview(_conn, start_date, end_date, region=None, partners=None, include_account_coco=True, confidence=None):
     """Get adoption metrics from DT_OKR_USE_CASES for the Overview page."""
     tf = _theater_filter(region)
@@ -359,6 +481,181 @@ def get_adoption_by_region(_conn, start_date, end_date, include_account_coco=Tru
     ORDER BY TOTAL_EACV DESC NULLS LAST
     """
     return _conn.query(query)
+
+_GSI_PARTNERS_SQL = (
+    "'Accenture','Capgemini Technologies LLC','Cognizant Technology Solutions US Corp',"
+    "'Deloitte Consulting','EY','Ernst & Young (EY)','IBM','IBM Consulting'"
+)
+_NOAM_RSI_PARTNERS_SQL = (
+    "'7Rivers, Inc','Aimpoint Digital','BlueCloud Services Inc','kipi.ai','Kipi.ai',"
+    "'evolv Consulting','Infostrux Solutions Inc.','Infosys','KPMG LLP',"
+    "'LTM','LTI Mindtree','phData, Inc.','Slalom, LLC.','Squadron Data Inc','Tredence Inc.',"
+    "'Spaulding Ridge','TEKsystems Global Services, LLC.','Blend360, LLC',"
+    "'Tiger Analytics Inc.','Atrium','Perficient Inc.','SDK Tek Services Ltd.',"
+    "'Merkle','Archetype Consulting','Apex Systems','Tata Consultancy Services',"
+    "'OneSix','Icon Analytics','Sparq Holdings, Inc.','CitiusTech Inc.','Hexaware Technologies'"
+)
+
+_RSI_STAGE_COLS = """
+        COUNT(*)                                                    AS TOTAL_UCS,
+        SUM(CASE WHEN uc.IS_COCO THEN 1 ELSE 0 END)                AS COCO_UCS,
+        ROUND(SUM(CASE WHEN uc.IS_COCO THEN 1 ELSE 0 END) * 100.0
+              / NULLIF(COUNT(*), 0), 1)                             AS COCO_PCT,
+        -- Kept for backward compat (stages 3+4, 5, 6+7)
+        SUM(CASE WHEN uc.USE_CASE_STAGE IN ('3 - Technical / Business Validation','4 - Use Case Won / Migration Plan') AND uc.IS_COCO THEN 1 ELSE 0 END) AS VALIDATION_COCO,
+        SUM(CASE WHEN uc.USE_CASE_STAGE = '5 - Implementation In Progress' AND uc.IS_COCO THEN 1 ELSE 0 END) AS IN_PROGRESS_COCO,
+        SUM(CASE WHEN uc.USE_CASE_STAGE IN ('6 - Implementation Complete','7 - Deployed') AND uc.IS_COCO THEN 1 ELSE 0 END) AS IMPL_COMPLETE_DEPLOYED_COCO,
+        -- Individual stage CoCo counts for funnel view
+        SUM(CASE WHEN uc.USE_CASE_STAGE = '3 - Technical / Business Validation' AND uc.IS_COCO THEN 1 ELSE 0 END) AS S3_COCO,
+        SUM(CASE WHEN uc.USE_CASE_STAGE = '4 - Use Case Won / Migration Plan'   AND uc.IS_COCO THEN 1 ELSE 0 END) AS S4_COCO,
+        SUM(CASE WHEN uc.USE_CASE_STAGE = '5 - Implementation In Progress'      AND uc.IS_COCO THEN 1 ELSE 0 END) AS S5_COCO,
+        SUM(CASE WHEN uc.USE_CASE_STAGE = '6 - Implementation Complete'         AND uc.IS_COCO THEN 1 ELSE 0 END) AS S6_COCO,
+        SUM(CASE WHEN uc.USE_CASE_STAGE = '7 - Deployed'                        AND uc.IS_COCO THEN 1 ELSE 0 END) AS S7_COCO,
+        SUM(CASE WHEN uc.USE_CASE_STAGE = '7 - Deployed' THEN 1 ELSE 0 END)       AS DEPLOYED_ALL,
+        SUM(CASE WHEN uc.USE_CASE_STAGE = '7 - Deployed' AND uc.IS_COCO THEN 1 ELSE 0 END) AS DEPLOYED_COCO,
+        COALESCE(SUM(uc.USE_CASE_EACV), 0)                                         AS TOTAL_EACV,
+        COALESCE(SUM(CASE WHEN uc.IS_COCO THEN uc.USE_CASE_EACV ELSE 0 END), 0)   AS COCO_EACV"""
+
+@st.cache_data(ttl=timedelta(minutes=30))
+def get_gsi_adoption(_conn, start_date: str, end_date: str):
+    """Per-partner CoCo adoption for the 6 GSIs — global scope, aliases merged."""
+    date_filter = f"""(
+        (uc.USE_CASE_STAGE IN ('3 - Technical / Business Validation','4 - Use Case Won / Migration Plan')
+         AND uc.DECISION_DATE >= '{start_date}' AND uc.DECISION_DATE <= '{end_date}')
+        OR (uc.USE_CASE_STAGE IN ('5 - Implementation In Progress','6 - Implementation Complete','7 - Deployed')
+         AND uc.GO_LIVE_DATE >= '{start_date}' AND uc.GO_LIVE_DATE <= '{end_date}')
+    )"""
+    return _conn.query(f"""
+    SELECT
+        CASE
+            WHEN uc.PARTNER_NAME IN ('EY','Ernst & Young (EY)')          THEN 'EY'
+            WHEN uc.PARTNER_NAME IN ('IBM','IBM Consulting')              THEN 'IBM'
+            ELSE uc.PARTNER_NAME
+        END                                                         AS PARTNER_LABEL,
+        {_RSI_STAGE_COLS}
+    FROM {DT_OKR} uc
+    WHERE {date_filter}
+      AND uc.PARTNER_NAME IN ({_GSI_PARTNERS_SQL})
+    GROUP BY PARTNER_LABEL
+    ORDER BY PARTNER_LABEL
+    """)
+
+@st.cache_data(ttl=timedelta(minutes=30))
+def get_noam_rsi_adoption(_conn, start_date: str, end_date: str):
+    """Per-partner CoCo adoption for NOAM RSIs — NoAM theaters only."""
+    date_filter = f"""(
+        (uc.USE_CASE_STAGE IN ('3 - Technical / Business Validation','4 - Use Case Won / Migration Plan')
+         AND uc.DECISION_DATE >= '{start_date}' AND uc.DECISION_DATE <= '{end_date}')
+        OR (uc.USE_CASE_STAGE IN ('5 - Implementation In Progress','6 - Implementation Complete','7 - Deployed')
+         AND uc.GO_LIVE_DATE >= '{start_date}' AND uc.GO_LIVE_DATE <= '{end_date}')
+    )"""
+    return _conn.query(f"""
+    SELECT
+        CASE
+            WHEN uc.PARTNER_NAME IN ('LTM','LTI Mindtree') THEN 'LTM'
+            WHEN uc.PARTNER_NAME IN ('kipi.ai','Kipi.ai')  THEN 'kipi.ai'
+            ELSE uc.PARTNER_NAME
+        END                                                         AS PARTNER_LABEL,
+        {_RSI_STAGE_COLS}
+    FROM {DT_OKR} uc
+    WHERE {date_filter}
+      AND uc.PARTNER_NAME IN ({_NOAM_RSI_PARTNERS_SQL})
+      AND uc.THEATER_NAME IN ('AMSExpansion','USMajors','AMSAcquisition','USPubSec')
+    GROUP BY PARTNER_LABEL
+    ORDER BY TOTAL_UCS DESC
+    """)
+
+@st.cache_data(ttl=timedelta(minutes=30))
+def get_apj_rsi_adoption(_conn, start_date: str, end_date: str):
+    """Per-partner CoCo adoption for the 5 APJ RSIs, each restricted to their assigned REGION_NAME.
+    Returns one row per canonical partner label with IS_COCO-based counts.
+    IS_COCO_FINAL enrichment is applied in Python by the caller via bulk_conf.
+    """
+    date_filter = f"""(
+        (uc.USE_CASE_STAGE IN ('3 - Technical / Business Validation','4 - Use Case Won / Migration Plan')
+         AND uc.DECISION_DATE >= '{start_date}' AND uc.DECISION_DATE <= '{end_date}')
+        OR (uc.USE_CASE_STAGE IN ('5 - Implementation In Progress','6 - Implementation Complete','7 - Deployed')
+         AND uc.GO_LIVE_DATE >= '{start_date}' AND uc.GO_LIVE_DATE <= '{end_date}')
+    )"""
+    return _conn.query(f"""
+    SELECT
+        CASE
+            WHEN uc.PARTNER_NAME = 'NTT DATA Group Corporation'                         THEN 'NTT Data'
+            WHEN uc.PARTNER_NAME = 'MegazoneCloud Corporation'                          THEN 'Megazone'
+            WHEN uc.PARTNER_NAME IN ('Infinite Lambda Limited','Infinite Lambda Inc',
+                                     'INFINITE LAMBDA (SINGAPORE) PTE. LTD.')           THEN 'Infinite Lambda'
+            WHEN uc.PARTNER_NAME IN ('Altis Global Limited','Altis Consulting, ANZ')    THEN 'Altis'
+            WHEN uc.PARTNER_NAME = 'PROLIM Global Corporation'                          THEN 'Prolim'
+        END                                                         AS PARTNER_LABEL,
+        uc.REGION_NAME                                              AS COUNTRY,
+        COUNT(*)                                                    AS TOTAL_UCS,
+        SUM(CASE WHEN uc.IS_COCO THEN 1 ELSE 0 END)                AS COCO_UCS,
+        ROUND(SUM(CASE WHEN uc.IS_COCO THEN 1 ELSE 0 END) * 100.0
+              / NULLIF(COUNT(*), 0), 1)                             AS COCO_PCT,
+        SUM(CASE WHEN uc.USE_CASE_STAGE IN ('3 - Technical / Business Validation','4 - Use Case Won / Migration Plan') AND uc.IS_COCO THEN 1 ELSE 0 END) AS VALIDATION_COCO,
+        SUM(CASE WHEN uc.USE_CASE_STAGE = '5 - Implementation In Progress' AND uc.IS_COCO THEN 1 ELSE 0 END) AS IN_PROGRESS_COCO,
+        SUM(CASE WHEN uc.USE_CASE_STAGE IN ('6 - Implementation Complete','7 - Deployed') AND uc.IS_COCO THEN 1 ELSE 0 END) AS IMPL_COMPLETE_DEPLOYED_COCO,
+        SUM(CASE WHEN uc.USE_CASE_STAGE = '7 - Deployed' THEN 1 ELSE 0 END)       AS DEPLOYED_ALL,
+        SUM(CASE WHEN uc.USE_CASE_STAGE = '7 - Deployed' AND uc.IS_COCO THEN 1 ELSE 0 END) AS DEPLOYED_COCO,
+        COALESCE(SUM(uc.USE_CASE_EACV), 0)                                         AS TOTAL_EACV,
+        COALESCE(SUM(CASE WHEN uc.IS_COCO THEN uc.USE_CASE_EACV ELSE 0 END), 0)   AS COCO_EACV
+    FROM {DT_OKR} uc
+    WHERE {date_filter}
+      AND (
+          (uc.PARTNER_NAME = 'NTT DATA Group Corporation'                          AND uc.REGION_NAME = 'Japan')
+          OR (uc.PARTNER_NAME = 'MegazoneCloud Corporation'                        AND uc.REGION_NAME = 'Korea')
+          OR (uc.PARTNER_NAME IN ('Infinite Lambda Limited','Infinite Lambda Inc',
+                                  'INFINITE LAMBDA (SINGAPORE) PTE. LTD.')         AND uc.REGION_NAME = 'ASEAN')
+          OR (uc.PARTNER_NAME IN ('Altis Global Limited','Altis Consulting, ANZ')  AND uc.REGION_NAME = 'ANZ')
+          OR (uc.PARTNER_NAME = 'PROLIM Global Corporation'                        AND uc.REGION_NAME = 'India')
+      )
+    GROUP BY PARTNER_LABEL, uc.REGION_NAME
+    ORDER BY PARTNER_LABEL
+    """)
+
+@st.cache_data(ttl=timedelta(minutes=30))
+def get_emea_rsi_adoption(_conn, start_date: str, end_date: str):
+    """Per-partner CoCo adoption for the 4 EMEA RSIs, each restricted to their assigned REGION_NAME.
+    Infomotion→CentralEMEA | Civica→SouthEMEA | Kubrick→UK | KPC→SouthEMEA
+    """
+    date_filter = f"""(
+        (uc.USE_CASE_STAGE IN ('3 - Technical / Business Validation','4 - Use Case Won / Migration Plan')
+         AND uc.DECISION_DATE >= '{start_date}' AND uc.DECISION_DATE <= '{end_date}')
+        OR (uc.USE_CASE_STAGE IN ('5 - Implementation In Progress','6 - Implementation Complete','7 - Deployed')
+         AND uc.GO_LIVE_DATE >= '{start_date}' AND uc.GO_LIVE_DATE <= '{end_date}')
+    )"""
+    return _conn.query(f"""
+    SELECT
+        CASE
+            WHEN uc.PARTNER_NAME ILIKE '%Infomotion%'  THEN 'Infomotion'
+            WHEN uc.PARTNER_NAME ILIKE '%Civica%'      THEN 'Civica'
+            WHEN uc.PARTNER_NAME ILIKE '%Kubrick%'     THEN 'Kubrick'
+            WHEN uc.PARTNER_NAME ILIKE '%KPC%'         THEN 'KPC'
+        END                                                         AS PARTNER_LABEL,
+        uc.REGION_NAME                                              AS COUNTRY,
+        COUNT(*)                                                    AS TOTAL_UCS,
+        SUM(CASE WHEN uc.IS_COCO THEN 1 ELSE 0 END)                AS COCO_UCS,
+        ROUND(SUM(CASE WHEN uc.IS_COCO THEN 1 ELSE 0 END) * 100.0
+              / NULLIF(COUNT(*), 0), 1)                             AS COCO_PCT,
+        SUM(CASE WHEN uc.USE_CASE_STAGE IN ('3 - Technical / Business Validation','4 - Use Case Won / Migration Plan') AND uc.IS_COCO THEN 1 ELSE 0 END) AS VALIDATION_COCO,
+        SUM(CASE WHEN uc.USE_CASE_STAGE = '5 - Implementation In Progress' AND uc.IS_COCO THEN 1 ELSE 0 END) AS IN_PROGRESS_COCO,
+        SUM(CASE WHEN uc.USE_CASE_STAGE IN ('6 - Implementation Complete','7 - Deployed') AND uc.IS_COCO THEN 1 ELSE 0 END) AS IMPL_COMPLETE_DEPLOYED_COCO,
+        SUM(CASE WHEN uc.USE_CASE_STAGE = '7 - Deployed' THEN 1 ELSE 0 END)       AS DEPLOYED_ALL,
+        SUM(CASE WHEN uc.USE_CASE_STAGE = '7 - Deployed' AND uc.IS_COCO THEN 1 ELSE 0 END) AS DEPLOYED_COCO,
+        COALESCE(SUM(uc.USE_CASE_EACV), 0)                                         AS TOTAL_EACV,
+        COALESCE(SUM(CASE WHEN uc.IS_COCO THEN uc.USE_CASE_EACV ELSE 0 END), 0)   AS COCO_EACV
+    FROM {DT_OKR} uc
+    WHERE {date_filter}
+      AND (
+          (uc.PARTNER_NAME ILIKE '%Infomotion%' AND uc.REGION_NAME = 'CentralEMEA')
+          OR (uc.PARTNER_NAME ILIKE '%Civica%'  AND uc.REGION_NAME = 'SouthEMEA')
+          OR (uc.PARTNER_NAME ILIKE '%Kubrick%' AND uc.REGION_NAME = 'UK')
+          OR (uc.PARTNER_NAME ILIKE '%KPC%'     AND uc.REGION_NAME = 'SouthEMEA')
+      )
+    GROUP BY PARTNER_LABEL, uc.REGION_NAME
+    ORDER BY PARTNER_LABEL
+    """)
+
 @st.cache_data(ttl=timedelta(minutes=30))
 def get_okr_coco_adoption(_conn, quarter_start, quarter_end, region=None, include_account_coco=True, confidence=None):
     tf = _theater_filter(region)
@@ -917,7 +1214,7 @@ def _confidence_scored_query(partner_filter_sql, start_date, end_date):
     WITH partner_ucs AS (
         SELECT uc.USE_CASE_ID, uc.USE_CASE_NAME, uc.ACCOUNT_NAME, UPPER(uc.ACCOUNT_NAME) AS ACCOUNT_NAME_UPPER,
             uc.PARTNER_NAME, uc.TECHNICAL_USE_CASE, uc.USE_CASE_STAGE,
-            uc.USE_CASE_EACV, uc.IS_COCO, uc.COCO_SOURCE, uc.THEATER_NAME,
+            uc.USE_CASE_EACV, uc.IS_COCO, uc.COCO_SOURCE, uc.THEATER_NAME, uc.REGION_NAME,
             CASE
                 WHEN uc.TECHNICAL_USE_CASE ILIKE '%AI:%' THEN 'AI'
                 WHEN uc.TECHNICAL_USE_CASE ILIKE '%Analytics:%' THEN 'Analytics'
@@ -1037,7 +1334,8 @@ def _confidence_scored_query(partner_filter_sql, start_date, end_date):
             ROUND(SUM(COALESCE(UI_TOKEN_CREDITS, 0)), 2)                               AS UI_CREDITS,
             SUM(COALESCE(UI_TOTAL_TOKENS, 0))                                          AS UI_TOKENS,
             SUM(COALESCE(UI_DAILY_REQUESTS, 0))                                        AS UI_REQUESTS,
-            SUM(COALESCE(UI_CODING_AGENT_REQUESTS, 0))                                 AS AGENT_REQUESTS
+            SUM(COALESCE(UI_CODING_AGENT_REQUESTS, 0))                                 AS AGENT_REQUESTS,
+            SUM(COALESCE(UI_REASONING_AGENT_REQUESTS, 0))                              AS REASONING_AGENT_REQUESTS
         FROM SNOWSCIENCE.LLM.CORTEX_CODE_USER_DAY_FACT
         WHERE SNOWFLAKE_ACCOUNT_TYPE = 'Customer'
         AND TOTAL_DAILY_REQUESTS > 0
@@ -1072,6 +1370,7 @@ def _confidence_scored_query(partner_filter_sql, start_date, end_date):
             COALESCE(ac.UI_TOKENS, 0)       AS UI_TOKENS,
             COALESCE(ac.UI_REQUESTS, 0)     AS UI_REQUESTS,
             COALESCE(ac.AGENT_REQUESTS, 0)  AS AGENT_REQUESTS,
+            COALESCE(ac.REASONING_AGENT_REQUESTS, 0) AS REASONING_AGENT_REQUESTS,
             CASE WHEN CASE WHEN uc.WORKLOAD_CATEGORY = 'AI' THEN COALESCE(rb.ai_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Analytics' THEN COALESCE(rb.analytics_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Data Engineering' THEN COALESCE(rb.de_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Platform' THEN COALESCE(rb.platform_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Apps & Collab' THEN COALESCE(rb.app_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Migration' THEN COALESCE(rb.migration_skill_count, 0) ELSE 0 END >= 50 THEN 30 WHEN CASE WHEN uc.WORKLOAD_CATEGORY = 'AI' THEN COALESCE(rb.ai_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Analytics' THEN COALESCE(rb.analytics_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Data Engineering' THEN COALESCE(rb.de_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Platform' THEN COALESCE(rb.platform_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Apps & Collab' THEN COALESCE(rb.app_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Migration' THEN COALESCE(rb.migration_skill_count, 0) ELSE 0 END >= 10 THEN 20 WHEN CASE WHEN uc.WORKLOAD_CATEGORY = 'AI' THEN COALESCE(rb.ai_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Analytics' THEN COALESCE(rb.analytics_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Data Engineering' THEN COALESCE(rb.de_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Platform' THEN COALESCE(rb.platform_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Apps & Collab' THEN COALESCE(rb.app_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Migration' THEN COALESCE(rb.migration_skill_count, 0) ELSE 0 END >= 1 THEN 10 ELSE 0 END AS S1_SCORE,
             CASE WHEN CASE WHEN uc.WORKLOAD_CATEGORY = 'AI' THEN COALESCE(cs.ai_custom_skills, 0) WHEN uc.WORKLOAD_CATEGORY = 'Analytics' THEN COALESCE(cs.analytics_custom_skills, 0) WHEN uc.WORKLOAD_CATEGORY = 'Data Engineering' THEN COALESCE(cs.de_custom_skills, 0) WHEN uc.WORKLOAD_CATEGORY = 'Platform' THEN COALESCE(cs.platform_custom_skills, 0) WHEN uc.WORKLOAD_CATEGORY = 'Apps & Collab' THEN COALESCE(cs.app_custom_skills, 0) WHEN uc.WORKLOAD_CATEGORY = 'Migration' THEN COALESCE(cs.migration_custom_skills, 0) ELSE 0 END >= 3 THEN 35 WHEN CASE WHEN uc.WORKLOAD_CATEGORY = 'AI' THEN COALESCE(cs.ai_custom_skills, 0) WHEN uc.WORKLOAD_CATEGORY = 'Analytics' THEN COALESCE(cs.analytics_custom_skills, 0) WHEN uc.WORKLOAD_CATEGORY = 'Data Engineering' THEN COALESCE(cs.de_custom_skills, 0) WHEN uc.WORKLOAD_CATEGORY = 'Platform' THEN COALESCE(cs.platform_custom_skills, 0) WHEN uc.WORKLOAD_CATEGORY = 'Apps & Collab' THEN COALESCE(cs.app_custom_skills, 0) WHEN uc.WORKLOAD_CATEGORY = 'Migration' THEN COALESCE(cs.migration_custom_skills, 0) ELSE 0 END >= 1 THEN 25 WHEN COALESCE(cs.custom_skill_count, 0) >= 10 THEN 15 WHEN COALESCE(cs.custom_skill_count, 0) >= 1 THEN 8 ELSE 0 END AS S2_SCORE,
             CASE WHEN COALESCE(tu.total_tool_invocations, 0) >= 50000 THEN 20 WHEN COALESCE(tu.total_tool_invocations, 0) >= 10000 THEN 15 WHEN COALESCE(tu.total_tool_invocations, 0) >= 1000 THEN 10 WHEN COALESCE(tu.total_tool_invocations, 0) >= 1 THEN 5 WHEN COALESCE(pu.total_requests, 0) >= 1000 THEN 5 WHEN COALESCE(pu.total_requests, 0) >= 1 THEN 3 ELSE 0 END AS S3_SCORE,

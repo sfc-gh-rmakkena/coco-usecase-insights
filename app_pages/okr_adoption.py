@@ -16,15 +16,16 @@ confidence_filter = st.session_state.get("confidence_filter", ["High"])
 confidence = 'High' if confidence_filter == ['High'] else ('Medium' if confidence_filter else None)
 
 st.title(":material/check_circle: OKR: CoCo Adoption per Partner")
-st.caption(f"Track 50% CoCo attachment target for partner use cases (Stages 3-7) | Region: {region} | {start_date} to {end_date}")
 
-TARGET_PCT = 50
+TARGET_PCT = 75
 
-f1, f2 = st.columns([1, 1])
-with f1:
-    target = st.number_input("Target %", min_value=10, max_value=100, value=TARGET_PCT, step=5, key="okr_target")
-with f2:
-    min_use_cases = st.number_input("Min Use Cases", min_value=1, max_value=20, value=2, step=1, key="okr_min_uc")
+# Auto-set target based on region: EMEA/APJ → 50%, all others → 75%
+_apj_emea_regions = {'EMEA', 'APJ', 'Korea', 'Japan', 'ASEAN', 'ANZ', 'India',
+                     'CentralEMEA', 'SouthEMEA', 'NorthEMEA', 'UK', 'META', 'EMEACommercial'}
+target = 50 if region in _apj_emea_regions else TARGET_PCT
+min_use_cases = 1
+
+st.caption(f"Track CoCo attachment target for partner use cases (Stages 3-7) | Region: {region} | {start_date} to {end_date}")
 
 q_start = str(start_date)
 q_end = str(end_date)
@@ -59,6 +60,10 @@ if include_account_coco:
 
         # Merge partner aliases (IBM Consulting→IBM, EY aliases, etc.) before groupby
         bulk_conf['PARTNER_NAME'] = bulk_conf['PARTNER_NAME'].replace(PARTNER_RENAME_MAP)
+        # Apply stage filter from sidebar
+        _sel_stages = st.session_state.get('selected_stages', [])
+        if _sel_stages and 'USE_CASE_STAGE' in bulk_conf.columns:
+            bulk_conf = bulk_conf[bulk_conf['USE_CASE_STAGE'].isin(_sel_stages)]
         bands = confidence_filter if confidence_filter else ['High', 'Medium', 'Low']
         bulk_conf['IS_COCO_FINAL'] = (
             (bulk_conf['IS_COCO'] == True) |
@@ -158,7 +163,7 @@ if include_account_coco:
             ).reset_index()
             _agg['non_coco_use_cases'] = _agg['total_use_cases'] - _agg['coco_use_cases']
             _agg['coco_pct'] = round(_agg['coco_use_cases'] * 100.0 / _agg['total_use_cases'].replace(0, float('nan')), 1).fillna(0)
-            _agg['MEETS_TARGET'] = _agg['coco_pct'] >= 50
+            _agg['MEETS_TARGET'] = _agg['coco_pct'] >= target
             base_summary = _agg
         summary = base_summary
         bulk_conf = pd.DataFrame()
@@ -220,68 +225,6 @@ c4.metric("Overall CoCo %", f"{overall_pct}%", wow_coco_pct_delta if wow_coco_pc
 c5.metric("CoCo Use Cases", f"{int(overall_coco)}/{int(overall_total)}", wow_coco_ucs_delta,
     help=f"Total IS_COCO_FINAL use cases vs total tracked")
 c6.metric("Total EACV", f"${filtered['TOTAL_EACV'].sum()/1_000_000:.1f}M")
-
-st.divider()
-
-# --- Gauge + Attribution (from Coverage page) ---
-gauge_col, pie_col = st.columns(2)
-with gauge_col:
-    st.subheader("Overall CoCo Adoption")
-    fig = go.Figure(go.Indicator(
-        mode="gauge+number+delta",
-        value=overall_pct,
-        delta={'reference': target, 'suffix': '%'},
-        gauge={
-            'axis': {'range': [0, 100], 'ticksuffix': '%'},
-            'bar': {'color': '#29B5E8'},
-            'steps': [
-                {'range': [0, 20],  'color': 'rgba(231,76,60,0.2)'},
-                {'range': [20, 40], 'color': 'rgba(243,156,18,0.2)'},
-                {'range': [40, 60], 'color': 'rgba(241,196,15,0.2)'},
-                {'range': [60, 100],'color': 'rgba(46,204,113,0.2)'},
-            ],
-            'threshold': {'line': {'color': 'red', 'width': 3}, 'thickness': 0.8, 'value': target}
-        },
-        number={'suffix': '%'},
-        title={'text': f"CoCo % (Target: {target}%)"}
-    ))
-    fig.update_layout(height=300)
-    st.plotly_chart(fig, use_container_width=True)
-
-with pie_col:
-    st.subheader("Use Case Split by Attribution")
-    if len(bulk_conf) > 0:
-        bands = confidence_filter if confidence_filter else ['High', 'Medium', 'Low']
-        se   = int(((bulk_conf['IS_COCO'] == True) & (bulk_conf['COCO_SOURCE'] == 'SE_COMMENTS')).sum())
-        pse  = int(((bulk_conf['IS_COCO'] == True) & (bulk_conf['COCO_SOURCE'] == 'PARTNER_COMMENTS')).sum())
-        flag = int(((bulk_conf['IS_COCO'] == True) & (bulk_conf['COCO_SOURCE'] == 'FEATURE_FLAG')).sum())
-        acct = int(bulk_conf['CONFIDENCE_BAND'].isin(bands).sum())
-        not_coco = int((~bulk_conf['IS_COCO_FINAL']).sum())
-        conf_desc_pie = 'High' if confidence_filter == ['High'] else 'High + Medium' if confidence_filter else 'All account-level'
-        labels = [f'Account ({conf_desc_pie})', 'SE Comments', 'PSE Comments', 'Feature Flag', 'Not CoCo']
-        values = [acct, se, pse, flag, not_coco]
-        colors = ['#3498db', '#2ecc71', '#f39c12', '#9b59b6', '#e0e0e0']
-        filtered_slices = [(l, v, c) for l, v, c in zip(labels, values, colors) if v > 0]
-        fig = go.Figure(data=[go.Pie(
-            labels=[f[0] for f in filtered_slices],
-            values=[f[1] for f in filtered_slices],
-            marker_colors=[f[2] for f in filtered_slices],
-            hole=0.5,
-            textinfo='label+value+percent'
-        )])
-        fig.update_layout(height=300)
-        st.plotly_chart(fig, use_container_width=True)
-    else:
-        # Target Achievement fallback
-        fig = go.Figure(data=[go.Pie(
-            labels=[f"Meeting {target}%", f"Below {target}%"],
-            values=[int(meeting_target), int(not_meeting)],
-            marker_colors=['#2ecc71', '#e74c3c'],
-            hole=0.5
-        )])
-        fig.update_layout(height=300)
-        fig.add_annotation(text=f"{round(meeting_target*100/total_partners)}%", x=0.5, y=0.5, font_size=28, showarrow=False)
-        st.plotly_chart(fig, use_container_width=True)
 
 st.divider()
 
@@ -636,6 +579,64 @@ if len(_hm_pairs) > 0:
 else:
     st.info("Enable 'Account Level CoCo' and select partners to see IS_COCO_FINAL consumption trend.")
 
+# --- Surface Adoption Donut (CLI / Desktop / UI) ---
+st.divider()
+st.subheader("CoCo Surface Adoption Breakdown")
+if 'CLI_CREDITS' in summary.columns and summary['CLI_CREDITS'].notna().any():
+    _surf_credits = {
+        'CLI':     float(summary['CLI_CREDITS'].fillna(0).sum()),
+        'Desktop': float(summary['DESKTOP_CREDITS'].fillna(0).sum()),
+        'UI':      float(summary['UI_CREDITS'].fillna(0).sum()),
+    }
+    _surf_tokens = {
+        'CLI':     float(summary['CLI_TOKENS'].fillna(0).sum()) if 'CLI_TOKENS' in summary.columns else 0,
+        'Desktop': float(summary['DESKTOP_TOKENS'].fillna(0).sum()) if 'DESKTOP_TOKENS' in summary.columns else 0,
+        'UI':      float(summary['UI_TOKENS'].fillna(0).sum()) if 'UI_TOKENS' in summary.columns else 0,
+    }
+    _surf_colors = ['#29B5E8', '#11567F', '#75C2E2']
+
+    def _make_surface_donut(values_dict, title, center_label):
+        labels = list(values_dict.keys())
+        values = list(values_dict.values())
+        fig = go.Figure(go.Pie(
+            labels=labels,
+            values=values,
+            hole=0.55,
+            marker_colors=_surf_colors,
+            textinfo='label+percent',
+            hovertemplate='%{label}: %{value:,.0f} (%{percent})<extra></extra>',
+        ))
+        fig.update_layout(
+            title=dict(text=title, x=0.5, xanchor='center', font=dict(size=14)),
+            annotations=[dict(text=center_label, x=0.5, y=0.5, font_size=15, showarrow=False, font_color='#333')],
+            legend=dict(orientation='h', yanchor='bottom', y=-0.2, xanchor='center', x=0.5),
+            height=340,
+            margin=dict(t=55, b=65, l=20, r=20),
+        )
+        return fig
+
+    def _fmt_surf_tokens(t):
+        if t >= 1_000_000: return f"{t/1_000_000:.1f}M tok"
+        if t >= 1_000: return f"{t/1_000:.0f}K tok"
+        return f"{t:,.0f} tok"
+
+    _total_cred = sum(_surf_credits.values())
+    _total_tok  = sum(_surf_tokens.values())
+    _donut_col1, _donut_col2 = st.columns(2)
+    with _donut_col1:
+        st.plotly_chart(
+            _make_surface_donut(_surf_credits, "CoCo Credits by Surface", f"${_total_cred:,.0f}"),
+            use_container_width=True
+        )
+    with _donut_col2:
+        st.plotly_chart(
+            _make_surface_donut(_surf_tokens, "CoCo Tokens by Surface", _fmt_surf_tokens(_total_tok)),
+            use_container_width=True
+        )
+    st.caption("Surface breakdown across all IS_COCO_FINAL accounts. CLI = terminal, Desktop = VS Code extension, UI = Snowsight web.")
+else:
+    st.info("Surface breakdown unavailable. Enable 'Account Level CoCo' in the sidebar.")
+
 st.divider()
 
 st.subheader("Partner Deep Dive")
@@ -675,6 +676,11 @@ if selected_partner:
                         parts.append('Feature Flag')
                     return ' | '.join(parts)
                 partner_detail['ATTRIBUTION_FLAGS'] = partner_detail.apply(_rebuild_flags, axis=1)
+
+        # Apply stage filter from sidebar to partner detail UCs
+        _sel_stages = st.session_state.get('selected_stages', [])
+        if _sel_stages and 'USE_CASE_STAGE' in partner_detail.columns:
+            partner_detail = partner_detail[partner_detail['USE_CASE_STAGE'].isin(_sel_stages)]
 
         p_stats = filtered_sorted[filtered_sorted['PARTNER_NAME'] == selected_partner].iloc[0]
         coco_pct = p_stats['COCO_PCT']
@@ -725,18 +731,23 @@ if selected_partner:
             )
             _tok_delta  = (f"{_fmt_delta_tok(_dtok)}  ({_twow:+.1f}%)"
                            if (_dtok is not None and _twow is not None) else None)
-            _sep = "\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500"
+            _sep = "\n─────────────────────────────────────────"
+            _stage_note = (
+                f"\nStage filter: {', '.join([s.split(' - ')[0] for s in _sel_stages])}"
+                if _sel_stages else "\nStage filter: All stages"
+            )
 
             cr1, cr2, cr3, cr4 = st.columns(4)
 
             cr1.metric("Q2 CoCo Credits",
                 f"${float(_ps['Q2_CREDITS']):,.0f}" if pd.notna(_ps.get('Q2_CREDITS')) else "N/A",
-                help=(f"Q2 Credit Spend \u2014 IS_COCO_FINAL Accounts{_sep}\n"
-                      f"Period:   May 1, 2026 \u2013 today\n"
+                help=(f"Q2 Credit Spend — IS_COCO_FINAL Accounts{_sep}\n"
+                      f"Period:   May 1, 2026 – today\n"
                       f"Last 7d:  ${_l7c:,.0f}\n"
                       f"Prior 7d: ${_p7c:,.0f}\n"
-                      f"WoW \u0394:    {_fmt_delta_cred(_dcred)}\n"
-                      f"WoW%:     {_cwow:+.1f}%") if _l7c else
+                      f"WoW Δ:    {_fmt_delta_cred(_dcred)}\n"
+                      f"WoW%:     {_cwow:+.1f}%"
+                      f"{_stage_note}") if _l7c else
                      "Q2 cumulative credit spend on IS_COCO_FINAL accounts")
 
             cr2.metric("Credits This Week",
@@ -757,7 +768,8 @@ if selected_partner:
                       f"Last 7d:  {_fmt_tok(_l7t)}\n"
                       f"Prior 7d: {_fmt_tok(_p7t)}\n"
                       f"WoW \u0394:    {_fmt_delta_tok(_dtok)}\n"
-                      f"WoW%:     {_twow:+.1f}%") if _l7t else
+                      f"WoW%:     {_twow:+.1f}%"
+                      f"{_stage_note}") if _l7t else
                      "Q2 cumulative token usage on IS_COCO_FINAL accounts")
 
             cr4.metric("Tokens This Week",
@@ -941,3 +953,23 @@ st.divider()
 st.divider()
 st.caption(f"OKR Target: {target}% of use cases in Stages 3-7 should have CoCo attached | {start_date} to {end_date} | Min UCs: {min_use_cases}")
 st.caption("CoCo detection: SE Comments (coco/cortex code) OR Partner Comments (#coco) OR Feature Flag (AI - Cortex Code) OR CoCo Account Level Usage")
+
+st.divider()
+st.subheader("CoCo Detection Source Breakdown")
+_conf_desc = 'High' if confidence_filter == ['High'] else 'High + Medium' if confidence_filter else 'All account-level'
+if len(bulk_conf) > 0 and 'IS_COCO_FINAL' in bulk_conf.columns:
+    _coco_bc = bulk_conf[bulk_conf['IS_COCO_FINAL']]
+    _se_count      = int((_coco_bc.get('COCO_SOURCE', pd.Series()) == 'SE_COMMENTS').sum())
+    _partner_count = int((_coco_bc.get('COCO_SOURCE', pd.Series()) == 'PARTNER_COMMENTS').sum())
+    _ff_count      = int((_coco_bc.get('COCO_SOURCE', pd.Series()) == 'FEATURE_FLAG').sum())
+    _acct_bands    = confidence_filter if confidence_filter else ['High', 'Medium', 'Low']
+    _acct_count    = int(bulk_conf['CONFIDENCE_BAND'].isin(_acct_bands).sum()) if 'CONFIDENCE_BAND' in bulk_conf.columns else 0
+    _src_c1, _src_c2 = st.columns(2)
+    with _src_c1:
+        st.metric(":material/chat: SE Comments",          _se_count)
+        st.metric(":material/handshake: Partner Comments", _partner_count)
+    with _src_c2:
+        st.metric(":material/flag: Feature Flag",          _ff_count)
+        st.metric(f":material/cloud: Account-Level ({_conf_desc})", _acct_count)
+else:
+    st.info("Detection source data not available.")

@@ -52,6 +52,10 @@ if include_account_coco and len(coverage) > 0:
                 bulk_conf = bulk_conf[bulk_conf['THEATER_NAME'].isin(_theaters)]
         # Merge partner aliases (IBM Consulting→IBM, EY aliases, etc.) before groupby
         bulk_conf['PARTNER_NAME'] = bulk_conf['PARTNER_NAME'].replace(PARTNER_RENAME_MAP)
+        # Apply stage filter from sidebar
+        _sel_stages = st.session_state.get('selected_stages', [])
+        if _sel_stages and 'USE_CASE_STAGE' in bulk_conf.columns:
+            bulk_conf = bulk_conf[bulk_conf['USE_CASE_STAGE'].isin(_sel_stages)]
         bands = confidence_filter if confidence_filter else ['High', 'Medium', 'Low']
         bulk_conf['IS_COCO_FINAL'] = (
             (bulk_conf['IS_COCO'] == True) |

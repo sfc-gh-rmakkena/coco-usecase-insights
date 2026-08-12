@@ -108,24 +108,65 @@ PARTNER_ALIASES = {
         'Cognizant Technology Solutions US Corp', 'Deloitte Consulting',
         'EY', 'Ernst & Young (EY)', 'IBM', 'IBM Consulting'
     ],
-    '--- Regional SIs ---': [
+    '--- NOAM RSIs ---': [
+        # Former Regional SIs
         '7Rivers, Inc', 'Aimpoint Digital', 'BlueCloud Services Inc',
         'kipi.ai', 'Kipi.ai',
         'evolv Consulting', 'Infostrux Solutions Inc.', 'Infosys', 'KPMG LLP',
-        'LTM', 'LTI Mindtree', 'NTT DATA Group Corporation', 'phData, Inc.',
-        'Slalom, LLC.', 'Squadron Data Inc', 'Tredence Inc.'
-    ],
-    '--- PSE Managed Partners ---': [
+        'LTM', 'LTI Mindtree', 'phData, Inc.',
+        'Slalom, LLC.', 'Squadron Data Inc', 'Tredence Inc.',
+        # Former PSE Managed Partners
         'Spaulding Ridge', 'TEKsystems Global Services, LLC.', 'Blend360, LLC',
         'Tiger Analytics Inc.', 'Atrium', 'Perficient Inc.', 'SDK Tek Services Ltd.',
         'Merkle', 'Archetype Consulting', 'Apex Systems', 'Tata Consultancy Services',
         'OneSix', 'Icon Analytics', 'Sparq Holdings, Inc.', 'CitiusTech Inc.',
         'Hexaware Technologies',
     ],
+    '--- APJ RSIs ---': [
+        'NTT DATA Group Corporation',       # Japan
+        'MegazoneCloud Corporation',         # Korea
+        'Infinite Lambda Limited',           # ASEAN
+        'Infinite Lambda Inc',               # ASEAN (alias)
+        'INFINITE LAMBDA (SINGAPORE) PTE. LTD.',  # ASEAN (alias)
+        'Altis Global Limited',              # ANZ
+        'Altis Consulting, ANZ',             # ANZ (alias)
+        'PROLIM Global Corporation',         # India
+    ],
+    '--- EMEA RSIs ---': [
+        'INFOMOTION GMBH',                   # CentralEMEA
+        'INFOMOTION GMBH, BearingPoint',     # CentralEMEA (alias)
+        'CIVICA SOFTWARE, S.L.',             # SouthEMEA (Spain)
+        'Kubrick Group',                     # UK
+        'KPC (Key Performance Consulting)',  # SouthEMEA (France)
+        'KPC',                               # SouthEMEA (alias)
+    ],
 }
 
 # Group options to show at top of multiselect
-PARTNER_GROUPS = ['--- GSIs ---', '--- Regional SIs ---', '--- PSE Managed Partners ---']
+PARTNER_GROUPS = ['--- GSIs ---', '--- NOAM RSIs ---', '--- APJ RSIs ---', '--- EMEA RSIs ---']
+
+# Per-partner country restriction for APJ RSIs (REGION_NAME in DT_OKR / MDM)
+# Key = canonical DT_OKR PARTNER_NAME, Value = (display_label, REGION_NAME)
+APJ_RSI_REGION_MAP = {
+    'NTT DATA Group Corporation':               ('NTT Data',          'Japan'),
+    'MegazoneCloud Corporation':                ('Megazone',          'Korea'),
+    'Infinite Lambda Limited':                  ('Infinite Lambda',   'ASEAN'),
+    'Infinite Lambda Inc':                      ('Infinite Lambda',   'ASEAN'),
+    'INFINITE LAMBDA (SINGAPORE) PTE. LTD.':   ('Infinite Lambda',   'ASEAN'),
+    'Altis Global Limited':                     ('Altis',             'ANZ'),
+    'Altis Consulting, ANZ':                    ('Altis',             'ANZ'),
+    'PROLIM Global Corporation':                ('Prolim',            'India'),
+}
+
+# Per-partner country restriction for EMEA RSIs (REGION_NAME in DT_OKR)
+EMEA_RSI_REGION_MAP = {
+    'INFOMOTION GMBH':                      ('Infomotion',  'CentralEMEA'),
+    'INFOMOTION GMBH, BearingPoint':        ('Infomotion',  'CentralEMEA'),
+    'CIVICA SOFTWARE, S.L.':               ('Civica',      'SouthEMEA'),
+    'Kubrick Group':                        ('Kubrick',     'UK'),
+    'KPC (Key Performance Consulting)':     ('KPC',         'SouthEMEA'),
+    'KPC':                                  ('KPC',         'SouthEMEA'),
+}
 
 # Flat alias→canonical map for DataFrame PARTNER_NAME .replace() operations
 # Derived from PARTNER_ALIASES: each non-group entry's aliases beyond the first
