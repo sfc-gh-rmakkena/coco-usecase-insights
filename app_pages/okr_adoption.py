@@ -385,200 +385,6 @@ st.dataframe(
 )
 st.caption("Attribution columns may overlap — a use case can have both account-level usage AND comments.")
 
-# --- 4-Week Per-Partner Heatmap: IS_COCO_FINAL Credits & Tokens ---
-st.divider()
-st.subheader("CoCo Consumption Trend — Last 4 Weeks (IS_COCO_FINAL)")
-
-# Build IS_COCO_FINAL account list from bulk_conf (avoids re-running scoring)
-_hm_pairs = tuple()
-if len(bulk_conf) > 0 and 'IS_COCO_FINAL' in bulk_conf.columns and 'ACCOUNT_NAME_UPPER' in bulk_conf.columns:
-    _hm_coco_final = (
-        bulk_conf[bulk_conf['IS_COCO_FINAL']]
-        .pipe(filter_out_partner_own_accounts)
-        .drop_duplicates(subset=['PARTNER_NAME', 'ACCOUNT_NAME_UPPER'])
-        [['PARTNER_NAME', 'ACCOUNT_NAME_UPPER']]
-    )
-    # Respect sidebar partner filter
-    if len(filtered) > 0:
-        _hm_coco_final = _hm_coco_final[_hm_coco_final['PARTNER_NAME'].isin(filtered['PARTNER_NAME'])]
-    _hm_pairs = tuple(zip(_hm_coco_final['PARTNER_NAME'], _hm_coco_final['ACCOUNT_NAME_UPPER']))
-
-if len(_hm_pairs) > 0:
-    try:
-        # --- Build Last7 + Prior7 directly from bulk_conf (same cache as Deep Dive header)
-        # This guarantees heatmap Last7/Prior7 = Deep Dive header EXACTLY
-        import datetime as _dt
-        _today = _dt.date.today()
-        _l7_label  = f"{(_today - _dt.timedelta(days=7)).strftime('%m/%d')}-{(_today - _dt.timedelta(days=1)).strftime('%m/%d')}"
-        _p7_label  = f"{(_today - _dt.timedelta(days=14)).strftime('%m/%d')}-{(_today - _dt.timedelta(days=8)).strftime('%m/%d')}"
-
-        _hm_bulk = (
-            bulk_conf[bulk_conf['IS_COCO_FINAL']]
-            .pipe(filter_out_partner_own_accounts)
-            .drop_duplicates(subset=['PARTNER_NAME', 'ACCOUNT_NAME_UPPER'])
-            .copy()
-        )
-        if len(filtered) > 0:
-            _hm_bulk = _hm_bulk[_hm_bulk['PARTNER_NAME'].isin(filtered['PARTNER_NAME'])]
-
-        for _c in ['LAST7_CREDITS','PRIOR7_CREDITS','LAST7_TOKENS','PRIOR7_TOKENS']:
-            if _c in _hm_bulk.columns:
-                _hm_bulk[_c] = pd.to_numeric(_hm_bulk[_c], errors='coerce').fillna(0.0)
-
-        _last7_cred  = _hm_bulk.groupby('PARTNER_NAME')['LAST7_CREDITS'].sum().reset_index().rename(columns={'LAST7_CREDITS':  _l7_label})
-        _prior7_cred = _hm_bulk.groupby('PARTNER_NAME')['PRIOR7_CREDITS'].sum().reset_index().rename(columns={'PRIOR7_CREDITS': _p7_label})
-        _last7_tok   = _hm_bulk.groupby('PARTNER_NAME')['LAST7_TOKENS'].sum().reset_index().rename(columns={'LAST7_TOKENS':   _l7_label})
-        _prior7_tok  = _hm_bulk.groupby('PARTNER_NAME')['PRIOR7_TOKENS'].sum().reset_index().rename(columns={'PRIOR7_TOKENS':  _p7_label})
-
-        # --- Older periods (14-28d) from Snowflake query — separate TTL is fine since these don't appear in Deep Dive
-        _hm_older = get_partner_surface_trend_4w(conn, _hm_pairs)
-        _hm_older_cred = pd.DataFrame({'PARTNER_NAME': pd.Series(dtype=str)})
-        _hm_older_tok  = pd.DataFrame({'PARTNER_NAME': pd.Series(dtype=str)})
-        _older_labels  = []
-
-        if len(_hm_older) > 0:
-            for _c in ['WEEKLY_CREDITS', 'WEEKLY_TOKENS']:
-                if _c in _hm_older.columns:
-                    _hm_older[_c] = pd.to_numeric(_hm_older[_c], errors='coerce').fillna(0.0)
-            # Only keep periods 3 and 4 (older than prior7); skip 1 and 2 (already from bulk_conf)
-            _hm_old_only = _hm_older[_hm_older['PERIOD_ORDER'].isin([3, 4])].copy()
-            if len(_hm_old_only) > 0:
-                _older_labels = (
-                    _hm_old_only[['PERIOD_ORDER','PERIOD_LABEL']]
-                    .drop_duplicates()
-                    .sort_values('PERIOD_ORDER', ascending=False)['PERIOD_LABEL']
-                    .tolist()
-                )
-                _hm_older_cred = _hm_old_only.pivot_table(
-                    index='PARTNER_NAME', columns='PERIOD_LABEL',
-                    values='WEEKLY_CREDITS', aggfunc='sum', fill_value=0
-                ).reset_index()
-                _hm_older_tok = _hm_old_only.pivot_table(
-                    index='PARTNER_NAME', columns='PERIOD_LABEL',
-                    values='WEEKLY_TOKENS', aggfunc='sum', fill_value=0
-                ).reset_index()
-
-        # --- Merge all periods into final pivot tables
-        _all_partners = sorted(_hm_bulk['PARTNER_NAME'].unique())
-        _pbase = pd.DataFrame({'PARTNER_NAME': _all_partners})
-
-        # Column order: oldest left → newest right
-        _weeks = _older_labels + [_p7_label, _l7_label]
-
-        def _build_pivot(base_df, older_df, last7_df, prior7_df, older_labels, l7_lbl, p7_lbl):
-            df = base_df.copy()
-            for lbl in older_labels:
-                if len(older_df) > 0 and lbl in older_df.columns:
-                    df = df.merge(older_df[['PARTNER_NAME', lbl]], on='PARTNER_NAME', how='left')
-                else:
-                    df[lbl] = 0.0
-            df = df.merge(prior7_df, on='PARTNER_NAME', how='left')
-            df = df.merge(last7_df,  on='PARTNER_NAME', how='left')
-            df = df.set_index('PARTNER_NAME').fillna(0.0)
-            return df[[c for c in (_older_labels + [p7_lbl, l7_lbl]) if c in df.columns]]
-
-        _cred_pivot = _build_pivot(_pbase, _hm_older_cred, _last7_cred, _prior7_cred, _older_labels, _l7_label, _p7_label)
-        _tok_pivot  = _build_pivot(_pbase, _hm_older_tok,  _last7_tok,  _prior7_tok,  _older_labels, _l7_label, _p7_label)
-
-        # Sort partners by Last7 credits desc
-        _partner_order = _cred_pivot[_l7_label].sort_values(ascending=False).index.tolist() if _l7_label in _cred_pivot.columns else _cred_pivot.sum(axis=1).sort_values(ascending=False).index.tolist()
-        _cred_pivot = _cred_pivot.reindex(_partner_order)
-        _tok_pivot  = _tok_pivot.reindex(_partner_order)
-
-        if len(_cred_pivot) > 0:
-
-            _n_accts   = len(_hm_pairs)
-            _n_partners = len(_partner_order)
-
-            # Build hover text with WoW delta per cell
-            def _cred_hover(row_vals, cols):
-                texts = []
-                for i, col in enumerate(cols):
-                    val = float(row_vals[i]) if row_vals[i] == row_vals[i] else 0.0
-                    wow_str = ""
-                    if i > 0:
-                        prev = float(row_vals[i-1]) if row_vals[i-1] == row_vals[i-1] else 0.0
-                        if prev > 0:
-                            wow_str = f"  WoW: {(val-prev)/prev*100:+.1f}%"
-                    texts.append(f"${val:,.0f}{wow_str}")
-                return texts
-
-            def _tok_hover(row_vals, cols):
-                texts = []
-                for i, col in enumerate(cols):
-                    val = float(row_vals[i]) if row_vals[i] == row_vals[i] else 0.0
-                    wow_str = ""
-                    if i > 0:
-                        prev = float(row_vals[i-1]) if row_vals[i-1] == row_vals[i-1] else 0.0
-                        if prev > 0:
-                            wow_str = f"  WoW: {(val-prev)/prev*100:+.1f}%"
-                    texts.append(f"{val/1e9:.2f}B{wow_str}")
-                return texts
-
-            _cred_text = [_cred_hover(_cred_pivot.iloc[i].tolist(), _weeks) for i in range(len(_cred_pivot))]
-            _tok_text  = [_tok_hover(_tok_pivot.iloc[i].tolist(),  _weeks) for i in range(len(_tok_pivot))]
-
-            _col_hm1, _col_hm2 = st.columns(2)
-
-            with _col_hm1:
-                st.markdown("**Credits ($)**")
-                _fig_hm_c = go.Figure(go.Heatmap(
-                    z=_cred_pivot.values.tolist(),
-                    x=_weeks,
-                    y=_cred_pivot.index.tolist(),
-                    text=_cred_text,
-                    texttemplate="%{text}",
-                    textfont=dict(size=10),
-                    colorscale='Blues',
-                    showscale=True,
-                    colorbar=dict(title='Credits $', x=1.02, len=0.9),
-                    hovertemplate='<b>%{y}</b><br>%{x}<br>%{text}<extra></extra>',
-                ))
-                _fig_hm_c.update_layout(
-                    height=max(280, 36 * len(_partner_order) + 60),
-                    margin=dict(t=10, b=10, l=10, r=60),
-                    xaxis=dict(side='top'),
-                    yaxis=dict(autorange='reversed'),
-                    plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
-                )
-                st.plotly_chart(_fig_hm_c, use_container_width=True)
-
-            with _col_hm2:
-                st.markdown("**Tokens (B)**")
-                _tok_display = [[v / 1e9 for v in row] for row in _tok_pivot.values.tolist()]
-                _fig_hm_t = go.Figure(go.Heatmap(
-                    z=_tok_display,
-                    x=_weeks,
-                    y=_tok_pivot.index.tolist(),
-                    text=_tok_text,
-                    texttemplate="%{text}",
-                    textfont=dict(size=10),
-                    colorscale='Greens',
-                    showscale=True,
-                    colorbar=dict(title='Tokens B', x=1.02, len=0.9),
-                    hovertemplate='<b>%{y}</b><br>%{x}<br>%{text}<extra></extra>',
-                ))
-                _fig_hm_t.update_layout(
-                    height=max(280, 36 * len(_partner_order) + 60),
-                    margin=dict(t=10, b=10, l=10, r=60),
-                    xaxis=dict(side='top'),
-                    yaxis=dict(autorange='reversed'),
-                    plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
-                )
-                st.plotly_chart(_fig_hm_t, use_container_width=True)
-
-            st.caption(
-                f"IS_COCO_FINAL accounts ({_n_accts} accounts across {_n_partners} partners) | "
-                f"Rolling 7-day windows | Rightmost = Last 7d — same value as Deep Dive header tooltip | "
-                f"Darker = higher | Hover for WoW Δ"
-            )
-        else:
-            st.info("No consumption data found for IS_COCO_FINAL accounts in the last 4 weeks.")
-    except Exception as _e:
-        st.info(f"Trend chart unavailable: {_e}")
-else:
-    st.info("Enable 'Account Level CoCo' and select partners to see IS_COCO_FINAL consumption trend.")
-
 # --- Surface Adoption Donut (CLI / Desktop / UI) ---
 st.divider()
 st.subheader("CoCo Surface Adoption Breakdown")
@@ -973,3 +779,197 @@ if len(bulk_conf) > 0 and 'IS_COCO_FINAL' in bulk_conf.columns:
         st.metric(f":material/cloud: Account-Level ({_conf_desc})", _acct_count)
 else:
     st.info("Detection source data not available.")
+
+# --- 4-Week Per-Partner Heatmap: IS_COCO_FINAL Credits & Tokens ---
+st.divider()
+st.subheader("CoCo Consumption Trend — Last 4 Weeks (IS_COCO_FINAL)")
+
+# Build IS_COCO_FINAL account list from bulk_conf (avoids re-running scoring)
+_hm_pairs = tuple()
+if len(bulk_conf) > 0 and 'IS_COCO_FINAL' in bulk_conf.columns and 'ACCOUNT_NAME_UPPER' in bulk_conf.columns:
+    _hm_coco_final = (
+        bulk_conf[bulk_conf['IS_COCO_FINAL']]
+        .pipe(filter_out_partner_own_accounts)
+        .drop_duplicates(subset=['PARTNER_NAME', 'ACCOUNT_NAME_UPPER'])
+        [['PARTNER_NAME', 'ACCOUNT_NAME_UPPER']]
+    )
+    # Respect sidebar partner filter
+    if len(filtered) > 0:
+        _hm_coco_final = _hm_coco_final[_hm_coco_final['PARTNER_NAME'].isin(filtered['PARTNER_NAME'])]
+    _hm_pairs = tuple(zip(_hm_coco_final['PARTNER_NAME'], _hm_coco_final['ACCOUNT_NAME_UPPER']))
+
+if len(_hm_pairs) > 0:
+    try:
+        # --- Build Last7 + Prior7 directly from bulk_conf (same cache as Deep Dive header)
+        # This guarantees heatmap Last7/Prior7 = Deep Dive header EXACTLY
+        import datetime as _dt
+        _today = _dt.date.today()
+        _l7_label  = f"{(_today - _dt.timedelta(days=7)).strftime('%m/%d')}-{(_today - _dt.timedelta(days=1)).strftime('%m/%d')}"
+        _p7_label  = f"{(_today - _dt.timedelta(days=14)).strftime('%m/%d')}-{(_today - _dt.timedelta(days=8)).strftime('%m/%d')}"
+
+        _hm_bulk = (
+            bulk_conf[bulk_conf['IS_COCO_FINAL']]
+            .pipe(filter_out_partner_own_accounts)
+            .drop_duplicates(subset=['PARTNER_NAME', 'ACCOUNT_NAME_UPPER'])
+            .copy()
+        )
+        if len(filtered) > 0:
+            _hm_bulk = _hm_bulk[_hm_bulk['PARTNER_NAME'].isin(filtered['PARTNER_NAME'])]
+
+        for _c in ['LAST7_CREDITS','PRIOR7_CREDITS','LAST7_TOKENS','PRIOR7_TOKENS']:
+            if _c in _hm_bulk.columns:
+                _hm_bulk[_c] = pd.to_numeric(_hm_bulk[_c], errors='coerce').fillna(0.0)
+
+        _last7_cred  = _hm_bulk.groupby('PARTNER_NAME')['LAST7_CREDITS'].sum().reset_index().rename(columns={'LAST7_CREDITS':  _l7_label})
+        _prior7_cred = _hm_bulk.groupby('PARTNER_NAME')['PRIOR7_CREDITS'].sum().reset_index().rename(columns={'PRIOR7_CREDITS': _p7_label})
+        _last7_tok   = _hm_bulk.groupby('PARTNER_NAME')['LAST7_TOKENS'].sum().reset_index().rename(columns={'LAST7_TOKENS':   _l7_label})
+        _prior7_tok  = _hm_bulk.groupby('PARTNER_NAME')['PRIOR7_TOKENS'].sum().reset_index().rename(columns={'PRIOR7_TOKENS':  _p7_label})
+
+        # --- Older periods (14-28d) from Snowflake query — separate TTL is fine since these don't appear in Deep Dive
+        _hm_older = get_partner_surface_trend_4w(conn, _hm_pairs)
+        _hm_older_cred = pd.DataFrame({'PARTNER_NAME': pd.Series(dtype=str)})
+        _hm_older_tok  = pd.DataFrame({'PARTNER_NAME': pd.Series(dtype=str)})
+        _older_labels  = []
+
+        if len(_hm_older) > 0:
+            for _c in ['WEEKLY_CREDITS', 'WEEKLY_TOKENS']:
+                if _c in _hm_older.columns:
+                    _hm_older[_c] = pd.to_numeric(_hm_older[_c], errors='coerce').fillna(0.0)
+            # Only keep periods 3 and 4 (older than prior7); skip 1 and 2 (already from bulk_conf)
+            _hm_old_only = _hm_older[_hm_older['PERIOD_ORDER'].isin([3, 4])].copy()
+            if len(_hm_old_only) > 0:
+                _older_labels = (
+                    _hm_old_only[['PERIOD_ORDER','PERIOD_LABEL']]
+                    .drop_duplicates()
+                    .sort_values('PERIOD_ORDER', ascending=False)['PERIOD_LABEL']
+                    .tolist()
+                )
+                _hm_older_cred = _hm_old_only.pivot_table(
+                    index='PARTNER_NAME', columns='PERIOD_LABEL',
+                    values='WEEKLY_CREDITS', aggfunc='sum', fill_value=0
+                ).reset_index()
+                _hm_older_tok = _hm_old_only.pivot_table(
+                    index='PARTNER_NAME', columns='PERIOD_LABEL',
+                    values='WEEKLY_TOKENS', aggfunc='sum', fill_value=0
+                ).reset_index()
+
+        # --- Merge all periods into final pivot tables
+        _all_partners = sorted(_hm_bulk['PARTNER_NAME'].unique())
+        _pbase = pd.DataFrame({'PARTNER_NAME': _all_partners})
+
+        # Column order: oldest left → newest right
+        _weeks = _older_labels + [_p7_label, _l7_label]
+
+        def _build_pivot(base_df, older_df, last7_df, prior7_df, older_labels, l7_lbl, p7_lbl):
+            df = base_df.copy()
+            for lbl in older_labels:
+                if len(older_df) > 0 and lbl in older_df.columns:
+                    df = df.merge(older_df[['PARTNER_NAME', lbl]], on='PARTNER_NAME', how='left')
+                else:
+                    df[lbl] = 0.0
+            df = df.merge(prior7_df, on='PARTNER_NAME', how='left')
+            df = df.merge(last7_df,  on='PARTNER_NAME', how='left')
+            df = df.set_index('PARTNER_NAME').fillna(0.0)
+            return df[[c for c in (_older_labels + [p7_lbl, l7_lbl]) if c in df.columns]]
+
+        _cred_pivot = _build_pivot(_pbase, _hm_older_cred, _last7_cred, _prior7_cred, _older_labels, _l7_label, _p7_label)
+        _tok_pivot  = _build_pivot(_pbase, _hm_older_tok,  _last7_tok,  _prior7_tok,  _older_labels, _l7_label, _p7_label)
+
+        # Sort partners by Last7 credits desc
+        _partner_order = _cred_pivot[_l7_label].sort_values(ascending=False).index.tolist() if _l7_label in _cred_pivot.columns else _cred_pivot.sum(axis=1).sort_values(ascending=False).index.tolist()
+        _cred_pivot = _cred_pivot.reindex(_partner_order)
+        _tok_pivot  = _tok_pivot.reindex(_partner_order)
+
+        if len(_cred_pivot) > 0:
+
+            _n_accts   = len(_hm_pairs)
+            _n_partners = len(_partner_order)
+
+            # Build hover text with WoW delta per cell
+            def _cred_hover(row_vals, cols):
+                texts = []
+                for i, col in enumerate(cols):
+                    val = float(row_vals[i]) if row_vals[i] == row_vals[i] else 0.0
+                    wow_str = ""
+                    if i > 0:
+                        prev = float(row_vals[i-1]) if row_vals[i-1] == row_vals[i-1] else 0.0
+                        if prev > 0:
+                            wow_str = f"  WoW: {(val-prev)/prev*100:+.1f}%"
+                    texts.append(f"${val:,.0f}{wow_str}")
+                return texts
+
+            def _tok_hover(row_vals, cols):
+                texts = []
+                for i, col in enumerate(cols):
+                    val = float(row_vals[i]) if row_vals[i] == row_vals[i] else 0.0
+                    wow_str = ""
+                    if i > 0:
+                        prev = float(row_vals[i-1]) if row_vals[i-1] == row_vals[i-1] else 0.0
+                        if prev > 0:
+                            wow_str = f"  WoW: {(val-prev)/prev*100:+.1f}%"
+                    texts.append(f"{val/1e9:.2f}B{wow_str}")
+                return texts
+
+            _cred_text = [_cred_hover(_cred_pivot.iloc[i].tolist(), _weeks) for i in range(len(_cred_pivot))]
+            _tok_text  = [_tok_hover(_tok_pivot.iloc[i].tolist(),  _weeks) for i in range(len(_tok_pivot))]
+
+            _col_hm1, _col_hm2 = st.columns(2)
+
+            with _col_hm1:
+                st.markdown("**Credits ($)**")
+                _fig_hm_c = go.Figure(go.Heatmap(
+                    z=_cred_pivot.values.tolist(),
+                    x=_weeks,
+                    y=_cred_pivot.index.tolist(),
+                    text=_cred_text,
+                    texttemplate="%{text}",
+                    textfont=dict(size=10),
+                    colorscale='Blues',
+                    showscale=True,
+                    colorbar=dict(title='Credits $', x=1.02, len=0.9),
+                    hovertemplate='<b>%{y}</b><br>%{x}<br>%{text}<extra></extra>',
+                ))
+                _fig_hm_c.update_layout(
+                    height=max(280, 36 * len(_partner_order) + 60),
+                    margin=dict(t=10, b=10, l=10, r=60),
+                    xaxis=dict(side='top'),
+                    yaxis=dict(autorange='reversed'),
+                    plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
+                )
+                st.plotly_chart(_fig_hm_c, use_container_width=True)
+
+            with _col_hm2:
+                st.markdown("**Tokens (B)**")
+                _tok_display = [[v / 1e9 for v in row] for row in _tok_pivot.values.tolist()]
+                _fig_hm_t = go.Figure(go.Heatmap(
+                    z=_tok_display,
+                    x=_weeks,
+                    y=_tok_pivot.index.tolist(),
+                    text=_tok_text,
+                    texttemplate="%{text}",
+                    textfont=dict(size=10),
+                    colorscale='Greens',
+                    showscale=True,
+                    colorbar=dict(title='Tokens B', x=1.02, len=0.9),
+                    hovertemplate='<b>%{y}</b><br>%{x}<br>%{text}<extra></extra>',
+                ))
+                _fig_hm_t.update_layout(
+                    height=max(280, 36 * len(_partner_order) + 60),
+                    margin=dict(t=10, b=10, l=10, r=60),
+                    xaxis=dict(side='top'),
+                    yaxis=dict(autorange='reversed'),
+                    plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
+                )
+                st.plotly_chart(_fig_hm_t, use_container_width=True)
+
+            st.caption(
+                f"IS_COCO_FINAL accounts ({_n_accts} accounts across {_n_partners} partners) | "
+                f"Rolling 7-day windows | Rightmost = Last 7d — same value as Deep Dive header tooltip | "
+                f"Darker = higher | Hover for WoW Δ"
+            )
+        else:
+            st.info("No consumption data found for IS_COCO_FINAL accounts in the last 4 weeks.")
+    except Exception as _e:
+        st.info(f"Trend chart unavailable: {_e}")
+else:
+    st.info("Enable 'Account Level CoCo' and select partners to see IS_COCO_FINAL consumption trend.")

@@ -4,6 +4,25 @@ import plotly.graph_objects as go
 from utils.queries import get_adoption_overview, get_adoption_by_partner, get_adoption_by_stage, get_adoption_by_region, get_by_technical_type, get_by_account_gvp, get_bulk_confidence_scores, get_partner_coco_coverage, get_all_uc_counts, get_all_uc_counts_by_theatre, get_partner_metrics_by_theatre, get_all_uc_counts_by_region, get_partner_metrics_by_region, get_apj_rsi_adoption, get_emea_rsi_adoption, get_gsi_adoption, get_noam_rsi_adoption
 from utils import resolve_partner_filter, resolve_region_theaters, filter_out_partner_own_accounts
 from utils import APJ_RSI_REGION_MAP, EMEA_RSI_REGION_MAP
+from utils import PARTNER_ALIASES as _PA_EARLY
+
+# Combined set of all managed partner names (GSI + NOAM RSI + APJ RSI + EMEA RSI)
+# Used to scope the top summary metrics to the managed partner universe only
+_GSI_PARTNER_NAMES = {
+    'Accenture', 'Capgemini Technologies LLC',
+    'Cognizant Technology Solutions US Corp', 'Deloitte Consulting',
+    'EY', 'Ernst & Young (EY)', 'IBM', 'IBM Consulting',
+}
+_NOAM_RSI_PARTNER_NAMES = set(
+    p for p in _PA_EARLY.get('--- NOAM RSIs ---', []) if not p.startswith('---')
+) | {'LTI Mindtree', 'Kipi.ai'}
+_APJ_RSI_PARTNER_NAMES  = set(APJ_RSI_REGION_MAP.keys())
+_EMEA_RSI_PARTNER_NAMES = set(EMEA_RSI_REGION_MAP.keys())
+_ALL_MANAGED_PARTNERS   = _GSI_PARTNER_NAMES | _NOAM_RSI_PARTNER_NAMES | _APJ_RSI_PARTNER_NAMES | _EMEA_RSI_PARTNER_NAMES
+
+# NoAM theater list — needed by managed-bc builder and region breakdown
+_NOAM_THEATERS = ('AMSExpansion', 'USMajors', 'AMSAcquisition', 'USPubSec')
+
 from utils.ask_ai import build_filter_context
 
 conn = st.session_state.conn
@@ -74,6 +93,17 @@ with st.expander(":material/info: How Use Cases Are Retrieved", expanded=False):
     1. **Account-level (Product Usage):** Customer account consuming CoCo credits + partner mapped → partner gets attribution
     2. **Use case-level (Feature Flag):** Use case tagged with "AI - Cortex Code" + partner attached
     3. **Use case-level (Comments):** SE writes "coco"/"cortex code" OR partner writes "#coco"
+
+    ---
+
+    **Partner groups included in the top summary metrics** *(by default, scoped to managed partners only)*:
+
+    | Group | Partners | Scope |
+    |---|---|---|
+    | **GSI** | Accenture, Capgemini Technologies LLC, Cognizant Technology Solutions US Corp, Deloitte Consulting, EY, IBM | Global |
+    | **NOAM RSI** | 7Rivers, Aimpoint Digital, Apex Systems, Archetype Consulting, Atrium, Blend360, BlueCloud, CitiusTech, evolv Consulting, Hexaware, Icon Analytics, Infosys, Infostrux, kipi.ai, KPMG, LTM, Merkle, OneSix, Perficient, phData, SDK Tek, Slalom, Sparq, Spaulding Ridge, Squadron Data, Tata Consultancy Services, TEKsystems, Tiger Analytics, Tredence | NoAM theaters |
+    | **APJ RSI** | NTT Data (Japan), Megazone (Korea), Infinite Lambda (ASEAN), Altis (ANZ), Prolim (India) | Country-scoped |
+    | **EMEA RSI** | Infomotion (CentralEMEA), Civica (SouthEMEA), Kubrick (UK), KPC (SouthEMEA) | Region-scoped |
     """)
 
 import pandas as pd
@@ -146,37 +176,63 @@ else:
     coco_pct = float(s['COCO_PCT'] or 0)
     coco_uc_display = f"{coco_count} ({coco_pct}%)"
 
-# Compute IS_COCO_FINAL stage breakdowns first (needed for metrics below)
-if len(bulk_conf) > 0 and 'IS_COCO_FINAL' in bulk_conf.columns:
-    _cf = bulk_conf[bulk_conf['IS_COCO_FINAL']]
-    _tech_wins_coco  = int((_cf['USE_CASE_STAGE'] == '4 - Use Case Won / Migration Plan').sum())
-    _in_impl_coco    = int(_cf['USE_CASE_STAGE'].isin(['5 - Implementation In Progress', '6 - Implementation Complete']).sum())
-    _go_live_coco    = int((_cf['USE_CASE_STAGE'] == '7 - Deployed').sum())
-    _all_deployed_partner = int((bulk_conf['USE_CASE_STAGE'] == '7 - Deployed').sum())
-    _coco_eacv       = float(_cf['USE_CASE_EACV'].sum() or 0)
-    _total_eacv      = float(bulk_conf['USE_CASE_EACV'].sum() or 0)
-else:
-    _tech_wins_coco  = int(s.get('WON_COUNT', 0) or 0)
-    _in_impl_coco    = int(s.get('IMPL_COUNT', 0) or 0)
-    _go_live_coco    = int(s.get('DEPLOYED_COUNT', 0) or 0)
-    _all_deployed_partner = _go_live_coco
-    _coco_eacv       = 0
-    _total_eacv      = float(s['TOTAL_EACV'] or 0)
-
 # All UCs (partner + non-partner) from MDM
 _all_uc = get_all_uc_counts(conn, start_date, end_date, region)
 _all_uc_total   = int(_all_uc.iloc[0]['ALL_USE_CASES'])   if len(_all_uc) > 0 else 0
 _all_go_lives   = int(_all_uc.iloc[0]['ALL_GO_LIVES'])    if len(_all_uc) > 0 else 0
 
-# Partner Go Lives % = ALL deployed partner UCs / Total Partner UCs
-_partner_total  = int(s['TOTAL_USE_CASES'])
-_go_lives_pct   = round(_all_deployed_partner * 100.0 / _partner_total, 1) if _partner_total > 0 else 0.0
-# CoCo Partner Go Lives % = IS_COCO_FINAL deployed / IS_COCO_FINAL total
-# Only reliable when bulk_conf is available
-if len(bulk_conf) > 0 and 'IS_COCO_FINAL' in bulk_conf.columns and coco_count > 0:
-    _coco_go_lives_pct = round(_go_live_coco * 100.0 / coco_count, 1)
+# Scope all top-summary metrics to the managed partner universe with geo restrictions
+# (same filter used for theatre/region breakdowns — ensures numbers match)
+
+# Resolved selected partner names (empty set = no filter = show all)
+_selected_partner_names = set(resolve_partner_filter(selected_partners)) if selected_partners else set()
+
+def _build_managed_bc(bc):
+    """Return a bulk_conf slice covering managed partners with geo restrictions applied.
+    GSI: global, NOAM RSI: NoAM theaters, APJ/EMEA RSI: country/region-scoped.
+    Respects sidebar partner filter (_selected_partner_names)."""
+    if bc is None or len(bc) == 0 or 'IS_COCO_FINAL' not in bc.columns:
+        return pd.DataFrame()
+    parts = []
+    _sel = _selected_partner_names  # shorthand; empty = no extra filter
+    def _pf(names): return names & _sel if _sel else names
+    parts.append(bc[bc['PARTNER_NAME'].isin(_pf(_GSI_PARTNER_NAMES))].copy())
+    parts.append(bc[bc['PARTNER_NAME'].isin(_pf(_NOAM_RSI_PARTNER_NAMES)) &
+                    bc['THEATER_NAME'].isin(_NOAM_THEATERS)].copy())
+    if 'REGION_NAME' in bc.columns:
+        _apj = bc[bc['PARTNER_NAME'].isin(_pf(_APJ_RSI_PARTNER_NAMES))].copy()
+        _apj['_c'] = _apj['PARTNER_NAME'].map({k: v[1] for k, v in APJ_RSI_REGION_MAP.items()})
+        parts.append(_apj[_apj['REGION_NAME'] == _apj['_c']].drop(columns=['_c']))
+        _emea = bc[bc['PARTNER_NAME'].isin(_pf(_EMEA_RSI_PARTNER_NAMES))].copy()
+        _emea['_c'] = _emea['PARTNER_NAME'].map({k: v[1] for k, v in EMEA_RSI_REGION_MAP.items()})
+        parts.append(_emea[_emea['REGION_NAME'] == _emea['_c']].drop(columns=['_c']))
+    return pd.concat([p for p in parts if len(p) > 0], ignore_index=True) if parts else pd.DataFrame()
+
+if len(bulk_conf) > 0 and 'IS_COCO_FINAL' in bulk_conf.columns:
+    _bc_managed = _build_managed_bc(bulk_conf)
+    _partner_total       = len(_bc_managed)
+    _all_deployed_partner = int((_bc_managed['USE_CASE_STAGE'] == '7 - Deployed').sum())
+    _cf_managed          = _bc_managed[_bc_managed['IS_COCO_FINAL']]
+    coco_count           = int(_bc_managed['IS_COCO_FINAL'].sum())
+    coco_pct             = round(coco_count * 100.0 / _partner_total, 1) if _partner_total > 0 else 0.0
+    _go_live_coco        = int((_cf_managed['USE_CASE_STAGE'] == '7 - Deployed').sum())
+    _tech_wins_coco      = int((_cf_managed['USE_CASE_STAGE'] == '4 - Use Case Won / Migration Plan').sum())
+    _in_impl_coco        = int(_cf_managed['USE_CASE_STAGE'].isin(['5 - Implementation In Progress', '6 - Implementation Complete']).sum())
+    _coco_eacv           = float(_cf_managed['USE_CASE_EACV'].sum() or 0)
+    _total_eacv          = float(_bc_managed['USE_CASE_EACV'].sum() or 0)
+    coco_uc_display      = f"{coco_count} ({coco_pct:.1f}%)"
 else:
-    _coco_go_lives_pct = 0.0
+    # Fall back to raw SQL stats (no bulk_conf available)
+    _partner_total        = int(s['TOTAL_USE_CASES'])
+    _all_deployed_partner = int(s.get('DEPLOYED_COUNT', 0) or 0)
+    _go_live_coco         = int(s.get('DEPLOYED_COUNT', 0) or 0)
+    _tech_wins_coco       = int(s.get('WON_COUNT', 0) or 0)
+    _in_impl_coco         = int(s.get('IMPL_COUNT', 0) or 0)
+    _coco_eacv            = 0
+    _total_eacv           = float(s['TOTAL_EACV'] or 0)
+
+_go_lives_pct      = round(_all_deployed_partner * 100.0 / _partner_total, 1) if _partner_total > 0 else 0.0
+_coco_go_lives_pct = round(_go_live_coco * 100.0 / coco_count, 1) if coco_count > 0 else 0.0
 
 c1, c2, c3, c4, c5, c6 = st.columns(6)
 c1.metric("Total UC",                  _all_uc_total,
@@ -187,7 +243,7 @@ c3.metric("Total Partner UC",          _partner_total,
           f"{int(s['TOTAL_PARTNERS'])} partners",
           help="Partner-attached use cases in scope (DT_OKR_USE_CASES)")
 c4.metric("Partner CoCo Usecases",     coco_count,
-          f"{coco_pct:.1f}% IS_COCO_FINAL",
+          f"{coco_pct:.1f}% of partner UCs",
           help="Partner use cases where IS_COCO_FINAL = true (IS_COCO flag OR confidence band)")
 c5.metric("Total Partner Go-Lives",    f"{_go_lives_pct:.1f}%",
           f"{_all_deployed_partner} of {_partner_total} partner UCs",
@@ -197,9 +253,12 @@ c6.metric("CoCo Partner Go-Lives",     f"{_coco_go_lives_pct:.1f}%",
           help="IS_COCO_FINAL Stage 7 as % of total IS_COCO_FINAL UCs — deployment rate within CoCo")
 
 
-st.divider()
+st.caption(
+    "By default, partner metrics (Total Partner UC, Partner CoCo Usecases, Go-Lives) are scoped to "
+    "managed partners: **GSI · NOAM RSI · APJ RSI · EMEA RSI**"
+)
 
-_NOAM_THEATERS = ('AMSExpansion', 'USMajors', 'AMSAcquisition', 'USPubSec')
+st.divider()
 
 def _build_partner_theatre_from_bulk(bc):
     """Derive per-theatre partner CoCo metrics from bulk_conf (IS_COCO_FINAL)."""
@@ -243,13 +302,16 @@ def _build_partner_region_from_bulk(bc):
                                 grp['COCO_UCS'].replace(0, float('nan'))).round(1).fillna(0)
     return grp
 
+# ── Managed-partner geo-scoped bulk_conf (reuse for Theatre/Region breakdowns) ─
+_managed_bc = _bc_managed if len(bulk_conf) > 0 and 'IS_COCO_FINAL' in bulk_conf.columns else pd.DataFrame()
+
 # ── Breakdown by Theatre ──────────────────────────────────────────────────────
 with st.expander(":material/table: Breakdown by Theatre", expanded=True):
-    st.caption("Partner CoCo UCs = IS_COCO_FINAL (IS_COCO flag + High confidence band UCs)")
+    st.caption("Partner CoCo UCs = IS_COCO_FINAL | Scoped to managed partners: GSI · NOAM RSI · APJ RSI · EMEA RSI")
     _theatre_mdm = get_all_uc_counts_by_theatre(conn, start_date, end_date)
-    # Derive partner side from bulk_conf (IS_COCO_FINAL) when available; SQL fallback otherwise
-    if len(bulk_conf) > 0 and 'IS_COCO_FINAL' in bulk_conf.columns:
-        _theatre_partner = _build_partner_theatre_from_bulk(bulk_conf)
+    # Derive partner side from managed bulk_conf (IS_COCO_FINAL) when available; SQL fallback otherwise
+    if len(_managed_bc) > 0 and 'IS_COCO_FINAL' in _managed_bc.columns:
+        _theatre_partner = _build_partner_theatre_from_bulk(_managed_bc)
     else:
         _theatre_partner = get_partner_metrics_by_theatre(conn, start_date, end_date)
     if len(_theatre_mdm) > 0:
@@ -265,6 +327,7 @@ with st.expander(":material/table: Breakdown by Theatre", expanded=True):
             _theatre_combined["COCO_GO_LIVE_PCT"] = 0.0
         _theatre_combined.columns = ["Theatre", "Overall UCs", "Go Live UCs",
                                       "Partner UCs", "Partner CoCo UCs", "Partner Go-Lives %", "CoCo Partner Go-Lives %"]
+        _theatre_combined = _theatre_combined.drop(columns=["Overall UCs", "Go Live UCs"])
         _theatre_combined["Partner Go-Lives %"] = (
             _theatre_combined["Partner Go-Lives %"].fillna(0).apply(lambda x: f"{x:.1f}%")
         )
@@ -273,7 +336,7 @@ with st.expander(":material/table: Breakdown by Theatre", expanded=True):
         )
         st.dataframe(
             _theatre_combined.fillna(0).astype(
-                {"Overall UCs": int, "Go Live UCs": int, "Partner UCs": int,
+                {"Partner UCs": int,
                  "Partner CoCo UCs": int}
             ),
             hide_index=True, use_container_width=True,
@@ -283,11 +346,11 @@ with st.expander(":material/table: Breakdown by Theatre", expanded=True):
 
 # ── Breakdown by Region ───────────────────────────────────────────────────────
 with st.expander(":material/public: Breakdown by Region", expanded=True):
-    st.caption("Partner CoCo UCs = IS_COCO_FINAL (IS_COCO flag + High confidence band UCs)")
+    st.caption("Partner CoCo UCs = IS_COCO_FINAL | Scoped to managed partners: GSI · NOAM RSI · APJ RSI · EMEA RSI")
     _region_mdm = get_all_uc_counts_by_region(conn, start_date, end_date)
-    # Derive partner side from bulk_conf (IS_COCO_FINAL) when available; SQL fallback otherwise
-    if len(bulk_conf) > 0 and 'IS_COCO_FINAL' in bulk_conf.columns:
-        _region_partner = _build_partner_region_from_bulk(bulk_conf)
+    # Derive partner side from managed bulk_conf (IS_COCO_FINAL) when available; SQL fallback otherwise
+    if len(_managed_bc) > 0 and 'IS_COCO_FINAL' in _managed_bc.columns:
+        _region_partner = _build_partner_region_from_bulk(_managed_bc)
     else:
         _region_partner = get_partner_metrics_by_region(conn, start_date, end_date)
     if len(_region_mdm) > 0:
@@ -303,6 +366,7 @@ with st.expander(":material/public: Breakdown by Region", expanded=True):
             _region_combined["COCO_GO_LIVE_PCT"] = 0.0
         _region_combined.columns = ["Region", "Overall UCs", "Go Live UCs",
                                      "Partner UCs", "Partner CoCo UCs", "Partner Go-Lives %", "CoCo Partner Go-Lives %"]
+        _region_combined = _region_combined.drop(columns=["Overall UCs", "Go Live UCs"])
         _region_combined["Partner Go-Lives %"] = (
             _region_combined["Partner Go-Lives %"].fillna(0).apply(lambda x: f"{x:.1f}%")
         )
@@ -311,7 +375,7 @@ with st.expander(":material/public: Breakdown by Region", expanded=True):
         )
         st.dataframe(
             _region_combined.fillna(0).astype(
-                {"Overall UCs": int, "Go Live UCs": int, "Partner UCs": int,
+                {"Partner UCs": int,
                  "Partner CoCo UCs": int}
             ),
             hide_index=True, use_container_width=True,
@@ -552,7 +616,9 @@ _GSI_SKELETON = pd.DataFrame([
 with st.expander(":material/groups: GSI CoCo Adoption (75% Target)", expanded=True):
     st.caption("Global scope — all theaters included")
     _gsi_base = get_gsi_adoption(conn, start_date, end_date)
-    _render_partner_section(_gsi_base, bulk_conf, _GSI_NAMES_MAP, _GSI_SKELETON,
+    if _selected_partner_names and 'PARTNER_LABEL' in _gsi_base.columns:
+        _gsi_base = _gsi_base[_gsi_base['PARTNER_LABEL'].isin(_selected_partner_names)]
+    _render_partner_section(_gsi_base, _managed_bc, _GSI_NAMES_MAP, _GSI_SKELETON,
                             target_pct=75, section_label="GSI", detail_label="Partner detail")
 
 # ── NOAM RSI Adoption (75% Target) ───────────────────────────────────────────
@@ -570,13 +636,17 @@ _NOAM_RSI_SKELETON = pd.DataFrame([
 with st.expander(":material/location_on: NOAM RSI CoCo Adoption (75% Target)", expanded=True):
     st.caption("NoAM scope — AMSExpansion, USMajors, AMSAcquisition, USPubSec theaters")
     _noam_base = get_noam_rsi_adoption(conn, start_date, end_date)
-    _render_partner_section(_noam_base, bulk_conf, _NOAM_RSI_MAP, _NOAM_RSI_SKELETON,
+    if _selected_partner_names:
+        _noam_base = _noam_base[_noam_base['PARTNER_LABEL'].isin(_selected_partner_names)]
+    _render_partner_section(_noam_base, _managed_bc, _NOAM_RSI_MAP, _NOAM_RSI_SKELETON,
                             target_pct=75, section_label="NOAM RSI", detail_label="Partner detail")
 
 # ── APJ RSI Adoption (50% CoCo Target) ───────────────────────────────────────
 with st.expander(":material/language: APJ RSI CoCo Adoption (50% Target)", expanded=True):
     st.caption("Each partner scoped to their assigned country — NTT Data→Japan | Megazone→Korea | Infinite Lambda→ASEAN | Altis→ANZ | Prolim→India")
     _apj_base = get_apj_rsi_adoption(conn, start_date, end_date)
+    if _selected_partner_names and 'PARTNER_LABEL' in _apj_base.columns:
+        _apj_base = _apj_base[_apj_base['PARTNER_LABEL'].isin(_selected_partner_names)]
 
     # Canonical 5-partner skeleton — all partners always appear even with 0 UCs
     _APJ_SKELETON = pd.DataFrame([
@@ -611,9 +681,9 @@ with st.expander(":material/language: APJ RSI CoCo Adoption (50% Target)", expan
     if 'COCO_EACV_SQL' not in _apj_df.columns: _apj_df['COCO_EACV_SQL'] = 0.0
 
     # Enrich COCO_UCS with IS_COCO_FINAL from bulk_conf where available
-    if len(bulk_conf) > 0 and 'IS_COCO_FINAL' in bulk_conf.columns:
+    if len(_managed_bc) > 0 and "IS_COCO_FINAL" in _managed_bc.columns:
         _apj_rsi_names = list(APJ_RSI_REGION_MAP.keys())
-        _apj_bc = bulk_conf[bulk_conf['PARTNER_NAME'].isin(_apj_rsi_names)].copy()
+        _apj_bc = _managed_bc[_managed_bc['PARTNER_NAME'].isin(_apj_rsi_names)].copy()
         _apj_bc['_label'] = _apj_bc['PARTNER_NAME'].map({k: v[0] for k, v in APJ_RSI_REGION_MAP.items()})
         _apj_bc['_country'] = _apj_bc['PARTNER_NAME'].map({k: v[1] for k, v in APJ_RSI_REGION_MAP.items()})
         _apj_bc = _apj_bc[_apj_bc['REGION_NAME'] == _apj_bc['_country']]
@@ -702,6 +772,8 @@ st.divider()
 with st.expander(":material/globe_uk: EMEA RSI CoCo Adoption (50% Target)", expanded=True):
     st.caption("Each partner scoped to their assigned region — Infomotion→CentralEMEA | Civica→SouthEMEA (Spain) | Kubrick→UK | KPC→SouthEMEA (France)")
     _emea_base = get_emea_rsi_adoption(conn, start_date, end_date)
+    if _selected_partner_names and 'PARTNER_LABEL' in _emea_base.columns:
+        _emea_base = _emea_base[_emea_base['PARTNER_LABEL'].isin(_selected_partner_names)]
 
     # Canonical 4-partner skeleton — all partners always appear even with 0 UCs
     _EMEA_SKELETON = pd.DataFrame([
@@ -733,9 +805,9 @@ with st.expander(":material/globe_uk: EMEA RSI CoCo Adoption (50% Target)", expa
     if 'COCO_EACV_SQL' not in _emea_df.columns: _emea_df['COCO_EACV_SQL'] = 0.0
 
     # Enrich COCO_UCS with IS_COCO_FINAL from bulk_conf where available
-    if len(bulk_conf) > 0 and 'IS_COCO_FINAL' in bulk_conf.columns:
+    if len(_managed_bc) > 0 and "IS_COCO_FINAL" in _managed_bc.columns:
         _emea_rsi_names = list(EMEA_RSI_REGION_MAP.keys())
-        _emea_bc = bulk_conf[bulk_conf['PARTNER_NAME'].isin(_emea_rsi_names)].copy()
+        _emea_bc = _managed_bc[_managed_bc['PARTNER_NAME'].isin(_emea_rsi_names)].copy()
         _emea_bc['_label']   = _emea_bc['PARTNER_NAME'].map({k: v[0] for k, v in EMEA_RSI_REGION_MAP.items()})
         _emea_bc['_country'] = _emea_bc['PARTNER_NAME'].map({k: v[1] for k, v in EMEA_RSI_REGION_MAP.items()})
         _emea_bc = _emea_bc[_emea_bc['REGION_NAME'] == _emea_bc['_country']]
