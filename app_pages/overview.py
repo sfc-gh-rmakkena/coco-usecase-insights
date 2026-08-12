@@ -30,6 +30,12 @@ region = st.session_state.get("selected_region", "Global")
 selected_partners = st.session_state.get("selected_partners", [])
 start_date = str(st.session_state.get("okr_start_date", "2026-05-01"))
 end_date = str(st.session_state.get("okr_end_date", "2026-07-31"))
+# Resolved theater tuple for the selected region — passed to SQL queries so they respect the region filter
+_sidebar_theaters = None
+if region and region != 'Global':
+    _t = resolve_region_theaters(region)
+    if _t is not None:
+        _sidebar_theaters = tuple(_t)
 include_account_coco = st.session_state.get("include_account_coco", "Yes") == "Yes"
 confidence_filter = st.session_state.get("confidence_filter", ["High"])
 confidence = 'High' if confidence_filter == ['High'] else ('Medium' if confidence_filter else None)
@@ -614,10 +620,18 @@ _GSI_SKELETON = pd.DataFrame([
               'Deloitte Consulting','EY','IBM']
 ])
 with st.expander(":material/groups: GSI CoCo Adoption (75% Target)", expanded=True):
-    st.caption("Global scope — all theaters included")
-    _gsi_base = get_gsi_adoption(conn, start_date, end_date)
+    st.caption(f"{'Region: ' + region if _sidebar_theaters else 'Global scope'} — {'theater-filtered' if _sidebar_theaters else 'all theaters included'}")
+    _gsi_base = get_gsi_adoption(conn, start_date, end_date, theaters=_sidebar_theaters)
     if _selected_partner_names and 'PARTNER_LABEL' in _gsi_base.columns:
-        _gsi_base = _gsi_base[_gsi_base['PARTNER_LABEL'].isin(_selected_partner_names)]
+        # GSI canonical labels: Accenture, Capgemini..., EY, IBM
+        # PARTNER_ALIASES already uses canonical names for GSIs so direct match works
+        _gsi_alias_map = {'Ernst & Young (EY)': 'EY', 'IBM Consulting': 'IBM'}
+        _gsi_sel = {_gsi_alias_map.get(p, p) for p in _selected_partner_names}
+        _gsi_sel_in_group = _gsi_sel & {v[0] for v in _GSI_NAMES_MAP.values()}
+        if _gsi_sel_in_group:
+            _gsi_base = _gsi_base[_gsi_base['PARTNER_LABEL'].isin(_gsi_sel_in_group)]
+        else:
+            _gsi_base = _gsi_base.iloc[0:0]
     _render_partner_section(_gsi_base, _managed_bc, _GSI_NAMES_MAP, _GSI_SKELETON,
                             target_pct=75, section_label="GSI", detail_label="Partner detail")
 
@@ -635,9 +649,21 @@ _NOAM_RSI_SKELETON = pd.DataFrame([
 ])
 with st.expander(":material/location_on: NOAM RSI CoCo Adoption (75% Target)", expanded=True):
     st.caption("NoAM scope — AMSExpansion, USMajors, AMSAcquisition, USPubSec theaters")
-    _noam_base = get_noam_rsi_adoption(conn, start_date, end_date)
+    _noam_base = get_noam_rsi_adoption(conn, start_date, end_date, theaters=_sidebar_theaters)
     if _selected_partner_names:
-        _noam_base = _noam_base[_noam_base['PARTNER_LABEL'].isin(_selected_partner_names)]
+        # NOAM PARTNER_LABEL = raw DT_OKR name; apply alias map for LTM/kipi
+        _noam_alias = {'LTI Mindtree': 'LTM', 'Kipi.ai': 'kipi.ai'}
+        _noam_raw_names = _NOAM_RSI_PARTNER_NAMES  # DT_OKR names in this group
+        _noam_sel_labels = set()
+        for p in _selected_partner_names:
+            if p in _noam_alias:
+                _noam_sel_labels.add(_noam_alias[p])
+            elif p in _noam_raw_names:
+                _noam_sel_labels.add(p)
+        if _noam_sel_labels:
+            _noam_base = _noam_base[_noam_base['PARTNER_LABEL'].isin(_noam_sel_labels)]
+        else:
+            _noam_base = _noam_base.iloc[0:0]
     _render_partner_section(_noam_base, _managed_bc, _NOAM_RSI_MAP, _NOAM_RSI_SKELETON,
                             target_pct=75, section_label="NOAM RSI", detail_label="Partner detail")
 
@@ -646,7 +672,12 @@ with st.expander(":material/language: APJ RSI CoCo Adoption (50% Target)", expan
     st.caption("Each partner scoped to their assigned country — NTT Data→Japan | Megazone→Korea | Infinite Lambda→ASEAN | Altis→ANZ | Prolim→India")
     _apj_base = get_apj_rsi_adoption(conn, start_date, end_date)
     if _selected_partner_names and 'PARTNER_LABEL' in _apj_base.columns:
-        _apj_base = _apj_base[_apj_base['PARTNER_LABEL'].isin(_selected_partner_names)]
+        # Translate raw DT_OKR names → canonical APJ labels (e.g. 'NTT DATA Group Corporation' → 'NTT Data')
+        _apj_canonical_sel = {v[0] for k, v in APJ_RSI_REGION_MAP.items() if k in _selected_partner_names}
+        if _apj_canonical_sel:
+            _apj_base = _apj_base[_apj_base['PARTNER_LABEL'].isin(_apj_canonical_sel)]
+        else:
+            _apj_base = _apj_base.iloc[0:0]
 
     # Canonical 5-partner skeleton — all partners always appear even with 0 UCs
     _APJ_SKELETON = pd.DataFrame([
@@ -773,7 +804,12 @@ with st.expander(":material/globe_uk: EMEA RSI CoCo Adoption (50% Target)", expa
     st.caption("Each partner scoped to their assigned region — Infomotion→CentralEMEA | Civica→SouthEMEA (Spain) | Kubrick→UK | KPC→SouthEMEA (France)")
     _emea_base = get_emea_rsi_adoption(conn, start_date, end_date)
     if _selected_partner_names and 'PARTNER_LABEL' in _emea_base.columns:
-        _emea_base = _emea_base[_emea_base['PARTNER_LABEL'].isin(_selected_partner_names)]
+        # Translate raw DT_OKR names → canonical EMEA labels (e.g. 'INFOMOTION GMBH' → 'Infomotion')
+        _emea_canonical_sel = {v[0] for k, v in EMEA_RSI_REGION_MAP.items() if k in _selected_partner_names}
+        if _emea_canonical_sel:
+            _emea_base = _emea_base[_emea_base['PARTNER_LABEL'].isin(_emea_canonical_sel)]
+        else:
+            _emea_base = _emea_base.iloc[0:0]
 
     # Canonical 4-partner skeleton — all partners always appear even with 0 UCs
     _EMEA_SKELETON = pd.DataFrame([

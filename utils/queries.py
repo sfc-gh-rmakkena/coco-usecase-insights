@@ -517,14 +517,15 @@ _RSI_STAGE_COLS = """
         COALESCE(SUM(CASE WHEN uc.IS_COCO THEN uc.USE_CASE_EACV ELSE 0 END), 0)   AS COCO_EACV"""
 
 @st.cache_data(ttl=timedelta(minutes=30))
-def get_gsi_adoption(_conn, start_date: str, end_date: str):
-    """Per-partner CoCo adoption for the 6 GSIs — global scope, aliases merged."""
+def get_gsi_adoption(_conn, start_date: str, end_date: str, theaters: tuple = None):
+    """Per-partner CoCo adoption for the 6 GSIs — global scope by default, theater-filtered when region is selected."""
     date_filter = f"""(
         (uc.USE_CASE_STAGE IN ('3 - Technical / Business Validation','4 - Use Case Won / Migration Plan')
          AND uc.DECISION_DATE >= '{start_date}' AND uc.DECISION_DATE <= '{end_date}')
         OR (uc.USE_CASE_STAGE IN ('5 - Implementation In Progress','6 - Implementation Complete','7 - Deployed')
          AND uc.GO_LIVE_DATE >= '{start_date}' AND uc.GO_LIVE_DATE <= '{end_date}')
     )"""
+    theater_clause = f"AND uc.THEATER_NAME IN ({','.join(repr(t) for t in theaters)})" if theaters else ""
     return _conn.query(f"""
     SELECT
         CASE
@@ -536,13 +537,15 @@ def get_gsi_adoption(_conn, start_date: str, end_date: str):
     FROM {DT_OKR} uc
     WHERE {date_filter}
       AND uc.PARTNER_NAME IN ({_GSI_PARTNERS_SQL})
+      {theater_clause}
     GROUP BY PARTNER_LABEL
     ORDER BY PARTNER_LABEL
     """)
 
 @st.cache_data(ttl=timedelta(minutes=30))
-def get_noam_rsi_adoption(_conn, start_date: str, end_date: str):
-    """Per-partner CoCo adoption for NOAM RSIs — NoAM theaters only."""
+def get_noam_rsi_adoption(_conn, start_date: str, end_date: str, theaters: tuple = None):
+    """Per-partner CoCo adoption for NOAM RSIs — NoAM theaters only (or subset if theaters provided)."""
+    _noam_theaters = theaters if theaters else ('AMSExpansion','USMajors','AMSAcquisition','USPubSec')
     date_filter = f"""(
         (uc.USE_CASE_STAGE IN ('3 - Technical / Business Validation','4 - Use Case Won / Migration Plan')
          AND uc.DECISION_DATE >= '{start_date}' AND uc.DECISION_DATE <= '{end_date}')
@@ -560,7 +563,7 @@ def get_noam_rsi_adoption(_conn, start_date: str, end_date: str):
     FROM {DT_OKR} uc
     WHERE {date_filter}
       AND uc.PARTNER_NAME IN ({_NOAM_RSI_PARTNERS_SQL})
-      AND uc.THEATER_NAME IN ('AMSExpansion','USMajors','AMSAcquisition','USPubSec')
+      AND uc.THEATER_NAME IN ({','.join(repr(t) for t in _noam_theaters)})
     GROUP BY PARTNER_LABEL
     ORDER BY TOTAL_UCS DESC
     """)
