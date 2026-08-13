@@ -1406,6 +1406,44 @@ elif len(_wk) > 0:
 else:
     quarter_trend_ctx += "  No weekly snapshot data available for a trend comparison.\n"
 
+# Theatre-level and GSI geo splits, so the narrative can name where adoption is
+# concentrated rather than asserting it. Counts, not percentages, are the primary
+# signal; pct is included for ranking. Built defensively because the column set of
+# managed_bulk_conf varies with the confidence-scoring path.
+def _adoption_split(df, col, label, min_ucs=5):
+    if len(df) == 0 or col not in df.columns or 'IS_COCO_FINAL' not in df.columns:
+        return f"  {label}: not available\n"
+    g = (df.groupby(col)
+           .agg(TOTAL=('IS_COCO_FINAL', 'size'), COCO=('IS_COCO_FINAL', 'sum'))
+           .reset_index())
+    g = g[g['TOTAL'] >= min_ucs]
+    if len(g) == 0:
+        return f"  {label}: no group with at least {min_ucs} use cases\n"
+    g['PCT'] = (g['COCO'] * 100.0 / g['TOTAL']).round(1)
+    g = g.sort_values('COCO', ascending=False)
+    out = f"  {label}:\n"
+    for _, r in g.iterrows():
+        out += (f"    {r[col]}: {int(r['COCO'])} CoCo of {int(r['TOTAL'])} UCs "
+                f"({r['PCT']}% adoption)\n")
+    return out
+
+theatre_ctx = _adoption_split(managed_bulk_conf, 'THEATER_NAME',
+                              'CoCo adoption by theatre (all managed partners)')
+
+_gsi_only = (managed_bulk_conf[managed_bulk_conf['_GROUP'] == 'GSI']
+             if len(managed_bulk_conf) > 0 and '_GROUP' in managed_bulk_conf.columns
+             else managed_bulk_conf.head(0))
+gsi_geo_ctx = (_adoption_split(_gsi_only, 'REGION', 'GSI adoption by region')
+               + _adoption_split(_gsi_only, 'THEATER_NAME', 'GSI adoption by theatre'))
+
+_uc_type_col = next((c for c in ('WORKLOADS', 'TECHNICAL_USE_CASE', 'USE_CASE_TYPE')
+                     if c in managed_bulk_conf.columns), None)
+uc_type_ctx = (_adoption_split(managed_bulk_conf, _uc_type_col,
+                               f'CoCo adoption by use case type ({_uc_type_col})')
+               if _uc_type_col else
+               "  Use-case-type adoption: not available in this dataset; use the "
+               "PARTNER WORKLOAD MIX block instead and do not invent type-level adoption rates.\n")
+
 # Recent wins context — last 7 days (deployments, competitive wins, pipeline moves)
 recent_wins_ctx = ""
 if len(recent_wins_data) > 0:
@@ -1574,6 +1612,12 @@ OKR PROGRESS — REGIONAL BREAKDOWN (4 groups; GSI/NOAM goal=75%, APJ/EMEA goal=
 QUARTER PROGRESS TREND (weeks left, and whether the count of CoCo use cases is still climbing):
 {quarter_trend_ctx}
 
+WHERE ADOPTION IS CONCENTRATED — theatre and use-case-type splits (counts first, pct for ranking):
+{theatre_ctx}{uc_type_ctx}
+
+GSI GEO SPLIT (GSI partners only, by region and by theatre):
+{gsi_geo_ctx}
+
 COMMENT HIGHLIGHTS (managed partners only, Top 10 by EACV):
 {comment_ctx}
 
@@ -1627,7 +1671,7 @@ Follow this EXACT structure with 9 sections:
 - Show 4 rows: GSI (Global), NOAM RSI, APJ RSI, EMEA RSI
 - Use "OKR PROGRESS — REGIONAL BREAKDOWN" data from context (each row has group name, total UCs, CoCo UCs, CoCo %, partners meeting goal)
 - Goal% is 75% for GSI and NOAM RSI, 50% for APJ RSI and EMEA RSI — reflect the correct target per row
-- After table: 2 sentences on whether we are trending in the right direction, using the QUARTER PROGRESS TREND data. Sentence 1: state the weeks remaining in the quarter and whether the 3-week average count of CoCo use cases is increasing, declining or flat, quoting the two 3-week averages and the direction from the data. Sentence 2: state the convertible pipeline still open (the non-CoCo UC counts per group) and which group has the most room to convert. Write in normal sentence case — do not copy capitalisation from these instructions or from the data labels. Do NOT mention calendar months or quarter start/end dates. Do NOT compute your own averages or percentages — every figure comes from QUARTER PROGRESS TREND or the table above.
+- After table: 4 sentences on whether we are trending in the right direction. Sentence 1: state the weeks remaining in the quarter and whether the 3-week average count of CoCo use cases is increasing, declining or flat, quoting the two 3-week averages and the direction from the data. Sentence 2: state the convertible pipeline still open (the non-CoCo UC counts per group) and which group has the most room to convert. Sentence 3: from WHERE ADOPTION IS CONCENTRATED, name which use case type or types show the highest CoCo adoption by NUMBER of use cases and which theatre is strongest versus weakest — quote the counts, not just percentages. Sentence 4: from GSI GEO SPLIT you MUST name four things for GSI partners — the leading region, the lagging region, the leading theatre and the lagging theatre — each with its CoCo count. Do not report theatres only; the regions are in the data and must be named too. Write in normal sentence case — do not copy capitalisation from these instructions or from the data labels. Do NOT mention calendar months or quarter start/end dates. Do NOT compute your own averages or percentages, and if a split says "not available" then say nothing about it rather than estimating.
 
 ## MANAGED PARTNER PIPELINE OVERVIEW
 | Stage | Total UCs | CoCo UCs | CoCo % | Total EACV | CoCo EACV |
