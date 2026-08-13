@@ -2418,21 +2418,62 @@ def get_pc_top_skills(_conn, context, region=None, partner_names=None, start_dat
 
 
 @st.cache_data(ttl=timedelta(minutes=30))
-def get_coco_uc_weekly_counts(_conn, partners: tuple, weeks: int = 6):
-    """Weekly CoCo use-case COUNTS (not percentages) from the snapshot table.
+def get_coco_uc_weekly_counts(_conn, partners: tuple, region: str = "Global", weeks: int = 6):
+    """Weekly CoCo use-case COUNTS for the given partners and region slice.
 
-    Returns a DataFrame of WEEK_START, COCO_UCS, TOTAL_UCS ascending by week, so the
-    caller can compare a trailing 3-week average against the prior 3 weeks. Counts are
-    used rather than COCO_PCT because percentage can fall while the number of CoCo use
-    cases is still growing (the denominator moves too).
+    IMPORTANT about the source table. IS_COCO_FINAL_WEEKLY_SNAPSHOT stores one row per
+    (week, partner, REGION) where REGION is one of NoAM / EMEA / APJ / Global, and
+    'Global' is the ROLL-UP of the other three — for Accenture in one week, Global 52
+    CoCo equals APJ 7 + EMEA 29 + NoAM 16. Summing all four slices therefore double
+    counts every partner, so exactly one slice is selected here. The table also contains
+    exact duplicate rows (e.g. Accenture NoAM twice), which SELECT DISTINCT removes.
+
+    Note the snapshot carries no theatre granularity, so any NoAM theatre selection
+    (USMajors, AMSExpansion, ...) falls back to the whole NoAM slice.
+
+    Counts are used rather than COCO_PCT because the percentage can fall while the
+    number of CoCo use cases still grows.
     """
-    ps = "','".join(p.replace("'", "''") for p in partners)
+    if not partners:
+        import pandas as pd
+        return pd.DataFrame(columns=["WEEK_START", "COCO_UCS", "TOTAL_UCS"])
+    ps = "','".join(p.replace("'", "''").upper() for p in partners)
+    _named_region = {"NoAM": "NoAM", "EMEA": "EMEA", "APJ": "APJ"}.get(
+        region, "NoAM" if region in ("AMSExpansion", "USMajors", "AMSAcquisition", "USPubSec")
+        else None)
+
+    if _named_region:
+        # A specific geo was selected: use that slice only.
+        body = f"""
+        SELECT WEEK_START, PARTNER_NAME, COCO_UCS, TOTAL_UCS
+        FROM d WHERE REGION = '{_named_region}'
+        """
+    else:
+        # Global: take each partner's Global roll-up when it exists (GSIs), otherwise sum
+        # their regional slices (RSIs have no Global row). Never both, or GSIs double count.
+        body = """
+        SELECT WEEK_START, PARTNER_NAME, COCO_UCS, TOTAL_UCS FROM g
+        UNION ALL
+        SELECT r.WEEK_START, r.PARTNER_NAME, r.COCO_UCS, r.TOTAL_UCS
+        FROM r LEFT JOIN g
+          ON g.WEEK_START = r.WEEK_START AND g.PARTNER_NAME = r.PARTNER_NAME
+        WHERE g.PARTNER_NAME IS NULL
+        """
     query = f"""
+    WITH d AS (
+        SELECT DISTINCT WEEK_START, PARTNER_NAME, REGION, COCO_UCS, TOTAL_UCS
+        FROM {SCHEMA}.IS_COCO_FINAL_WEEKLY_SNAPSHOT
+        WHERE UPPER(PARTNER_NAME) IN ('{ps}')
+    ),
+    g AS (SELECT WEEK_START, PARTNER_NAME, COCO_UCS, TOTAL_UCS FROM d WHERE REGION = 'Global'),
+    r AS (SELECT WEEK_START, PARTNER_NAME, SUM(COCO_UCS) AS COCO_UCS, SUM(TOTAL_UCS) AS TOTAL_UCS
+          FROM d WHERE REGION <> 'Global' GROUP BY 1, 2),
+    scoped AS ({body})
     SELECT WEEK_START,
            SUM(COCO_UCS)  AS COCO_UCS,
-           SUM(TOTAL_UCS) AS TOTAL_UCS
-    FROM {SCHEMA}.IS_COCO_FINAL_WEEKLY_SNAPSHOT
-    WHERE PARTNER_NAME IN ('{ps}')
+           SUM(TOTAL_UCS) AS TOTAL_UCS,
+           COUNT(DISTINCT PARTNER_NAME) AS PARTNERS
+    FROM scoped
     GROUP BY 1
     ORDER BY 1 DESC
     LIMIT {int(weeks)}
@@ -2440,7 +2481,7 @@ def get_coco_uc_weekly_counts(_conn, partners: tuple, weeks: int = 6):
     import pandas as pd
     df = _conn.query(query)
     if len(df) > 0:
-        for c in ["COCO_UCS", "TOTAL_UCS"]:
+        for c in ["COCO_UCS", "TOTAL_UCS", "PARTNERS"]:
             df[c] = pd.to_numeric(df[c], errors="coerce")
         df = df.sort_values("WEEK_START").reset_index(drop=True)
     return df

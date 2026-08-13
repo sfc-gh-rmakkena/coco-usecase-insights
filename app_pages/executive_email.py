@@ -1382,7 +1382,16 @@ if len(managed_bulk_conf) > 0 and '_GROUP' in managed_bulk_conf.columns:
 _weeks_left = max(0, -(-(datetime.strptime(Q3_END, '%Y-%m-%d').date() - datetime.now().date()).days // 7))
 quarter_trend_ctx = f"  Weeks remaining in the quarter: {_weeks_left}\n"
 
-_wk = get_coco_uc_weekly_counts(conn, tuple(MANAGED_PARTNERS), weeks=6)
+# Honour the sidebar filters: trend the partners actually selected, in the selected
+# region slice, rather than the whole managed book.
+from utils import resolve_partner_filter as _resolve_pf
+_trend_partners = _resolve_pf(selected_partners) if selected_partners else list(MANAGED_PARTNERS)
+quarter_trend_ctx += (
+    f"  Trend scope: {len(_trend_partners)} partner name(s) as selected in the sidebar, "
+    f"region slice {region}\n"
+)
+
+_wk = get_coco_uc_weekly_counts(conn, tuple(_trend_partners), region=region, weeks=6)
 if len(_wk) >= 6:
     _last3 = _wk.tail(3)['COCO_UCS'].mean()
     _prior3 = _wk.iloc[-6:-3]['COCO_UCS'].mean()
@@ -1390,12 +1399,19 @@ if len(_wk) >= 6:
     _dir = 'increasing' if _delta > 0 else ('declining' if _delta < 0 else 'flat')
     _pct_chg = (_delta / _prior3 * 100) if _prior3 else 0.0
     quarter_trend_ctx += (
+        f"  Partners covered by the trend: {int(_wk.iloc[-1]['PARTNERS'])}\n"
         f"  CoCo use cases, average of last 3 weeks: {_last3:.0f}\n"
         f"  CoCo use cases, average of prior 3 weeks: {_prior3:.0f}\n"
         f"  Direction of the 3-week average: {_dir} by {abs(_delta):.0f} use cases ({_pct_chg:+.1f}%)\n"
         f"  Latest week CoCo UCs: {int(_wk.iloc[-1]['COCO_UCS'])} of {int(_wk.iloc[-1]['TOTAL_UCS'])} total UCs\n"
         f"  Weekly CoCo UC counts oldest to newest: "
         + ", ".join(f"{int(r.COCO_UCS)}" for r in _wk.itertuples()) + "\n"
+        "  BASIS WARNING: these weekly figures come from the weekly snapshot table, which\n"
+        "  uses its own CoCo definition and covers each partner's whole book rather than the\n"
+        "  date-windowed, geo-scoped population in the table above. They will NOT add up to\n"
+        "  the CoCo UC counts in the OKR table. Use them ONLY to describe direction and\n"
+        "  momentum. Do not present them as the current CoCo use case totals, and do not\n"
+        "  compare them to the table's numbers.\n"
     )
 elif len(_wk) > 0:
     quarter_trend_ctx += (
@@ -1671,7 +1687,7 @@ Follow this EXACT structure with 9 sections:
 - Show 4 rows: GSI (Global), NOAM RSI, APJ RSI, EMEA RSI
 - Use "OKR PROGRESS — REGIONAL BREAKDOWN" data from context (each row has group name, total UCs, CoCo UCs, CoCo %, partners meeting goal)
 - Goal% is 75% for GSI and NOAM RSI, 50% for APJ RSI and EMEA RSI — reflect the correct target per row
-- After table: 4 sentences on whether we are trending in the right direction. Sentence 1: state the weeks remaining in the quarter and whether the 3-week average count of CoCo use cases is increasing, declining or flat, quoting the two 3-week averages and the direction from the data. Sentence 2: state the convertible pipeline still open (the non-CoCo UC counts per group) and which group has the most room to convert. Sentence 3: from WHERE ADOPTION IS CONCENTRATED, name which use case type or types show the highest CoCo adoption by NUMBER of use cases and which theatre is strongest versus weakest — quote the counts, not just percentages. Sentence 4: from GSI GEO SPLIT you MUST name four things for GSI partners — the leading region, the lagging region, the leading theatre and the lagging theatre — each with its CoCo count. Do not report theatres only; the regions are in the data and must be named too. Write in normal sentence case — do not copy capitalisation from these instructions or from the data labels. Do NOT mention calendar months or quarter start/end dates. Do NOT compute your own averages or percentages, and if a split says "not available" then say nothing about it rather than estimating.
+- After table: 4 sentences on whether we are trending in the right direction. Sentence 1: state the weeks remaining in the quarter and whether the 3-week average count of CoCo use cases is increasing, declining or flat, giving the percentage change and the direction. Describe momentum only — do NOT quote the two 3-week average numbers themselves, because they come from a different basis than this table and would not reconcile with it. Sentence 2: state the convertible pipeline still open (the non-CoCo UC counts per group) and which group has the most room to convert. Sentence 3: from WHERE ADOPTION IS CONCENTRATED, name which use case type or types show the highest CoCo adoption by NUMBER of use cases and which theatre is strongest versus weakest — quote the counts, not just percentages. Sentence 4: from GSI GEO SPLIT you MUST name four things for GSI partners — the leading region, the lagging region, the leading theatre and the lagging theatre — each with its CoCo count. Do not report theatres only; the regions are in the data and must be named too. Write in normal sentence case — do not copy capitalisation from these instructions or from the data labels. Do NOT mention calendar months or quarter start/end dates. Do NOT compute your own averages or percentages, and if a split says "not available" then say nothing about it rather than estimating.
 
 ## MANAGED PARTNER PIPELINE OVERVIEW
 | Stage | Total UCs | CoCo UCs | CoCo % | Total EACV | CoCo EACV |
