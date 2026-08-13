@@ -79,6 +79,8 @@ def _norm_partner(df):
     return out
 
 
+st.subheader("For more in-depth details use http://go/si-coco-customer")
+
 # =============================== View 1 ====================================
 st.subheader("1. Customer engagements - activity partner consultants drive")
 st.caption("For CoCo-attached use cases, how much CoCo activity the partner's own consultants generate inside customer accounts.")
