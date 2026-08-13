@@ -2351,8 +2351,10 @@ def _pc_filters(region, partner_names, alias="r"):
     reg = "" if (not region or region == "Global") else f" AND {alias}.PARTNER_REGION = '{region.replace(chr(39),chr(39)+chr(39))}'"
     pf = ""
     if partner_names:
-        pl = "','".join(p.replace("'", "''") for p in partner_names)
-        pf = f" AND {alias}.PARTNER_NAME IN ('{pl}')"
+        # Pipeline partner names come from SALES.PARTNER_BASIC (e.g. 'accenture'),
+        # while the sidebar sends use-case names (e.g. 'Accenture') — match case-insensitively.
+        pl = "','".join(p.replace("'", "''").upper() for p in partner_names)
+        pf = f" AND UPPER({alias}.PARTNER_NAME) IN ('{pl}')"
     return reg, pf
 
 
