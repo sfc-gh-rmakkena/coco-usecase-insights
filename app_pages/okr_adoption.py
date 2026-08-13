@@ -5,6 +5,13 @@ from datetime import datetime, date
 from utils.queries import get_okr_partner_summary, get_okr_stage_breakdown, get_okr_coco_adoption, get_partner_credit_consumption, get_usecase_confidence_scores, get_bulk_confidence_scores, get_coco_final_wow, get_coco_final_trend_4w, get_partner_coco_trend_4w, get_partner_weekly_credits_4w, get_partner_surface_trend_4w
 from utils.ask_ai import build_filter_context, build_credit_wow_context, build_uc_pattern_context
 from utils import resolve_partner_filter, resolve_region_theaters, PARTNER_RENAME_MAP, filter_out_partner_own_accounts
+from utils import APJ_RSI_REGION_MAP, EMEA_RSI_REGION_MAP, PARTNER_ALIASES as _PA_OKR
+
+# Managed partner universe — same as Adoption Metrics default scope
+_GSI_OKR = {'Accenture','Capgemini Technologies LLC','Cognizant Technology Solutions US Corp',
+            'Deloitte Consulting','EY','Ernst & Young (EY)','IBM','IBM Consulting'}
+_NOAM_OKR = set(p for p in _PA_OKR.get('--- NOAM RSIs ---', []) if not p.startswith('---')) | {'LTI Mindtree','Kipi.ai'}
+_ALL_MANAGED_OKR = _GSI_OKR | _NOAM_OKR | set(APJ_RSI_REGION_MAP.keys()) | set(EMEA_RSI_REGION_MAP.keys())
 
 conn = st.session_state.conn
 region = st.session_state.get("selected_region", "Global")
@@ -40,19 +47,48 @@ if len(base_summary) == 0:
     st.info("No use cases found for the selected date range.")
     st.stop()
 
-# Apply sidebar partner filter
+# Apply sidebar partner filter; default to managed partners when none selected
+_using_default_managed = not selected_partners
 if selected_partners:
     partner_names = resolve_partner_filter(selected_partners)
     base_summary = base_summary[base_summary['PARTNER_NAME'].isin(partner_names)]
     if len(base_summary) == 0:
         st.info(f"No data for selected partners.")
         st.stop()
+else:
+    # Default: scope to managed partners (GSI + NOAM RSI + APJ RSI + EMEA RSI)
+    base_summary = base_summary[base_summary['PARTNER_NAME'].isin(_ALL_MANAGED_OKR)]
+
+def _apply_managed_geo_filter(bc):
+    """Apply same geo restrictions as Adoption Metrics _managed_bc:
+    NOAM RSI → NoAM theaters, APJ RSI → country, EMEA RSI → region, GSI → global."""
+    if bc is None or len(bc) == 0:
+        return bc
+    _noam_theaters = ('AMSExpansion', 'USMajors', 'AMSAcquisition', 'USPubSec')
+    parts = []
+    parts.append(bc[bc['PARTNER_NAME'].isin(_GSI_OKR)])
+    parts.append(bc[bc['PARTNER_NAME'].isin(_NOAM_OKR) & bc['THEATER_NAME'].isin(_noam_theaters)])
+    if 'REGION_NAME' in bc.columns:
+        _apj = bc[bc['PARTNER_NAME'].isin(set(APJ_RSI_REGION_MAP.keys()))].copy()
+        _apj['_c'] = _apj['PARTNER_NAME'].map({k: v[1] for k, v in APJ_RSI_REGION_MAP.items()})
+        parts.append(_apj[_apj['REGION_NAME'] == _apj['_c']].drop(columns=['_c']))
+        _emea = bc[bc['PARTNER_NAME'].isin(set(EMEA_RSI_REGION_MAP.keys()))].copy()
+        _emea['_c'] = _emea['PARTNER_NAME'].map({k: v[1] for k, v in EMEA_RSI_REGION_MAP.items()})
+        parts.append(_emea[_emea['REGION_NAME'] == _emea['_c']].drop(columns=['_c']))
+    else:
+        parts.append(bc[bc['PARTNER_NAME'].isin(set(APJ_RSI_REGION_MAP.keys()))])
+        parts.append(bc[bc['PARTNER_NAME'].isin(set(EMEA_RSI_REGION_MAP.keys()))])
+    return pd.concat([p for p in parts if len(p) > 0], ignore_index=True) if parts else bc
 
 # Compute CoCo using full confidence scoring when account-level is enabled
 if include_account_coco:
     bulk_conf = get_bulk_confidence_scores(conn, base_summary['PARTNER_NAME'].tolist(), q_start, q_end)
     if len(bulk_conf) > 0:
-        # Apply region filter in Python (bulk_conf includes THEATER_NAME via uc.*)
+        # Apply geo restrictions when using default managed partner scope
+        # (same logic as Adoption Metrics _managed_bc — ensures numbers match)
+        if _using_default_managed:
+            bulk_conf = _apply_managed_geo_filter(bulk_conf)
+        # Apply sidebar region filter
         if region and region != 'Global':
             _theaters = resolve_region_theaters(region)
             if _theaters is not None:
@@ -355,20 +391,20 @@ if 'Q2_CREDITS' in filtered_sorted.columns:
         on='PARTNER_NAME', how='left'
     )
     display_df = display_df.merge(_display_df_credits, on='PARTNER_NAME', how='left')
-    _col_cfg['Q2_CREDITS']    = st.column_config.NumberColumn("CoCo Q2 Credits", format="$%.0f",
-        help="Cumulative CoCo credit spend on IS_COCO_FINAL accounts since Q2 start (May 1)")
+    _col_cfg['Q2_CREDITS']    = st.column_config.NumberColumn("CoCo Credits", format="$%.0f",
+        help="Cumulative CoCo credit spend on IS_COCO_FINAL accounts within the date range")
     _col_cfg['LAST7_CREDITS']  = st.column_config.NumberColumn("Last 7d Credits",  format="$%.0f",
         help="Credit spend in the last 7 rolling days — same window as Deep Dive header")
-    _col_cfg['CREDITS_WOW_PCT'] = st.column_config.NumberColumn("Credits WoW%",     format="%+.1f%%",
+    _col_cfg['CREDITS_WOW_PCT'] = st.column_config.NumberColumn("7D Credits WoW%",     format="%+.1f%%",
         help="Week-over-week % change in credits (last 7d vs prior 7d)")
-    _col_cfg['Q2_TOKENS']       = st.column_config.NumberColumn("Q2 Tokens",        format="%d",
-        help="Cumulative token usage on IS_COCO_FINAL accounts since Q2 start (May 1)")
+    _col_cfg['Q2_TOKENS']       = st.column_config.NumberColumn("Tokens",        format="%d",
+        help="Cumulative token usage on IS_COCO_FINAL accounts within the date range")
     _col_cfg['LAST7_TOKENS']    = st.column_config.NumberColumn("Last 7d Tokens",   format="%d",
         help="Token usage in the last 7 rolling days")
-    _col_cfg['TOKENS_WOW_PCT']  = st.column_config.NumberColumn("Tokens WoW%",      format="%+.1f%%",
+    _col_cfg['TOKENS_WOW_PCT']  = st.column_config.NumberColumn("7D Tokens WoW%",      format="%+.1f%%",
         help="Week-over-week % change in tokens (last 7d vs prior 7d)")
     _col_cfg['ACCTS_WITH_USAGE'] = st.column_config.NumberColumn("Accts w/ Usage",  format="%d",
-        help="IS_COCO_FINAL accounts with actual CoCo credit consumption in Q2")
+        help="IS_COCO_FINAL accounts with actual CoCo credit consumption")
 
 _df_show = display_df[[c for c in _display_cols if c in display_df.columns]].copy()
 _wow_cols = [c for c in ['CREDITS_WOW_PCT', 'TOKENS_WOW_PCT'] if c in _df_show.columns]
@@ -545,16 +581,16 @@ if selected_partner:
 
             cr1, cr2, cr3, cr4 = st.columns(4)
 
-            cr1.metric("Q2 CoCo Credits",
+            cr1.metric("CoCo Credits",
                 f"${float(_ps['Q2_CREDITS']):,.0f}" if pd.notna(_ps.get('Q2_CREDITS')) else "N/A",
-                help=(f"Q2 Credit Spend — IS_COCO_FINAL Accounts{_sep}\n"
+                help=(f"Credit Spend — IS_COCO_FINAL Accounts{_sep}\n"
                       f"Period:   May 1, 2026 – today\n"
                       f"Last 7d:  ${_l7c:,.0f}\n"
                       f"Prior 7d: ${_p7c:,.0f}\n"
                       f"WoW Δ:    {_fmt_delta_cred(_dcred)}\n"
                       f"WoW%:     {_cwow:+.1f}%"
                       f"{_stage_note}") if _l7c else
-                     "Q2 cumulative credit spend on IS_COCO_FINAL accounts")
+                     "Cumulative credit spend on IS_COCO_FINAL accounts")
 
             cr2.metric("Credits This Week",
                 f"${_l7c:,.0f}" if _l7c is not None else "N/A",
@@ -567,16 +603,16 @@ if selected_partner:
                       f"Formula: (Last 7d \u2212 Prior 7d) \u00f7 Prior 7d \u00d7 100") if _l7c else
                      "Last 7d credit spend")
 
-            cr3.metric("Q2 CoCo Tokens",
+            cr3.metric("CoCo Tokens",
                 _fmt_tok(_ps.get('Q2_TOKENS')),
-                help=(f"Q2 Token Usage \u2014 IS_COCO_FINAL Accounts{_sep}\n"
+                help=(f"Token Usage \u2014 IS_COCO_FINAL Accounts{_sep}\n"
                       f"Period:   May 1, 2026 \u2013 today\n"
                       f"Last 7d:  {_fmt_tok(_l7t)}\n"
                       f"Prior 7d: {_fmt_tok(_p7t)}\n"
                       f"WoW \u0394:    {_fmt_delta_tok(_dtok)}\n"
                       f"WoW%:     {_twow:+.1f}%"
                       f"{_stage_note}") if _l7t else
-                     "Q2 cumulative token usage on IS_COCO_FINAL accounts")
+                     "Cumulative token usage on IS_COCO_FINAL accounts")
 
             cr4.metric("Tokens This Week",
                 _fmt_tok(_l7t) if _l7t is not None else "N/A",
@@ -591,7 +627,7 @@ if selected_partner:
         elif len(credit_data[credit_data['PARTNER_NAME'] == selected_partner]) > 0:
             pc = credit_data[credit_data['PARTNER_NAME'] == selected_partner].iloc[0]
             cr1, cr2 = st.columns(2)
-            cr1.metric("Q2 Total Credits", f"${pc['Q2_TOTAL_CREDITS']:,.0f}" if pd.notna(pc['Q2_TOTAL_CREDITS']) else "N/A")
+            cr1.metric("Total Credits", f"${pc['Q2_TOTAL_CREDITS']:,.0f}" if pd.notna(pc['Q2_TOTAL_CREDITS']) else "N/A")
             cr2.metric("WoW", f"{pc['WOW_PCT']:+.1f}%" if pd.notna(pc['WOW_PCT']) else "N/A")
 
         coco_ucs = partner_detail[partner_detail['IS_COCO_ATTACHED'] == True]
@@ -666,12 +702,12 @@ if selected_partner:
                     ) if c in coco_display.columns]
                     coco_uc_config = {
                         **uc_config,
-                        'Q2_CREDITS':        st.column_config.NumberColumn("Q2 Credits",      format="$%.0f",    width=110, help="Cumulative Q2 credit spend (May 1 to today)"),
+                        'Q2_CREDITS':        st.column_config.NumberColumn("Credits",      format="$%.0f",    width=110, help="Cumulative credit spend within the date range"),
                         'LAST7_CREDITS':     st.column_config.NumberColumn("Last 7d Credits", format="$%.0f",    width=115, help="Credit spend in last 7 days — same window as Deep Dive header"),
-                        'CREDITS_WOW_PCT':   st.column_config.NumberColumn("Credits WoW%",    format="%+.1f%%",  width=110, help="Week-over-week % change in credits (last 7d vs prior 7d)"),
-                        'Q2_TOKENS':         st.column_config.NumberColumn("Q2 Tokens",       format="%d",       width=100, help="Cumulative Q2 token usage (May 1 to today)"),
+                        'CREDITS_WOW_PCT':   st.column_config.NumberColumn("7D Credits WoW%",    format="%+.1f%%",  width=110, help="Week-over-week % change in credits (last 7d vs prior 7d)"),
+                        'Q2_TOKENS':         st.column_config.NumberColumn("Tokens",       format="%d",       width=100, help="Cumulative token usage within the date range"),
                         'LAST7_TOKENS':      st.column_config.NumberColumn("Last 7d Tokens",  format="%d",       width=110, help="Token usage in last 7 days"),
-                        'TOKENS_WOW_PCT':    st.column_config.NumberColumn("Tokens WoW%",     format="%+.1f%%",  width=110, help="Week-over-week % change in tokens (last 7d vs prior 7d)"),
+                        'TOKENS_WOW_PCT':    st.column_config.NumberColumn("7D Tokens WoW%",     format="%+.1f%%",  width=110, help="Week-over-week % change in tokens (last 7d vs prior 7d)"),
                         'CLI_%':             st.column_config.NumberColumn("CLI %",            format="%.1f%%",   width=70,  help="% of credits from CLI (terminal)"),
                         'DESKTOP_%':         st.column_config.NumberColumn("Desktop %",        format="%.1f%%",   width=80,  help="% of credits from VS Code extension"),
                         'UI_%':              st.column_config.NumberColumn("UI %",             format="%.1f%%",   width=70,  help="% of credits from Snowsight web UI"),

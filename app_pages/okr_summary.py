@@ -436,9 +436,9 @@ with tab_summary:
     if 'Q2_CREDITS' in display.columns:
         _display_cols += ['Q2_CREDITS', 'CREDITS_WOW_PCT', 'Q2_TOKENS', 'TOKENS_WOW_PCT', 'ACCTS_WITH_USAGE']
         _col_cfg['Q2_CREDITS']      = st.column_config.NumberColumn("Q2 Credits", format="$%.0f", help="CoCo token credits on IS_COCO_FINAL customer accounts since Q2 start")
-        _col_cfg['CREDITS_WOW_PCT'] = st.column_config.NumberColumn("Credits WoW%", format="%+.1f%%", help="Portfolio-level WoW change in CoCo credits (last 7d vs prior 7d)")
+        _col_cfg['CREDITS_WOW_PCT'] = st.column_config.NumberColumn("7D Credits WoW%", format="%+.1f%%", help="Portfolio-level WoW change in CoCo credits (last 7d vs prior 7d)")
         _col_cfg['Q2_TOKENS']       = st.column_config.NumberColumn("Q2 Tokens", format="%d", help="Total tokens on IS_COCO_FINAL customer accounts since Q2 start")
-        _col_cfg['TOKENS_WOW_PCT']  = st.column_config.NumberColumn("Tokens WoW%", format="%+.1f%%", help="Portfolio-level WoW change in token consumption (last 7d vs prior 7d)")
+        _col_cfg['TOKENS_WOW_PCT']  = st.column_config.NumberColumn("7D Tokens WoW%", format="%+.1f%%", help="Portfolio-level WoW change in token consumption (last 7d vs prior 7d)")
         _col_cfg['ACCTS_WITH_USAGE']= st.column_config.NumberColumn("Accts w/ Usage", format="%d", help="IS_COCO_FINAL accounts with actual CoCo credit consumption")
     st.dataframe(
         display[[c for c in _display_cols if c in display.columns]],
@@ -486,11 +486,11 @@ with tab_summary:
                     help="IS_COCO_FINAL customer accounts with CoCo credit consumption in Q2"),
                 'Q2_CREDITS':        st.column_config.NumberColumn("Q2 Credits", format="$%.0f",
                     help="CoCo token credits on IS_COCO_FINAL customer accounts since Q2 start"),
-                'CREDITS_WOW_PCT':   st.column_config.NumberColumn("Credits WoW%", format="%+.1f%%",
+                'CREDITS_WOW_PCT':   st.column_config.NumberColumn("7D Credits WoW%", format="%+.1f%%",
                     help="Portfolio-level WoW: (last 7d credits − prior 7d credits) / prior 7d credits"),
                 'Q2_TOKENS':         st.column_config.NumberColumn("Q2 Tokens", format="%d",
                     help="Total tokens (input + output) on IS_COCO_FINAL customer accounts since Q2 start"),
-                'TOKENS_WOW_PCT':    st.column_config.NumberColumn("Tokens WoW%", format="%+.1f%%",
+                'TOKENS_WOW_PCT':    st.column_config.NumberColumn("7D Tokens WoW%", format="%+.1f%%",
                     help="Portfolio-level WoW: (last 7d tokens − prior 7d tokens) / prior 7d tokens"),
             },
             hide_index=True, use_container_width=True
