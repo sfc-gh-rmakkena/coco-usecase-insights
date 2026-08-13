@@ -9,7 +9,8 @@ Honors the sidebar Region / Partner / date filters.
 import pandas as pd
 import streamlit as st
 
-from utils.queries import (get_pc_activity, get_pc_top_skills, get_pc_totals, get_pc_usecase_counts)
+from utils.queries import (get_pc_activity, get_pc_coco_uc_engagements, get_pc_top_skills,
+                           get_pc_totals, get_pc_usecase_counts)
 from utils import resolve_partner_filter, PARTNER_RENAME_MAP
 
 conn = st.session_state.conn
@@ -55,8 +56,6 @@ act = _norm_partner(get_pc_activity(conn, "Customer", region, partner_list, star
 sk = _norm_partner(get_pc_top_skills(conn, "Customer", region, partner_list, start_date, end_date))
 ucc = _norm_partner(get_pc_usecase_counts(conn))
 
-_v1_totals = "(no customer-engagement data)"
-
 if len(act) == 0:
     st.info("No customer-account consultant activity for the current filters.")
 else:
@@ -69,13 +68,6 @@ else:
     k[0].metric("Partners active in customers", f"{v1['PARTNER_NAME'].nunique():,}")
     k[1].metric("Consultants in customer accts", f"{int(v1['CONSULTANTS'].sum()):,}")
     k[2].metric("Customer-acct tokens", f"{int(v1['TOKENS'].sum())/1e9:.2f}B")
-
-    _v1_totals = (
-        f"Partners active in customer accounts: {v1['PARTNER_NAME'].nunique():,}\n"
-        f"Consultants in customer accounts: {int(v1['CONSULTANTS'].sum()):,}\n"
-        f"Total customer-account tokens: {int(v1['TOKENS'].sum()):,}\n"
-        f"Total customer-account prompts: {int(v1['PROMPTS'].sum()):,}"
-    )
 
     show1 = v1[["PARTNER_NAME", "COCO_UCS", "CONSULTANTS", "TOKENS", "PROMPTS", "TOP_SKILLS", "WOW_PCT"]]
     st.dataframe(
@@ -104,8 +96,6 @@ tot = _norm_partner(get_pc_totals(conn, region, partner_list))
 sk2 = _norm_partner(get_pc_top_skills(conn, "Partner", region, partner_list, start_date, end_date))
 ucc2 = _norm_partner(get_pc_usecase_counts(conn))
 
-_v2_totals = "(no partner-own-account data)"
-
 if len(act2) == 0:
     st.info("No partner-own-account consultant activity for the current filters.")
 else:
@@ -121,13 +111,6 @@ else:
     k[0].metric("Partners", f"{v2['PARTNER_NAME'].nunique():,}")
     k[1].metric("Total consultants", f"{int(v2['TOTAL_CONSULTANTS'].sum()):,}")
     k[2].metric("Partner-acct tokens", f"{int(v2['TOKENS'].sum())/1e9:.2f}B")
-
-    _v2_totals = (
-        f"Partners with own-account activity: {v2['PARTNER_NAME'].nunique():,}\n"
-        f"Total consultants (all resolved): {int(v2['TOTAL_CONSULTANTS'].sum()):,}\n"
-        f"Total partner-own-account tokens: {int(v2['TOKENS'].sum()):,}\n"
-        f"Total partner-own-account prompts: {int(v2['PROMPTS'].sum()):,}"
-    )
 
     show2 = v2[["PARTNER_NAME", "TOTAL_CONSULTANTS", "ACTIVE_COCO_UCS",
                 "TOKENS", "PROMPTS", "TOP_SKILLS", "WOW_PCT"]]
@@ -155,65 +138,131 @@ st.session_state.ask_ai_context = (
 st.divider()
 st.subheader("Generate Summary")
 
-_v1_ctx = show1.to_string(index=False) if 'show1' in dir() else "(no customer-engagement data)"
-_v2_ctx = show2.to_string(index=False) if 'show2' in dir() else "(no partner-own-account data)"
+# Strict attribution: consultant activity in customer accounts where THAT SAME partner
+# owns a CoCo-attached UC. Joined on exact account name (no shared account ID exists),
+# so coverage is partial and is reported explicitly below.
+eng = _norm_partner(get_pc_coco_uc_engagements(conn, region, partner_list, start_date, end_date))
+
+_all_cust_tokens = int(v1["TOKENS"].sum()) if 'v1' in dir() else 0
+
+if len(eng) == 0:
+    _eng_totals = "(no consultant activity could be matched to a CoCo-attached use case)"
+    _eng_ctx = "(none)"
+    _partner_ctx = "(none)"
+    _skills_ctx = "(none)"
+else:
+    _eng_tokens = int(eng["TOKENS"].sum())
+    _coverage = (f"{_eng_tokens * 100.0 / _all_cust_tokens:.1f}%"
+                 if _all_cust_tokens else "n/a")
+
+    _eng_totals = (
+        f"CoCo-attached engagements matched: {len(eng):,}\n"
+        f"Partners involved: {eng['PARTNER_NAME'].nunique():,}\n"
+        f"Customer accounts involved: {eng['ACCOUNT_NAME'].nunique():,}\n"
+        f"CoCo-attached use cases in those accounts: {int(eng['COCO_UCS'].sum()):,}\n"
+        f"Of those, already deployed: {int(eng['DEPLOYED_UCS'].sum()):,}\n"
+        f"Combined EACV of those use cases: ${int(eng['EACV'].sum()):,}\n"
+        f"Tokens consumed in these engagements: {_eng_tokens:,}\n"
+        f"All customer-account tokens (this filter): {_all_cust_tokens:,}\n"
+        f"Share of customer-account tokens that is matched to a CoCo UC: {_coverage}"
+    )
+
+    _e = eng.copy()
+    _e["TOKEN_SHARE_PCT"] = (_e["TOKENS"] * 100.0 / _eng_tokens).round(1)
+    _eng_ctx = _e[["PARTNER_NAME", "ACCOUNT_NAME", "COCO_UCS", "DEPLOYED_UCS", "EACV",
+                   "CONSULTANTS", "TOKENS", "TOKEN_SHARE_PCT", "ACTIVE_DAYS",
+                   "WORKLOADS", "TECH_USE_CASE"]].to_string(index=False, max_colwidth=60)
+
+    _p = (_e.groupby("PARTNER_NAME", as_index=False)
+            .agg(ENGAGEMENTS=("ACCOUNT_NAME", "nunique"),
+                 COCO_UCS=("COCO_UCS", "sum"),
+                 DEPLOYED_UCS=("DEPLOYED_UCS", "sum"),
+                 EACV=("EACV", "sum"),
+                 TOKENS=("TOKENS", "sum"))
+            .sort_values("TOKENS", ascending=False))
+    _p["TOKEN_SHARE_PCT"] = (_p["TOKENS"] * 100.0 / _eng_tokens).round(1)
+    _partner_ctx = _p.to_string(index=False)
+
+    _sk_eng = sk[sk["PARTNER_NAME"].isin(eng["PARTNER_NAME"].unique())] if len(sk) else sk
+    _skills_ctx = _sk_eng.to_string(index=False) if len(_sk_eng) else "(no skill data for these partners)"
 
 data_context = f"""SCOPE: Region {region} | Period {start_date} to {end_date}
-Partner filter: {', '.join(selected_partners) if selected_partners else 'all managed partners'}
+Partner filter: {', '.join(selected_partners) if selected_partners else 'all partners'}
 
-PRE-COMPUTED TOTALS — use these verbatim for any total or count. Do NOT sum the
-tables yourself and do NOT compute percentages that are not listed here.
-VIEW 1:
-{_v1_totals}
-VIEW 2:
-{_v2_totals}
+ATTRIBUTION: strict. A row below means consultants from partner P were active in customer
+account A, AND partner P owns at least one CoCo-attached use case in account A. Matching is
+by exact account name because no shared account ID exists between the usage and use-case
+records, so some genuine engagements will be missing.
 
-VIEW 1 - CUSTOMER ENGAGEMENTS (consultant activity inside customer accounts).
-Columns: Partner, CoCo-attached UCs, # Consultants, Tokens, Prompts, Key skills, Tokens 7d change %
-{_v1_ctx}
+PRE-COMPUTED TOTALS — use these verbatim. Do NOT sum columns yourself and do NOT compute
+any percentage that is not already given here.
+{_eng_totals}
 
-VIEW 2 - PARTNER-OWN ACCOUNT USAGE (the partner's internal CoCo adoption).
-Columns: Partner, # Total consultants, Active CoCo UCs, Tokens, Prompts, Top skills, Tokens 7d change %
-{_v2_ctx}
+PER-PARTNER ROLLUP (TOKEN_SHARE_PCT = share of the matched engagement tokens above)
+{_partner_ctx}
+
+ENGAGEMENT DETAIL — one row per partner + customer account.
+WORKLOADS and TECH_USE_CASE describe the KIND OF WORK the use case covers.
+{_eng_ctx}
+
+COCO SKILLS INVOKED by these partners' consultants in customer accounts (what they
+actually did inside the tool, most used first)
+{_skills_ctx}
 """
 
-default_prompt = """You are writing a briefing for Snowflake leadership on PARTNER CONSULTANT activity — the individual consultants at managed partners who are actually using Cortex Code (CoCo).
+default_prompt = """You are writing a CEO-level readout on what partner consultants are actually DOING inside Snowflake customer accounts that have Cortex Code (CoCo) attached use cases.
 
-All numbers MUST come from the data provided below, and every total or count MUST be taken verbatim from the PRE-COMPUTED TOTALS block. Do NOT sum table columns yourself, do NOT compute percentages or shares that are not given to you, and do NOT invent partners, consultants, skills or figures. If something is not in the data, omit it.
+Audience: the CEO and VPs. They have 60 seconds. Be specific and concrete. No hedging, no filler, no restating the methodology.
 
-Consultants are identity-resolved: Tier-1 = active in the partner's own Snowflake account, Tier-2 = the same person matched into customer accounts. "Customer engagements" = the partner's consultants working inside CUSTOMER accounts. "Partner-own" = usage inside the partner's OWN account.
+RULES ON NUMBERS
+- Every total, count and percentage MUST be copied verbatim from PRE-COMPUTED TOTALS or from the TOKEN_SHARE_PCT column.
+- Do NOT sum columns, do NOT compute your own shares or averages, do NOT invent partners, accounts, consultants, skills or figures.
+- Name real partners and real customer accounts from the data. Never invent an account name.
 
-Follow this EXACT structure:
+WHAT THE DATA MEANS
+- Attribution is strict: the partner whose consultants are active also owns a CoCo-attached use case in that same account.
+- WORKLOADS and TECH_USE_CASE = the kind of work the engagement covers (e.g. "DE: Ingestion", "AI: Agents", "Analytics: Business Intelligence").
+- The skills list = what the consultants actually invoked inside CoCo.
+- Tokens = depth of CoCo usage. TOKEN_SHARE_PCT = that partner's share of the matched engagement tokens.
 
-## SUMMARY
-2-3 sentences, then exactly 4 bullets.
-- Open with total consultants active in customer accounts and total customer-account tokens, both taken from PRE-COMPUTED TOTALS.
-- Second sentence: the dominant pattern — is activity concentrated in a few partners or spread widely? Name the leading partners; do not quote a percentage share.
-- Bullet 1: "**Top partners by customer-account tokens:** [top 3 with token counts]"
-- Bullet 2: "**Deepest consultant benches:** [top 3 by # consultants]"
-- Bullet 3: "**Most used skills:** [top 3 skills across partners]"
-- Bullet 4: "**Momentum:** [partners with the largest positive 7d token change, and any notable declines]"
+Follow this EXACT structure.
 
-## CUSTOMER ENGAGEMENTS
-| Partner | CoCo UCs | Consultants | Tokens | Prompts | Key skills | 7d change |
-- Include every partner present in View 1, sorted by tokens descending.
-- After the table: one sentence on which partners are converting consultant activity into CoCo use cases, and which have consultants active but few or no use cases.
+## THE HEADLINE
+Exactly 3 sentences, no bullets.
+1. How many CoCo-attached engagements, how many partners, and the token volume in them — verbatim from PRE-COMPUTED TOTALS.
+2. What kind of work dominates, based on WORKLOADS and TECH_USE_CASE.
+3. The single most important pattern a CEO should take away.
 
-## PARTNER-OWN ADOPTION
-| Partner | Total consultants | Active CoCo UCs | Tokens | Prompts | Top skills | 7d change |
-- Include every partner present in View 2, sorted by tokens descending.
-- After the table: one sentence contrasting internal adoption with customer-facing activity — flag partners strong internally but absent in customer accounts, and the reverse.
+## WHAT THE WORK IS
+Exactly 3 bullets. Each bullet = one type of work, not one partner.
+- Format: "**[Work type]** — [which partners and accounts, with token figures]"
+- Group by WORKLOADS / TECH_USE_CASE (Data Engineering, AI, Analytics, Platform, Applications & Collaboration). Pick the 3 work types with the most tokens behind them.
+- Assign each engagement to exactly ONE work type — its dominant one. Never mention the same engagement's tokens under two work types, and never restate a token figure you have already attributed.
+- Name at most 3 partner+account pairs per bullet. One short clause each, not a list of skills.
+- Where the skills data supports it, name at most 2 skills per bullet to say what they actually did in the tool.
 
-## WHERE TO PUSH
-3 bullets, each naming a specific partner and a specific action, justified by a number from the data.
+## WHO IS DRIVING IT
+| Partner | Engagements | CoCo UCs | Deployed | EACV | Tokens | Share of tokens |
+- One row per partner from the PER-PARTNER ROLLUP, sorted by tokens descending. Use TOKEN_SHARE_PCT for the last column.
+- After the table, exactly 2 sentences: which partners are concentrated in a few deep engagements versus spread thin across many, and which have high token consumption but nothing deployed yet.
 
-FORMATTING RULES:
-- Markdown tables for ALL data — no narrative paragraphs of numbers
-- Large numbers with commas (e.g. 1,234,567); tokens may use B/M suffixes
-- Percentages signed (e.g. +12.4%, -3.1%)
-- Under 500 words
-- Confident, data-driven, executive-appropriate
-- No greeting, sign-off, or filler"""
+## NOTABLE ENGAGEMENTS
+3 bullets, the three highest-token engagements.
+- Format: "**[Partner] at [Account]** — [consultants] consultants, [tokens] tokens across [active days] active days, [CoCo UCs] use case(s) worth [EACV], [workload type]"
+
+## SO WHAT
+2 bullets maximum. Each names a partner or a work type and the specific action to take, justified by a figure from the data.
+
+## COVERAGE NOTE
+One italic sentence stating what share of customer-account tokens could be matched to a CoCo-attached use case, using the figure from PRE-COMPUTED TOTALS, and that unmatched activity is excluded.
+
+FORMATTING RULES
+- Markdown table only where specified above; everywhere else use bullets
+- Numbers with commas; tokens may use M suffix; EACV as $XK or $X.XM
+- HARD LIMIT: 350 words for the entire output. Being under is better than being complete — cut adjectives and cut repeated figures before you cut facts.
+- One sentence per bullet. No parentheticals that repeat a number already stated.
+- Direct, declarative, executive tone
+- No greeting, no sign-off, no methodology paragraph"""
 
 prompt_input = st.text_area(
     "Prompt",

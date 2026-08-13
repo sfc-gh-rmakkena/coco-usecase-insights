@@ -2415,6 +2415,62 @@ def get_pc_top_skills(_conn, context, region=None, partner_names=None, start_dat
 
 
 @st.cache_data(ttl=timedelta(minutes=30))
+def get_pc_coco_uc_engagements(_conn, region=None, partner_names=None, start_date=None, end_date=None):
+    """Consultant activity in customer accounts where THAT SAME partner owns a
+    CoCo-attached use case (strict attribution), with the kind of work attached.
+
+    The join key is exact account name: SALESFORCE_ACCOUNT_NAME on the activity side
+    against ACCOUNT_NAME on PARTNER_COCO_USE_CASES. There is no shared account ID, so
+    coverage is partial — the caller should report matched tokens as a share of all
+    customer-account tokens rather than implying completeness.
+    """
+    reg, pf = _pc_filters(region, partner_names, "a")
+    sd = start_date or "2025-12-01"
+    ed = end_date or "2100-01-01"
+    query = f"""
+    WITH a AS (
+        SELECT a.PARTNER_NAME, a.SALESFORCE_ACCOUNT_NAME,
+               COUNT(DISTINCT a.USER_ID || '|' || a.DEPLOYMENT) AS CONSULTANTS,
+               SUM(a.TOTAL_TOKENS) AS TOKENS,
+               SUM(a.TOTAL_DAILY_USER_PROMPTS) AS PROMPTS,
+               COUNT(DISTINCT a.DS) AS ACTIVE_DAYS
+        FROM {SCHEMA}.V_PARTNER_CONSULTANT_ACTIVITY a
+        WHERE a.SNOWFLAKE_ACCOUNT_TYPE = 'Customer'
+          AND a.DS BETWEEN '{sd}' AND '{ed}'
+          AND a.SALESFORCE_ACCOUNT_NAME IS NOT NULL{reg}{pf}
+        GROUP BY 1,2
+    ),
+    uc AS (
+        SELECT PARTNER_NAME, ACCOUNT_NAME,
+               COUNT(DISTINCT USE_CASE_ID) AS COCO_UCS,
+               SUM(COALESCE(USE_CASE_EACV,0)) AS EACV,
+               COUNT(DISTINCT CASE WHEN IS_DEPLOYED THEN USE_CASE_ID END) AS DEPLOYED_UCS,
+               LISTAGG(DISTINCT TECHNICAL_USE_CASE, ' ; ') AS TECH_USE_CASE,
+               LISTAGG(DISTINCT WORKLOADS, ' ; ') AS WORKLOADS
+        FROM {SCHEMA}.PARTNER_COCO_USE_CASES
+        WHERE ACCOUNT_NAME IS NOT NULL AND PARTNER_NAME IS NOT NULL
+        GROUP BY 1,2
+    )
+    SELECT a.PARTNER_NAME, a.SALESFORCE_ACCOUNT_NAME AS ACCOUNT_NAME,
+           uc.COCO_UCS, uc.DEPLOYED_UCS, uc.EACV,
+           a.CONSULTANTS, a.TOKENS, a.PROMPTS, a.ACTIVE_DAYS,
+           uc.TECH_USE_CASE, uc.WORKLOADS
+    FROM a
+    JOIN uc
+      ON a.SALESFORCE_ACCOUNT_NAME = uc.ACCOUNT_NAME
+     AND a.PARTNER_NAME = uc.PARTNER_NAME
+    ORDER BY a.TOKENS DESC
+    """
+    import pandas as pd
+    df = _conn.query(query)
+    if len(df) > 0:
+        for c in ["COCO_UCS", "DEPLOYED_UCS", "EACV", "CONSULTANTS", "TOKENS", "PROMPTS", "ACTIVE_DAYS"]:
+            if c in df.columns:
+                df[c] = pd.to_numeric(df[c], errors="coerce")
+    return df
+
+
+@st.cache_data(ttl=timedelta(minutes=30))
 def get_pc_totals(_conn, region=None, partner_names=None):
     reg, pf = _pc_filters(region, partner_names, "r")
     query = f"""
