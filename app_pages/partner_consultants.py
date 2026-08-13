@@ -55,6 +55,8 @@ act = _norm_partner(get_pc_activity(conn, "Customer", region, partner_list, star
 sk = _norm_partner(get_pc_top_skills(conn, "Customer", region, partner_list, start_date, end_date))
 ucc = _norm_partner(get_pc_usecase_counts(conn))
 
+_v1_totals = "(no customer-engagement data)"
+
 if len(act) == 0:
     st.info("No customer-account consultant activity for the current filters.")
 else:
@@ -67,6 +69,13 @@ else:
     k[0].metric("Partners active in customers", f"{v1['PARTNER_NAME'].nunique():,}")
     k[1].metric("Consultants in customer accts", f"{int(v1['CONSULTANTS'].sum()):,}")
     k[2].metric("Customer-acct tokens", f"{int(v1['TOKENS'].sum())/1e9:.2f}B")
+
+    _v1_totals = (
+        f"Partners active in customer accounts: {v1['PARTNER_NAME'].nunique():,}\n"
+        f"Consultants in customer accounts: {int(v1['CONSULTANTS'].sum()):,}\n"
+        f"Total customer-account tokens: {int(v1['TOKENS'].sum()):,}\n"
+        f"Total customer-account prompts: {int(v1['PROMPTS'].sum()):,}"
+    )
 
     show1 = v1[["PARTNER_NAME", "COCO_UCS", "CONSULTANTS", "TOKENS", "PROMPTS", "TOP_SKILLS", "WOW_PCT"]]
     st.dataframe(
@@ -95,6 +104,8 @@ tot = _norm_partner(get_pc_totals(conn, region, partner_list))
 sk2 = _norm_partner(get_pc_top_skills(conn, "Partner", region, partner_list, start_date, end_date))
 ucc2 = _norm_partner(get_pc_usecase_counts(conn))
 
+_v2_totals = "(no partner-own-account data)"
+
 if len(act2) == 0:
     st.info("No partner-own-account consultant activity for the current filters.")
 else:
@@ -110,6 +121,13 @@ else:
     k[0].metric("Partners", f"{v2['PARTNER_NAME'].nunique():,}")
     k[1].metric("Total consultants", f"{int(v2['TOTAL_CONSULTANTS'].sum()):,}")
     k[2].metric("Partner-acct tokens", f"{int(v2['TOKENS'].sum())/1e9:.2f}B")
+
+    _v2_totals = (
+        f"Partners with own-account activity: {v2['PARTNER_NAME'].nunique():,}\n"
+        f"Total consultants (all resolved): {int(v2['TOTAL_CONSULTANTS'].sum()):,}\n"
+        f"Total partner-own-account tokens: {int(v2['TOKENS'].sum()):,}\n"
+        f"Total partner-own-account prompts: {int(v2['PROMPTS'].sum()):,}"
+    )
 
     show2 = v2[["PARTNER_NAME", "TOTAL_CONSULTANTS", "ACTIVE_COCO_UCS",
                 "TOKENS", "PROMPTS", "TOP_SKILLS", "WOW_PCT"]]
@@ -132,3 +150,102 @@ st.session_state.ask_ai_context = (
     f"Current page: Partner Consultants (Tier-1+Tier-2 resolved). Region: {region}. Period: {start_date} to {end_date}.\n"
     "Two views: customer-engagement activity and partner-own-account usage per partner."
 )
+
+# ============================ Summary Prompt ===============================
+st.divider()
+st.subheader("Generate Summary")
+
+_v1_ctx = show1.to_string(index=False) if 'show1' in dir() else "(no customer-engagement data)"
+_v2_ctx = show2.to_string(index=False) if 'show2' in dir() else "(no partner-own-account data)"
+
+data_context = f"""SCOPE: Region {region} | Period {start_date} to {end_date}
+Partner filter: {', '.join(selected_partners) if selected_partners else 'all managed partners'}
+
+PRE-COMPUTED TOTALS — use these verbatim for any total or count. Do NOT sum the
+tables yourself and do NOT compute percentages that are not listed here.
+VIEW 1:
+{_v1_totals}
+VIEW 2:
+{_v2_totals}
+
+VIEW 1 - CUSTOMER ENGAGEMENTS (consultant activity inside customer accounts).
+Columns: Partner, CoCo-attached UCs, # Consultants, Tokens, Prompts, Key skills, Tokens 7d change %
+{_v1_ctx}
+
+VIEW 2 - PARTNER-OWN ACCOUNT USAGE (the partner's internal CoCo adoption).
+Columns: Partner, # Total consultants, Active CoCo UCs, Tokens, Prompts, Top skills, Tokens 7d change %
+{_v2_ctx}
+"""
+
+default_prompt = """You are writing a briefing for Snowflake leadership on PARTNER CONSULTANT activity — the individual consultants at managed partners who are actually using Cortex Code (CoCo).
+
+All numbers MUST come from the data provided below, and every total or count MUST be taken verbatim from the PRE-COMPUTED TOTALS block. Do NOT sum table columns yourself, do NOT compute percentages or shares that are not given to you, and do NOT invent partners, consultants, skills or figures. If something is not in the data, omit it.
+
+Consultants are identity-resolved: Tier-1 = active in the partner's own Snowflake account, Tier-2 = the same person matched into customer accounts. "Customer engagements" = the partner's consultants working inside CUSTOMER accounts. "Partner-own" = usage inside the partner's OWN account.
+
+Follow this EXACT structure:
+
+## SUMMARY
+2-3 sentences, then exactly 4 bullets.
+- Open with total consultants active in customer accounts and total customer-account tokens, both taken from PRE-COMPUTED TOTALS.
+- Second sentence: the dominant pattern — is activity concentrated in a few partners or spread widely? Name the leading partners; do not quote a percentage share.
+- Bullet 1: "**Top partners by customer-account tokens:** [top 3 with token counts]"
+- Bullet 2: "**Deepest consultant benches:** [top 3 by # consultants]"
+- Bullet 3: "**Most used skills:** [top 3 skills across partners]"
+- Bullet 4: "**Momentum:** [partners with the largest positive 7d token change, and any notable declines]"
+
+## CUSTOMER ENGAGEMENTS
+| Partner | CoCo UCs | Consultants | Tokens | Prompts | Key skills | 7d change |
+- Include every partner present in View 1, sorted by tokens descending.
+- After the table: one sentence on which partners are converting consultant activity into CoCo use cases, and which have consultants active but few or no use cases.
+
+## PARTNER-OWN ADOPTION
+| Partner | Total consultants | Active CoCo UCs | Tokens | Prompts | Top skills | 7d change |
+- Include every partner present in View 2, sorted by tokens descending.
+- After the table: one sentence contrasting internal adoption with customer-facing activity — flag partners strong internally but absent in customer accounts, and the reverse.
+
+## WHERE TO PUSH
+3 bullets, each naming a specific partner and a specific action, justified by a number from the data.
+
+FORMATTING RULES:
+- Markdown tables for ALL data — no narrative paragraphs of numbers
+- Large numbers with commas (e.g. 1,234,567); tokens may use B/M suffixes
+- Percentages signed (e.g. +12.4%, -3.1%)
+- Under 500 words
+- Confident, data-driven, executive-appropriate
+- No greeting, sign-off, or filler"""
+
+prompt_input = st.text_area(
+    "Prompt",
+    value=default_prompt,
+    height=300,
+    help="Edit this prompt to customize the summary. The tables above are automatically included.",
+    key="pc_prompt",
+)
+
+if st.button("Generate Summary", type="primary", key="pc_generate"):
+    from utils.cortex_helpers import cortex_complete
+    from utils.report import md_to_html, copy_rich_text_button
+
+    full_prompt = f"{prompt_input}\n\nDATA:\n{data_context}\n\nWrite the briefing:"
+    placeholder = st.empty()
+    placeholder.info("Generating summary with Cortex Complete...")
+    summary = cortex_complete(conn, "claude-sonnet-4-5", full_prompt)
+
+    # Escape $ before digits so Streamlit doesn't treat $1.2M as LaTeX math
+    import re as _re
+    placeholder.markdown(_re.sub(r'\$(\d)', r'\\$\1', summary))
+
+    st.divider()
+    st.caption("Click **Copy Rich Text**, then paste into Slack, email or a doc — tables keep their formatting.")
+    c1, c2 = st.columns(2)
+    with c1:
+        copy_rich_text_button(md_to_html(summary), summary, button_id="pcCopyBtn")
+    with c2:
+        st.download_button(
+            "Download as HTML",
+            data=md_to_html(summary),
+            file_name="partner_consultants_summary.html",
+            mime="text/html",
+            key="pc_dl_html",
+        )

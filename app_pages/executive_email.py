@@ -2,7 +2,6 @@ import streamlit as st
 import streamlit.components.v1 as components
 import pandas as pd
 import urllib.parse
-import markdown
 from datetime import datetime
 from utils.queries import (
     get_summary_stats, get_by_partner, get_by_stage, get_source_breakdown,
@@ -732,20 +731,7 @@ def inject_velocity_chart(html_email: str, chart_html: str) -> str:
     return html_email
 
 
-def md_to_html(md_text):
-    html_body = markdown.markdown(md_text, extensions=['tables'])
-    return f"""<html><head><style>
-    body {{ font-family: Arial, sans-serif; font-size: 14px; color: #333; line-height: 1.5; }}
-    table {{ border-collapse: collapse; width: 100%; margin: 12px 0; }}
-    th, td {{ border: 1px solid #ddd; padding: 8px 12px; text-align: left; }}
-    th {{ background-color: #29B5E8; color: white; font-weight: bold; }}
-    tr:nth-child(even) {{ background-color: #f9f9f9; }}
-    h2 {{ color: #29B5E8; margin-top: 20px; border-bottom: 2px solid #29B5E8; padding-bottom: 4px; }}
-    h3 {{ color: #29B5E8; }}
-    strong {{ color: #333; }}
-    ul {{ padding-left: 20px; }}
-    li {{ margin-bottom: 4px; }}
-</style></head><body>{html_body}</body></html>"""
+from utils.report import md_to_html
 
 
 conn = st.session_state.conn
