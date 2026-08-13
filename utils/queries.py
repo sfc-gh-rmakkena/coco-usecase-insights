@@ -5,6 +5,10 @@ from utils.config import get_schema
 SCHEMA = get_schema()
 DT_OKR = f"{SCHEMA}.DT_OKR_USE_CASES"
 
+# Q3 FY27 snapshot tables (fresh start Aug 1 2026)
+_OKR_TARGET_TABLE   = f"{SCHEMA}.COCO_OKR_TARGET_WEEKLY_Q3"
+_SNAPSHOT_TABLE     = f"{SCHEMA}.IS_COCO_FINAL_WEEKLY_SNAPSHOT_Q3"
+
 def _use_case_base(start_date=None, end_date=None):
     """Generate USE_CASE_BASE CTE.
     Drives partner resolution + IS_COCO from DT_OKR_USE_CASES; enriches with
@@ -1861,7 +1865,7 @@ def get_partner_coco_trend_4w(_conn, partners: tuple, region: str = 'All'):
     query = f"""
     WITH deduped AS (
         SELECT WEEK_START, PARTNER_NAME, TOTAL_UCS, COCO_UCS, COCO_PCT
-        FROM {SCHEMA}.IS_COCO_FINAL_WEEKLY_SNAPSHOT
+        FROM {_SNAPSHOT_TABLE}
         WHERE PARTNER_NAME IN ('{ps}')
           AND REGION = 'Global'
           {region_clause}
@@ -2109,7 +2113,7 @@ def get_partners_at_target_trend_4w(_conn, partners: tuple, target_pct: float = 
 
     query = f"""
     SELECT WEEK_START, PARTNERS_AT_TARGET
-    FROM {SCHEMA}.COCO_OKR_TARGET_WEEKLY
+    FROM {_OKR_TARGET_TABLE}
     ORDER BY WEEK_START DESC
     LIMIT 4
     """
@@ -2130,30 +2134,36 @@ def save_okr_target_count(_conn, partners_at_target: int, total_partners: int) -
     import pandas as pd
     week_start = pd.Timestamp.now().to_period('W').start_time.date().strftime('%Y-%m-%d')
     session = _conn.session()
-    session.sql(f"DELETE FROM {SCHEMA}.COCO_OKR_TARGET_WEEKLY WHERE WEEK_START = '{week_start}'").collect()
+    session.sql(f"DELETE FROM {_OKR_TARGET_TABLE} WHERE WEEK_START = '{week_start}'").collect()
     session.sql(
-        f"INSERT INTO {SCHEMA}.COCO_OKR_TARGET_WEEKLY (WEEK_START, PARTNERS_AT_TARGET, TOTAL_PARTNERS) "
+        f"INSERT INTO {_OKR_TARGET_TABLE} (WEEK_START, PARTNERS_AT_TARGET, TOTAL_PARTNERS) "
         f"VALUES ('{week_start}', {int(partners_at_target)}, {int(total_partners)})"
     ).collect()
 
 
+# Mapping from _GROUP tag (added in executive_email.py) to REGION stored in snapshot
+_GROUP_TO_REGION = {'GSI': 'Global', 'NOAM RSI': 'NoAM', 'APJ RSI': 'APJ', 'EMEA RSI': 'EMEA'}
+
+
 def save_coco_final_snapshot(_conn, bulk_conf_df, region='NoAM') -> bool:
-    """Save this week's IS_COCO_FINAL (Def C) snapshot. Idempotent — skips if already saved for this region.
+    """Save this week's IS_COCO_FINAL (Def C) snapshot. Idempotent — skips if already saved this week.
     bulk_conf_df must have IS_COCO_FINAL, PARTNER_NAME, USE_CASE_ID, USE_CASE_EACV columns.
-    Returns True if saved, False if already exists for this week+region.
+    If bulk_conf_df has a _GROUP column, each partner is saved with its correct REGION
+    (GSI=Global, NOAM RSI=NoAM, APJ RSI=APJ, EMEA RSI=EMEA). Otherwise falls back to `region` param.
+    Returns True if saved, False if already exists for this week.
     """
     import pandas as pd
     week_start = pd.Timestamp.now().to_period('W').start_time.date().strftime('%Y-%m-%d')
 
     existing = _conn.query(f"""
-        SELECT COUNT(*) AS CNT FROM {SCHEMA}.IS_COCO_FINAL_WEEKLY_SNAPSHOT
-        WHERE WEEK_START = '{week_start}' AND REGION = '{region}'
+        SELECT COUNT(*) AS CNT FROM {_SNAPSHOT_TABLE}
+        WHERE WEEK_START = '{week_start}'
     """)
     if existing.iloc[0]['CNT'] > 0:
         return False
 
+    has_group = '_GROUP' in bulk_conf_df.columns
     rows = []
-    safe_region = region.replace("'", "''")
     for partner, grp in bulk_conf_df.groupby('PARTNER_NAME'):
         coco = int(grp['IS_COCO_FINAL'].sum())
         total = len(grp)
@@ -2161,6 +2171,12 @@ def save_coco_final_snapshot(_conn, bulk_conf_df, region='NoAM') -> bool:
         eacv = float(grp['USE_CASE_EACV'].sum() or 0)
         coco_eacv = float(grp.loc[grp['IS_COCO_FINAL'], 'USE_CASE_EACV'].sum() or 0)
         safe_partner = partner.replace("'", "''")
+        if has_group:
+            grp_val = grp['_GROUP'].iloc[0] if len(grp) > 0 else None
+            partner_region = _GROUP_TO_REGION.get(grp_val, region)
+        else:
+            partner_region = region
+        safe_region = partner_region.replace("'", "''")
         rows.append(f"('{week_start}', '{safe_partner}', {total}, {coco}, {pct}, {eacv}, {coco_eacv}, '{safe_region}')")
 
     total_all = len(bulk_conf_df)
@@ -2168,10 +2184,11 @@ def save_coco_final_snapshot(_conn, bulk_conf_df, region='NoAM') -> bool:
     pct_all = round(coco_all * 100.0 / total_all, 1) if total_all > 0 else 0.0
     eacv_all = float(bulk_conf_df['USE_CASE_EACV'].sum() or 0)
     coco_eacv_all = float(bulk_conf_df.loc[bulk_conf_df['IS_COCO_FINAL'], 'USE_CASE_EACV'].sum() or 0)
-    rows.append(f"('{week_start}', NULL, {total_all}, {coco_all}, {pct_all}, {eacv_all}, {coco_eacv_all}, '{safe_region}')")
+    # Overall row always saved as 'Global' (spans all partner groups)
+    rows.append(f"('{week_start}', NULL, {total_all}, {coco_all}, {pct_all}, {eacv_all}, {coco_eacv_all}, 'Global')")
 
     _conn.query(f"""
-        INSERT INTO {SCHEMA}.IS_COCO_FINAL_WEEKLY_SNAPSHOT
+        INSERT INTO {_SNAPSHOT_TABLE}
             (WEEK_START, PARTNER_NAME, TOTAL_UCS, COCO_UCS, COCO_PCT, TOTAL_EACV, COCO_EACV, REGION)
         VALUES {', '.join(rows)}
     """)
@@ -2199,20 +2216,21 @@ def get_coco_final_wow(_conn, partners=None, gsi_global=False, gsi_names=frozens
 
     if gsi_global and gsi_names:
         gsi_list = "','".join(gsi_names)
-        # GSI partners + overall NULL use 'Global'; Regional SIs use 'NoAM'
+        # GSI=Global, NOAM RSI=NoAM, APJ RSI=APJ, EMEA RSI=EMEA, overall NULL=Global
         region_filter = f"""AND (
-            (PARTNER_NAME IN ('{gsi_list}') AND COALESCE(REGION,'NoAM') = 'Global')
-            OR (PARTNER_NAME NOT IN ('{gsi_list}') AND COALESCE(REGION,'NoAM') = 'NoAM')
-            OR (PARTNER_NAME IS NULL AND COALESCE(REGION,'NoAM') = 'Global')
+            (PARTNER_NAME IN ('{gsi_list}') AND COALESCE(REGION,'Global') = 'Global')
+            OR (PARTNER_NAME NOT IN ('{gsi_list}') AND COALESCE(REGION,'NoAM') IN ('NoAM', 'APJ', 'EMEA'))
+            OR (PARTNER_NAME IS NULL AND COALESCE(REGION,'Global') = 'Global')
         )"""
     else:
-        region_filter = "AND COALESCE(REGION,'NoAM') = 'NoAM'"
+        # Non-exec-email callers (OKR pages): return all managed partners across all regions
+        region_filter = "AND COALESCE(REGION,'NoAM') IN ('NoAM', 'APJ', 'EMEA', 'Global')"
 
     query = f"""
     WITH deduped AS (
         -- Keep one row per (WEEK_START, PARTNER_NAME, REGION), preferring earliest SAVED_AT
         SELECT WEEK_START, PARTNER_NAME, TOTAL_UCS, COCO_UCS, COCO_PCT, TOTAL_EACV, COCO_EACV
-        FROM {SCHEMA}.IS_COCO_FINAL_WEEKLY_SNAPSHOT
+        FROM {_SNAPSHOT_TABLE}
         WHERE 1=1 {partner_filter} {region_filter}
         QUALIFY ROW_NUMBER() OVER (
             PARTITION BY WEEK_START, COALESCE(PARTNER_NAME, '__OVERALL__'), COALESCE(REGION,'NoAM')
@@ -2281,7 +2299,7 @@ def get_coco_final_trend_4w(_conn, partners: tuple, region: str = "NoAM") -> lis
         -- IS_COCO_FINAL_WEEKLY_SNAPSHOT (Def C) has priority; OKR_PARTNER_WEEKLY_ADOPTION fills historical gaps
         combined AS (
             SELECT WEEK_START, PARTNER_NAME, TOTAL_UCS, COCO_UCS, 1 AS src_priority
-            FROM {SCHEMA}.IS_COCO_FINAL_WEEKLY_SNAPSHOT w
+            FROM {_SNAPSHOT_TABLE} w
             WHERE {partner_where}
             UNION ALL
             SELECT WEEK_START, PARTNER_NAME, TOTAL_UCS, COCO_UCS, 2 AS src_priority
