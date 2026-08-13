@@ -1,7 +1,7 @@
 import streamlit as st
 from utils.queries import get_distinct_partners
 from utils import PARTNER_GROUPS
-from utils.ask_ai import ask_ai
+from utils.ask_ai import ask_ai, ask_ai_agent
 from datetime import date
 
 st.set_page_config(
@@ -107,6 +107,7 @@ with st.sidebar:
     conn = st.session_state.conn
 
     show_debug = st.toggle("SQL debug", value=False, key="ask_ai_debug")
+    use_agent = st.toggle("Use Agent (more accurate)", value=True, key="ask_ai_use_agent")
 
     # Display last 3 exchanges
     history = st.session_state.ask_ai_history
@@ -119,30 +120,44 @@ with st.sidebar:
             st.markdown(question)
         with st.chat_message("assistant"):
             with st.spinner("Thinking..."):
-                page_ctx = st.session_state.get("ask_ai_context", "")
-                result = ask_ai(conn, question, page_ctx, debug=show_debug,
-                               chat_history=st.session_state.ask_ai_history)
+                if use_agent:
+                    result = ask_ai_agent(question, chat_history=st.session_state.ask_ai_history)
+                else:
+                    page_ctx = st.session_state.get("ask_ai_context", "")
+                    result = ask_ai(conn, question, page_ctx, debug=show_debug,
+                                   chat_history=st.session_state.ask_ai_history)
 
             if show_debug and isinstance(result, dict):
                 response = result["answer"]
                 st.markdown(response)
                 with st.expander("SQL Debug", expanded=True):
-                    st.write(f"**SQL generated:** {'Yes' if result['sql_needed'] else 'No — answered from page context'}")
-                    if result["sql_needed"] and result["generated_sql"] != "(no SQL extracted — answered from context)":
-                        st.code(result["generated_sql"], language="sql")
+                    sql_needed = result.get("sql_needed", result.get("sql") is not None)
+                    st.write(f"**SQL generated:** {'Yes' if sql_needed else 'No — answered from page context'}")
+                    gen_sql = result.get("generated_sql") or result.get("sql") or "(no SQL extracted — answered from context)"
+                    if sql_needed and gen_sql != "(no SQL extracted — answered from context)":
+                        st.code(gen_sql, language="sql")
                     else:
-                        st.info(result["generated_sql"])
-                    if result["sql_result"] and result["sql_result"] != "(no result)":
+                        st.info(gen_sql)
+                    sql_res = result.get("sql_result") or "(no result)"
+                    if sql_res and sql_res != "(no result)":
                         st.write("**SQL result (first 1000 chars):**")
-                        st.text(result["sql_result"][:1000])
-                    st.write("**Step 1 decision:**")
-                    st.text(result["step1_decision"])
+                        st.text(sql_res[:1000])
+                    if result.get("step1_decision"):
+                        st.write("**Step 1 decision:**")
+                        st.text(result["step1_decision"])
             else:
-                response = result if isinstance(result, str) else result.get("answer", "")
+                response = result.get("answer", "") if isinstance(result, dict) else result
                 st.markdown(response)
 
         st.session_state.ask_ai_history.append({"role": "user", "content": question})
-        st.session_state.ask_ai_history.append({"role": "assistant", "content": response})
+        # Store SQL + result in history so follow-up questions can reference previous query context
+        _hist_entry = {"role": "assistant", "content": response}
+        if isinstance(result, dict):
+            if result.get("sql"):
+                _hist_entry["sql"] = result["sql"]
+            if result.get("sql_result"):
+                _hist_entry["sql_result"] = result["sql_result"]
+        st.session_state.ask_ai_history.append(_hist_entry)
 
     if history:
         if st.button("Clear chat", key="ask_ai_clear", use_container_width=True):

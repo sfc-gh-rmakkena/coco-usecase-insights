@@ -1,0 +1,749 @@
+name: coco_adoption_model
+description: >
+  CoCo (Cortex Code) partner adoption semantic model. ~44 managed OKR partners across
+  GSI (global), NOAM RSI (NoAM), APJ RSI (country), EMEA RSI (region) groups.
+
+  ALWAYS filter IS_COCO_FINAL = TRUE for CoCo use case counts unless the user asks for
+  "total", "all", or "non-CoCo".
+
+  IS_COCO_FINAL = IS_COCO=TRUE (keyword/flag) OR CONFIDENCE_BAND='High' (usage score>=75).
+
+  TABLE SELECTION — CRITICAL. Pick the table that matches the query period:
+    Q1 (Feb-Apr 2026):     use table "use_cases_q1"  — scored from Feb 1 2026
+    Q2 (May-Jul 2026):     use table "use_cases_q2"  — scored from May 1 2026
+    Q3 (Aug-Oct 2026):     use table "use_cases_q3"  — scored from Aug 1 2026  ← current quarter
+    YTD / full FY27:       use table "use_cases_ytd" — scored from Feb 1 2026, all quarters
+
+  Each quarter table is pre-scoped: it ONLY contains use cases in that quarter.
+  No date filter needed when querying a quarter table.
+  YTD table contains all FY27 use cases — no date filter needed for YTD.
+
+  FY27 quarters:
+    Q1: 2026-02-01 to 2026-04-30
+    Q2: 2026-05-01 to 2026-07-31  (last quarter)
+    Q3: 2026-08-01 to 2026-10-31  (current quarter, default)
+
+  Partner groups:
+    GSI:      Global. Accenture, Capgemini Technologies LLC, Cognizant Technology Solutions US Corp,
+              Deloitte Consulting, EY/Ernst & Young (EY), IBM/IBM Consulting. Target 75%.
+    NOAM RSI: NoAM theaters (USMajors, AMSExpansion, AMSAcquisition, USPubSec). ~30 partners. Target 75%.
+    APJ RSI:  Country-scoped. NTT DATA (Japan), MegazoneCloud (Korea), Infinite Lambda (ASEAN),
+              Altis (ANZ), Prolim (India). Target 50%.
+    EMEA RSI: Region-scoped. Infomotion (CentralEMEA), Civica (SouthEMEA),
+              Kubrick (UK), KPC (SouthEMEA). Target 50%.
+
+  Theaters: USMajors=S Majors=Majors. AMSExpansion, AMSAcquisition, USPubSec=NoAM. EMEA, APJ.
+  Token WoW: Last7d=DS>=DATEADD(day,-7,TODAY()). Prior7d between -14d and -7d. WoW%=(L7-P7)/P7*100.
+
+# Shared filters/dimensions/measures applied to all quarter tables
+# (defined once under use_cases_q3, referenced by description in others)
+
+tables:
+  - name: use_cases_q3
+    description: >
+      Q3 FY27 (Aug-Oct 2026, CURRENT QUARTER). Use cases scored from Aug 1 2026.
+      Pre-scoped to Q3 — no date filter needed. Matches dashboard Q3 numbers exactly.
+      ALWAYS filter IS_COCO_FINAL = TRUE for CoCo counts.
+    base_table:
+      database: TEMP
+      schema: COCO_PARTNER_ADOPTION
+      table: V_OKR_USE_CASES_COCO_FINAL_Q3
+    filters:
+      - name: managed_partners
+        synonyms: [managed, OKR partners, tracked, 44 partners, all managed]
+        description: All ~44 OKR-tracked managed partners
+        expr: >
+          PARTNER_NAME IN (
+            'Accenture','Capgemini Technologies LLC','Cognizant Technology Solutions US Corp',
+            'Deloitte Consulting','EY','Ernst & Young (EY)','IBM','IBM Consulting',
+            '7Rivers, Inc','Aimpoint Digital','BlueCloud Services Inc','kipi.ai','Kipi.ai',
+            'evolv Consulting','Infostrux Solutions Inc.','Infosys','KPMG LLP',
+            'LTM','LTI Mindtree','phData, Inc.','Slalom, LLC.','Squadron Data Inc','Tredence Inc.',
+            'Spaulding Ridge','TEKsystems Global Services, LLC.','Blend360, LLC',
+            'Tiger Analytics Inc.','Atrium','Perficient Inc.','SDK Tek Services Ltd.','Merkle',
+            'Archetype Consulting','Apex Systems','Tata Consultancy Services',
+            'OneSix','Icon Analytics','Sparq Holdings, Inc.','CitiusTech Inc.','Hexaware Technologies',
+            'NTT DATA Group Corporation','MegazoneCloud Corporation',
+            'Infinite Lambda Limited','Infinite Lambda Inc','INFINITE LAMBDA (SINGAPORE) PTE. LTD.',
+            'Altis Global Limited','Altis Consulting, ANZ','PROLIM Global Corporation',
+            'INFOMOTION GMBH','INFOMOTION GMBH, BearingPoint','CIVICA SOFTWARE, S.L.',
+            'Kubrick Group','KPC (Key Performance Consulting)','KPC'
+          )
+      - name: is_coco_final
+        synonyms: [coco attributed, IS_COCO_FINAL, coco qualified, coco final, coco use cases]
+        description: IS_COCO_FINAL = TRUE. THE DEFAULT COCO FILTER. Always apply for CoCo counts.
+        expr: IS_COCO_FINAL = TRUE
+      - name: deployed
+        synonyms: [stage 7, deployed, go-live, production, live]
+        description: Stage 7 Deployed
+        expr: USE_CASE_STAGE = '7 - Deployed'
+      - name: gsi_group
+        synonyms: [gsi, global system integrators, GSI partners]
+        description: GSI partners — global scope, target 75%
+        expr: >
+          PARTNER_NAME IN ('Accenture','Capgemini Technologies LLC',
+            'Cognizant Technology Solutions US Corp','Deloitte Consulting',
+            'EY','Ernst & Young (EY)','IBM','IBM Consulting')
+      - name: noam_rsi_group
+        synonyms: [NOAM RSI, north america RSI, NOAM partners]
+        description: NOAM RSI partners — NoAM theaters, target 75%
+        expr: >
+          PARTNER_NAME IN ('7Rivers, Inc','Aimpoint Digital','BlueCloud Services Inc',
+            'kipi.ai','Kipi.ai','evolv Consulting','Infostrux Solutions Inc.','Infosys','KPMG LLP',
+            'LTM','LTI Mindtree','phData, Inc.','Slalom, LLC.','Squadron Data Inc','Tredence Inc.',
+            'Spaulding Ridge','TEKsystems Global Services, LLC.','Blend360, LLC',
+            'Tiger Analytics Inc.','Atrium','Perficient Inc.','SDK Tek Services Ltd.','Merkle',
+            'Archetype Consulting','Apex Systems','Tata Consultancy Services',
+            'OneSix','Icon Analytics','Sparq Holdings, Inc.','CitiusTech Inc.','Hexaware Technologies')
+      - name: usmajors_theater
+        synonyms: [USMajors, US Majors, S Majors, Majors]
+        description: USMajors theater
+        expr: THEATER_NAME = 'USMajors'
+    dimensions:
+      - name: partner_name
+        synonyms: [partner, SI, company]
+        description: Partner name. IBM Consulting=IBM, Ernst & Young (EY)=EY, LTI Mindtree=LTM, Kipi.ai=kipi.ai.
+        expr: PARTNER_NAME
+        data_type: TEXT
+      - name: account_name
+        synonyms: [customer, account]
+        description: Customer account name
+        expr: ACCOUNT_NAME
+        data_type: TEXT
+      - name: use_case_id
+        synonyms: [uc id, id]
+        description: Unique use case identifier
+        expr: USE_CASE_ID
+        data_type: TEXT
+      - name: use_case_stage
+        synonyms: [stage, status, lifecycle stage]
+        description: "'3 - Technical / Business Validation' | '4 - Use Case Won / Migration Plan' | '5 - Implementation In Progress' | '6 - Implementation Complete' | '7 - Deployed'. Never use numeric stage values."
+        expr: USE_CASE_STAGE
+        data_type: TEXT
+      - name: theater
+        synonyms: [theater name, geo, sales theater]
+        description: USMajors=S Majors. AMSExpansion, AMSAcquisition, USPubSec=NoAM. EMEA, APJ.
+        expr: THEATER_NAME
+        data_type: TEXT
+      - name: region
+        synonyms: [region name, sub-region, country]
+        description: Sub-region (Japan, Korea, ASEAN, ANZ, India, CentralEMEA, SouthEMEA, UK)
+        expr: REGION_NAME
+        data_type: TEXT
+      - name: is_coco_final
+        synonyms: [IS_COCO_FINAL, coco final, coco qualified, coco attributed]
+        description: TRUE = IS_COCO_FINAL. THE PRIMARY COCO FLAG. Always filter this = TRUE for CoCo counts.
+        expr: IS_COCO_FINAL
+        data_type: BOOLEAN
+      - name: is_coco_keyword
+        synonyms: [IS_COCO, keyword coco, se tagged]
+        description: Keyword/flag only — SE comments, partner #coco, feature flag
+        expr: IS_COCO
+        data_type: BOOLEAN
+      - name: confidence_band
+        synonyms: [confidence, score band]
+        description: "High(>=75)=IS_COCO_FINAL. Medium(40-74). Low(1-39). No Signal(0)."
+        expr: CONFIDENCE_BAND
+        data_type: TEXT
+      - name: coco_source
+        synonyms: [attribution source, detection method]
+        description: SE_COMMENTS | PARTNER_COMMENTS | FEATURE_FLAG | MULTIPLE
+        expr: COCO_SOURCE
+        data_type: TEXT
+      - name: workload_category
+        synonyms: [workload, domain, category]
+        description: "AI | Analytics | Data Engineering | Platform | Apps & Collab | Migration"
+        expr: WORKLOAD_CATEGORY
+        data_type: TEXT
+      - name: technical_use_case
+        synonyms: [tech uc, use case type]
+        description: "Prefixed category: AI:, Analytics:, DE:, Platform:, Apps & Collab:"
+        expr: TECHNICAL_USE_CASE
+        data_type: TEXT
+      - name: eacv
+        synonyms: [acv, opportunity value, deal value]
+        description: Estimated Annual Contract Value in USD
+        expr: USE_CASE_EACV
+        data_type: NUMBER
+      - name: partner_group
+        synonyms: [group, partner type, segment]
+        description: GSI | NOAM RSI | APJ RSI | EMEA RSI
+        expr: >
+          CASE
+            WHEN PARTNER_NAME IN ('Accenture','Capgemini Technologies LLC',
+              'Cognizant Technology Solutions US Corp','Deloitte Consulting',
+              'EY','Ernst & Young (EY)','IBM','IBM Consulting') THEN 'GSI'
+            WHEN PARTNER_NAME IN ('7Rivers, Inc','Aimpoint Digital','BlueCloud Services Inc',
+              'kipi.ai','Kipi.ai','evolv Consulting','Infostrux Solutions Inc.','Infosys','KPMG LLP',
+              'LTM','LTI Mindtree','phData, Inc.','Slalom, LLC.','Squadron Data Inc','Tredence Inc.',
+              'Spaulding Ridge','TEKsystems Global Services, LLC.','Blend360, LLC','Tiger Analytics Inc.',
+              'Atrium','Perficient Inc.','SDK Tek Services Ltd.','Merkle','Archetype Consulting',
+              'Apex Systems','Tata Consultancy Services','OneSix','Icon Analytics',
+              'Sparq Holdings, Inc.','CitiusTech Inc.','Hexaware Technologies') THEN 'NOAM RSI'
+            WHEN PARTNER_NAME IN ('NTT DATA Group Corporation','MegazoneCloud Corporation',
+              'Infinite Lambda Limited','Infinite Lambda Inc','INFINITE LAMBDA (SINGAPORE) PTE. LTD.',
+              'Altis Global Limited','Altis Consulting, ANZ','PROLIM Global Corporation') THEN 'APJ RSI'
+            WHEN PARTNER_NAME IN ('INFOMOTION GMBH','INFOMOTION GMBH, BearingPoint',
+              'CIVICA SOFTWARE, S.L.','Kubrick Group','KPC (Key Performance Consulting)','KPC') THEN 'EMEA RSI'
+            ELSE 'Other'
+          END
+        data_type: TEXT
+    measures:
+      - name: total_use_cases
+        synonyms: [number of use cases, uc count, total UCs, all use cases]
+        description: Total use cases regardless of CoCo status
+        expr: COUNT(USE_CASE_ID)
+        data_type: NUMBER
+        default_aggregation: sum
+      - name: coco_final_use_cases
+        synonyms: [coco use cases, IS_COCO_FINAL count, coco count, coco UCs, coco qualified, attributed UCs]
+        description: IS_COCO_FINAL = TRUE count. THE DEFAULT COCO METRIC.
+        expr: COUNT_IF(IS_COCO_FINAL = TRUE)
+        data_type: NUMBER
+        default_aggregation: sum
+      - name: coco_final_pct
+        synonyms: [coco rate, coco attachment rate, coco %, adoption rate]
+        description: IS_COCO_FINAL % of total. Target 75% GSI/NOAM RSI, 50% APJ/EMEA RSI.
+        expr: ROUND(COUNT_IF(IS_COCO_FINAL = TRUE) * 100.0 / NULLIF(COUNT(USE_CASE_ID), 0), 1)
+        data_type: NUMBER
+        default_aggregation: sum
+      - name: deployed_use_cases
+        synonyms: [stage 7 count, deployed, go-lives]
+        description: Stage 7 Deployed count
+        expr: COUNT_IF(USE_CASE_STAGE = '7 - Deployed')
+        data_type: NUMBER
+        default_aggregation: sum
+      - name: coco_final_deployed
+        synonyms: [coco go-lives, coco deployed, deployed with coco]
+        description: Deployed IS_COCO_FINAL use cases
+        expr: COUNT_IF(USE_CASE_STAGE = '7 - Deployed' AND IS_COCO_FINAL = TRUE)
+        data_type: NUMBER
+        default_aggregation: sum
+      - name: total_eacv
+        synonyms: [total ACV, pipeline value, total revenue]
+        description: Total eACV in USD
+        expr: SUM(USE_CASE_EACV)
+        data_type: NUMBER
+        default_aggregation: sum
+      - name: coco_final_eacv
+        synonyms: [coco ACV, coco revenue, coco pipeline value]
+        description: eACV of IS_COCO_FINAL use cases
+        expr: SUM(CASE WHEN IS_COCO_FINAL = TRUE THEN USE_CASE_EACV ELSE 0 END)
+        data_type: NUMBER
+        default_aggregation: sum
+      - name: distinct_partners
+        synonyms: [partner count, number of partners, unique partners]
+        description: Count of distinct partner companies
+        expr: COUNT(DISTINCT PARTNER_NAME)
+        data_type: NUMBER
+        default_aggregation: sum
+
+  - name: use_cases_q2
+    description: >
+      Q2 FY27 (May-Jul 2026, LAST QUARTER). Scored from May 1 2026.
+      Pre-scoped to Q2 — no date filter needed. Matches dashboard Q2 numbers exactly.
+      Same columns and IS_COCO_FINAL definition as use_cases_q3.
+    base_table:
+      database: TEMP
+      schema: COCO_PARTNER_ADOPTION
+      table: V_OKR_USE_CASES_COCO_FINAL_Q2
+    filters:
+      - name: managed_partners
+        synonyms: [managed, OKR partners, tracked]
+        description: All ~44 managed partners
+        expr: >
+          PARTNER_NAME IN (
+            'Accenture','Capgemini Technologies LLC','Cognizant Technology Solutions US Corp',
+            'Deloitte Consulting','EY','Ernst & Young (EY)','IBM','IBM Consulting',
+            '7Rivers, Inc','Aimpoint Digital','BlueCloud Services Inc','kipi.ai','Kipi.ai',
+            'evolv Consulting','Infostrux Solutions Inc.','Infosys','KPMG LLP',
+            'LTM','LTI Mindtree','phData, Inc.','Slalom, LLC.','Squadron Data Inc','Tredence Inc.',
+            'Spaulding Ridge','TEKsystems Global Services, LLC.','Blend360, LLC',
+            'Tiger Analytics Inc.','Atrium','Perficient Inc.','SDK Tek Services Ltd.','Merkle',
+            'Archetype Consulting','Apex Systems','Tata Consultancy Services',
+            'OneSix','Icon Analytics','Sparq Holdings, Inc.','CitiusTech Inc.','Hexaware Technologies',
+            'NTT DATA Group Corporation','MegazoneCloud Corporation',
+            'Infinite Lambda Limited','Infinite Lambda Inc','INFINITE LAMBDA (SINGAPORE) PTE. LTD.',
+            'Altis Global Limited','Altis Consulting, ANZ','PROLIM Global Corporation',
+            'INFOMOTION GMBH','INFOMOTION GMBH, BearingPoint','CIVICA SOFTWARE, S.L.',
+            'Kubrick Group','KPC (Key Performance Consulting)','KPC'
+          )
+      - name: is_coco_final
+        synonyms: [coco attributed, IS_COCO_FINAL, coco qualified, coco final]
+        description: IS_COCO_FINAL = TRUE. Default CoCo filter.
+        expr: IS_COCO_FINAL = TRUE
+      - name: usmajors_theater
+        synonyms: [USMajors, US Majors, S Majors, Majors]
+        description: USMajors theater
+        expr: THEATER_NAME = 'USMajors'
+    dimensions:
+      - name: partner_name
+        synonyms: [partner, SI, company]
+        description: Partner name
+        expr: PARTNER_NAME
+        data_type: TEXT
+      - name: account_name
+        synonyms: [customer, account]
+        description: Customer account name
+        expr: ACCOUNT_NAME
+        data_type: TEXT
+      - name: use_case_id
+        synonyms: [uc id]
+        description: Use case identifier
+        expr: USE_CASE_ID
+        data_type: TEXT
+      - name: use_case_stage
+        synonyms: [stage, status]
+        description: Use case stage — never use numeric values
+        expr: USE_CASE_STAGE
+        data_type: TEXT
+      - name: theater
+        synonyms: [theater name, geo]
+        description: USMajors=S Majors. AMSExpansion, AMSAcquisition, USPubSec=NoAM.
+        expr: THEATER_NAME
+        data_type: TEXT
+      - name: is_coco_final
+        synonyms: [IS_COCO_FINAL, coco final, coco qualified]
+        description: TRUE = CoCo attributed. Always filter = TRUE for CoCo counts.
+        expr: IS_COCO_FINAL
+        data_type: BOOLEAN
+      - name: confidence_band
+        synonyms: [confidence, score band]
+        description: "High(>=75) | Medium(40-74) | Low(1-39) | No Signal"
+        expr: CONFIDENCE_BAND
+        data_type: TEXT
+      - name: partner_group
+        synonyms: [group, partner type]
+        description: GSI | NOAM RSI | APJ RSI | EMEA RSI
+        expr: >
+          CASE
+            WHEN PARTNER_NAME IN ('Accenture','Capgemini Technologies LLC',
+              'Cognizant Technology Solutions US Corp','Deloitte Consulting',
+              'EY','Ernst & Young (EY)','IBM','IBM Consulting') THEN 'GSI'
+            WHEN PARTNER_NAME IN ('7Rivers, Inc','Aimpoint Digital','BlueCloud Services Inc',
+              'kipi.ai','Kipi.ai','evolv Consulting','Infostrux Solutions Inc.','Infosys','KPMG LLP',
+              'LTM','LTI Mindtree','phData, Inc.','Slalom, LLC.','Squadron Data Inc','Tredence Inc.',
+              'Spaulding Ridge','TEKsystems Global Services, LLC.','Blend360, LLC','Tiger Analytics Inc.',
+              'Atrium','Perficient Inc.','SDK Tek Services Ltd.','Merkle','Archetype Consulting',
+              'Apex Systems','Tata Consultancy Services','OneSix','Icon Analytics',
+              'Sparq Holdings, Inc.','CitiusTech Inc.','Hexaware Technologies') THEN 'NOAM RSI'
+            WHEN PARTNER_NAME IN ('NTT DATA Group Corporation','MegazoneCloud Corporation',
+              'Infinite Lambda Limited','Infinite Lambda Inc','INFINITE LAMBDA (SINGAPORE) PTE. LTD.',
+              'Altis Global Limited','Altis Consulting, ANZ','PROLIM Global Corporation') THEN 'APJ RSI'
+            WHEN PARTNER_NAME IN ('INFOMOTION GMBH','INFOMOTION GMBH, BearingPoint',
+              'CIVICA SOFTWARE, S.L.','Kubrick Group','KPC (Key Performance Consulting)','KPC') THEN 'EMEA RSI'
+            ELSE 'Other'
+          END
+        data_type: TEXT
+    measures:
+      - name: total_use_cases
+        synonyms: [number of use cases, uc count, total UCs]
+        description: Total use cases
+        expr: COUNT(USE_CASE_ID)
+        data_type: NUMBER
+        default_aggregation: sum
+      - name: coco_final_use_cases
+        synonyms: [coco use cases, IS_COCO_FINAL count, coco count, coco UCs, coco qualified]
+        description: IS_COCO_FINAL = TRUE count — default CoCo metric
+        expr: COUNT_IF(IS_COCO_FINAL = TRUE)
+        data_type: NUMBER
+        default_aggregation: sum
+      - name: coco_final_pct
+        synonyms: [coco rate, coco %, adoption rate]
+        description: IS_COCO_FINAL % of total
+        expr: ROUND(COUNT_IF(IS_COCO_FINAL = TRUE) * 100.0 / NULLIF(COUNT(USE_CASE_ID), 0), 1)
+        data_type: NUMBER
+        default_aggregation: sum
+      - name: deployed_use_cases
+        synonyms: [stage 7 count, deployed, go-lives]
+        description: Stage 7 Deployed count
+        expr: COUNT_IF(USE_CASE_STAGE = '7 - Deployed')
+        data_type: NUMBER
+        default_aggregation: sum
+      - name: coco_final_deployed
+        synonyms: [coco go-lives, coco deployed]
+        description: Deployed IS_COCO_FINAL use cases
+        expr: COUNT_IF(USE_CASE_STAGE = '7 - Deployed' AND IS_COCO_FINAL = TRUE)
+        data_type: NUMBER
+        default_aggregation: sum
+
+  - name: use_cases_q1
+    description: >
+      Q1 FY27 (Feb-Apr 2026). Scored from Feb 1 2026.
+      Pre-scoped to Q1 — no date filter needed.
+      Same structure as use_cases_q3.
+    base_table:
+      database: TEMP
+      schema: COCO_PARTNER_ADOPTION
+      table: V_OKR_USE_CASES_COCO_FINAL_Q1
+    filters:
+      - name: managed_partners
+        synonyms: [managed, OKR partners]
+        description: All ~44 managed partners
+        expr: >
+          PARTNER_NAME IN (
+            'Accenture','Capgemini Technologies LLC','Cognizant Technology Solutions US Corp',
+            'Deloitte Consulting','EY','Ernst & Young (EY)','IBM','IBM Consulting',
+            '7Rivers, Inc','Aimpoint Digital','BlueCloud Services Inc','kipi.ai','Kipi.ai',
+            'evolv Consulting','Infostrux Solutions Inc.','Infosys','KPMG LLP',
+            'LTM','LTI Mindtree','phData, Inc.','Slalom, LLC.','Squadron Data Inc','Tredence Inc.',
+            'Spaulding Ridge','TEKsystems Global Services, LLC.','Blend360, LLC',
+            'Tiger Analytics Inc.','Atrium','Perficient Inc.','SDK Tek Services Ltd.','Merkle',
+            'Archetype Consulting','Apex Systems','Tata Consultancy Services',
+            'OneSix','Icon Analytics','Sparq Holdings, Inc.','CitiusTech Inc.','Hexaware Technologies',
+            'NTT DATA Group Corporation','MegazoneCloud Corporation',
+            'Infinite Lambda Limited','Infinite Lambda Inc','INFINITE LAMBDA (SINGAPORE) PTE. LTD.',
+            'Altis Global Limited','Altis Consulting, ANZ','PROLIM Global Corporation',
+            'INFOMOTION GMBH','INFOMOTION GMBH, BearingPoint','CIVICA SOFTWARE, S.L.',
+            'Kubrick Group','KPC (Key Performance Consulting)','KPC'
+          )
+      - name: is_coco_final
+        synonyms: [IS_COCO_FINAL, coco qualified, coco final]
+        description: IS_COCO_FINAL = TRUE. Default CoCo filter.
+        expr: IS_COCO_FINAL = TRUE
+    dimensions:
+      - name: partner_name
+        synonyms: [partner, SI, company]
+        description: Partner name
+        expr: PARTNER_NAME
+        data_type: TEXT
+      - name: use_case_id
+        synonyms: [uc id]
+        description: Use case identifier
+        expr: USE_CASE_ID
+        data_type: TEXT
+      - name: use_case_stage
+        synonyms: [stage, status]
+        description: Use case stage
+        expr: USE_CASE_STAGE
+        data_type: TEXT
+      - name: theater
+        synonyms: [theater name, geo]
+        description: Sales theater
+        expr: THEATER_NAME
+        data_type: TEXT
+      - name: is_coco_final
+        synonyms: [IS_COCO_FINAL, coco final]
+        description: TRUE = CoCo attributed
+        expr: IS_COCO_FINAL
+        data_type: BOOLEAN
+      - name: partner_group
+        synonyms: [group, partner type]
+        description: GSI | NOAM RSI | APJ RSI | EMEA RSI
+        expr: >
+          CASE
+            WHEN PARTNER_NAME IN ('Accenture','Capgemini Technologies LLC',
+              'Cognizant Technology Solutions US Corp','Deloitte Consulting',
+              'EY','Ernst & Young (EY)','IBM','IBM Consulting') THEN 'GSI'
+            WHEN PARTNER_NAME IN ('7Rivers, Inc','Aimpoint Digital','BlueCloud Services Inc',
+              'kipi.ai','Kipi.ai','evolv Consulting','Infostrux Solutions Inc.','Infosys','KPMG LLP',
+              'LTM','LTI Mindtree','phData, Inc.','Slalom, LLC.','Squadron Data Inc','Tredence Inc.',
+              'Spaulding Ridge','TEKsystems Global Services, LLC.','Blend360, LLC','Tiger Analytics Inc.',
+              'Atrium','Perficient Inc.','SDK Tek Services Ltd.','Merkle','Archetype Consulting',
+              'Apex Systems','Tata Consultancy Services','OneSix','Icon Analytics',
+              'Sparq Holdings, Inc.','CitiusTech Inc.','Hexaware Technologies') THEN 'NOAM RSI'
+            WHEN PARTNER_NAME IN ('NTT DATA Group Corporation','MegazoneCloud Corporation',
+              'Infinite Lambda Limited','Infinite Lambda Inc','INFINITE LAMBDA (SINGAPORE) PTE. LTD.',
+              'Altis Global Limited','Altis Consulting, ANZ','PROLIM Global Corporation') THEN 'APJ RSI'
+            WHEN PARTNER_NAME IN ('INFOMOTION GMBH','INFOMOTION GMBH, BearingPoint',
+              'CIVICA SOFTWARE, S.L.','Kubrick Group','KPC (Key Performance Consulting)','KPC') THEN 'EMEA RSI'
+            ELSE 'Other'
+          END
+        data_type: TEXT
+    measures:
+      - name: total_use_cases
+        synonyms: [number of use cases, uc count, total UCs]
+        description: Total use cases
+        expr: COUNT(USE_CASE_ID)
+        data_type: NUMBER
+        default_aggregation: sum
+      - name: coco_final_use_cases
+        synonyms: [coco use cases, coco count, coco UCs, coco qualified]
+        description: IS_COCO_FINAL = TRUE count
+        expr: COUNT_IF(IS_COCO_FINAL = TRUE)
+        data_type: NUMBER
+        default_aggregation: sum
+      - name: coco_final_pct
+        synonyms: [coco rate, coco %]
+        description: IS_COCO_FINAL % of total
+        expr: ROUND(COUNT_IF(IS_COCO_FINAL = TRUE) * 100.0 / NULLIF(COUNT(USE_CASE_ID), 0), 1)
+        data_type: NUMBER
+        default_aggregation: sum
+
+  - name: use_cases_ytd
+    description: >
+      FY27 YTD — all quarters (Q1+Q2+Q3+Q4) in one table. Scored from Feb 1 2026.
+      Use for "full year", "YTD", "all of FY27", or cross-quarter comparisons.
+      Has DECISION_DATE and GO_LIVE_DATE for filtering if needed.
+      Same IS_COCO_FINAL definition as quarter tables.
+    base_table:
+      database: TEMP
+      schema: COCO_PARTNER_ADOPTION
+      table: V_OKR_USE_CASES_COCO_FINAL
+    filters:
+      - name: managed_partners
+        synonyms: [managed, OKR partners, tracked]
+        description: All ~44 managed partners
+        expr: >
+          PARTNER_NAME IN (
+            'Accenture','Capgemini Technologies LLC','Cognizant Technology Solutions US Corp',
+            'Deloitte Consulting','EY','Ernst & Young (EY)','IBM','IBM Consulting',
+            '7Rivers, Inc','Aimpoint Digital','BlueCloud Services Inc','kipi.ai','Kipi.ai',
+            'evolv Consulting','Infostrux Solutions Inc.','Infosys','KPMG LLP',
+            'LTM','LTI Mindtree','phData, Inc.','Slalom, LLC.','Squadron Data Inc','Tredence Inc.',
+            'Spaulding Ridge','TEKsystems Global Services, LLC.','Blend360, LLC',
+            'Tiger Analytics Inc.','Atrium','Perficient Inc.','SDK Tek Services Ltd.','Merkle',
+            'Archetype Consulting','Apex Systems','Tata Consultancy Services',
+            'OneSix','Icon Analytics','Sparq Holdings, Inc.','CitiusTech Inc.','Hexaware Technologies',
+            'NTT DATA Group Corporation','MegazoneCloud Corporation',
+            'Infinite Lambda Limited','Infinite Lambda Inc','INFINITE LAMBDA (SINGAPORE) PTE. LTD.',
+            'Altis Global Limited','Altis Consulting, ANZ','PROLIM Global Corporation',
+            'INFOMOTION GMBH','INFOMOTION GMBH, BearingPoint','CIVICA SOFTWARE, S.L.',
+            'Kubrick Group','KPC (Key Performance Consulting)','KPC'
+          )
+      - name: is_coco_final
+        synonyms: [IS_COCO_FINAL, coco qualified, coco final]
+        description: IS_COCO_FINAL = TRUE. Default CoCo filter.
+        expr: IS_COCO_FINAL = TRUE
+    dimensions:
+      - name: partner_name
+        synonyms: [partner, SI, company]
+        description: Partner name
+        expr: PARTNER_NAME
+        data_type: TEXT
+      - name: use_case_id
+        synonyms: [uc id]
+        description: Use case identifier
+        expr: USE_CASE_ID
+        data_type: TEXT
+      - name: use_case_stage
+        synonyms: [stage, status]
+        description: Use case stage
+        expr: USE_CASE_STAGE
+        data_type: TEXT
+      - name: theater
+        synonyms: [theater name, geo]
+        description: Sales theater
+        expr: THEATER_NAME
+        data_type: TEXT
+      - name: decision_date
+        synonyms: [pipeline date, stage 3-4 date]
+        description: Date entered stage 3 or 4 — use for Q-specific filtering of stages 3-4
+        expr: DECISION_DATE
+        data_type: DATE
+      - name: go_live_date
+        synonyms: [go live, stage 5-7 date]
+        description: Date entered stage 5/6/7 — use for Q-specific filtering of stages 5-7
+        expr: GO_LIVE_DATE
+        data_type: DATE
+      - name: is_coco_final
+        synonyms: [IS_COCO_FINAL, coco final]
+        description: TRUE = CoCo attributed
+        expr: IS_COCO_FINAL
+        data_type: BOOLEAN
+      - name: partner_group
+        synonyms: [group, partner type]
+        description: GSI | NOAM RSI | APJ RSI | EMEA RSI
+        expr: >
+          CASE
+            WHEN PARTNER_NAME IN ('Accenture','Capgemini Technologies LLC',
+              'Cognizant Technology Solutions US Corp','Deloitte Consulting',
+              'EY','Ernst & Young (EY)','IBM','IBM Consulting') THEN 'GSI'
+            WHEN PARTNER_NAME IN ('7Rivers, Inc','Aimpoint Digital','BlueCloud Services Inc',
+              'kipi.ai','Kipi.ai','evolv Consulting','Infostrux Solutions Inc.','Infosys','KPMG LLP',
+              'LTM','LTI Mindtree','phData, Inc.','Slalom, LLC.','Squadron Data Inc','Tredence Inc.',
+              'Spaulding Ridge','TEKsystems Global Services, LLC.','Blend360, LLC','Tiger Analytics Inc.',
+              'Atrium','Perficient Inc.','SDK Tek Services Ltd.','Merkle','Archetype Consulting',
+              'Apex Systems','Tata Consultancy Services','OneSix','Icon Analytics',
+              'Sparq Holdings, Inc.','CitiusTech Inc.','Hexaware Technologies') THEN 'NOAM RSI'
+            WHEN PARTNER_NAME IN ('NTT DATA Group Corporation','MegazoneCloud Corporation',
+              'Infinite Lambda Limited','Infinite Lambda Inc','INFINITE LAMBDA (SINGAPORE) PTE. LTD.',
+              'Altis Global Limited','Altis Consulting, ANZ','PROLIM Global Corporation') THEN 'APJ RSI'
+            WHEN PARTNER_NAME IN ('INFOMOTION GMBH','INFOMOTION GMBH, BearingPoint',
+              'CIVICA SOFTWARE, S.L.','Kubrick Group','KPC (Key Performance Consulting)','KPC') THEN 'EMEA RSI'
+            ELSE 'Other'
+          END
+        data_type: TEXT
+    measures:
+      - name: total_use_cases
+        synonyms: [number of use cases, uc count, total UCs, all use cases, ytd total]
+        description: Total use cases across all of FY27
+        expr: COUNT(USE_CASE_ID)
+        data_type: NUMBER
+        default_aggregation: sum
+      - name: coco_final_use_cases
+        synonyms: [coco use cases, coco count, ytd coco, full year coco, IS_COCO_FINAL count]
+        description: IS_COCO_FINAL = TRUE count for YTD
+        expr: COUNT_IF(IS_COCO_FINAL = TRUE)
+        data_type: NUMBER
+        default_aggregation: sum
+      - name: coco_final_pct
+        synonyms: [coco rate, coco %, ytd coco rate, full year adoption rate]
+        description: IS_COCO_FINAL % of total for FY27 YTD
+        expr: ROUND(COUNT_IF(IS_COCO_FINAL = TRUE) * 100.0 / NULLIF(COUNT(USE_CASE_ID), 0), 1)
+        data_type: NUMBER
+        default_aggregation: sum
+      - name: deployed_use_cases
+        synonyms: [stage 7 count, deployed, go-lives, ytd go-lives]
+        description: Stage 7 Deployed count for FY27 YTD
+        expr: COUNT_IF(USE_CASE_STAGE = '7 - Deployed')
+        data_type: NUMBER
+        default_aggregation: sum
+      - name: coco_final_deployed
+        synonyms: [coco go-lives, coco deployed, ytd coco go-lives]
+        description: Deployed IS_COCO_FINAL use cases for FY27 YTD
+        expr: COUNT_IF(USE_CASE_STAGE = '7 - Deployed' AND IS_COCO_FINAL = TRUE)
+        data_type: NUMBER
+        default_aggregation: sum
+
+  - name: token_usage
+    description: >
+      Daily CoCo credit/token consumption (CORTEX_CODE_USER_DAY_FACT).
+      Always filter SNOWFLAKE_ACCOUNT_TYPE='Customer' AND TOTAL_DAILY_REQUESTS>0.
+      WoW: Last7d=DS>=DATEADD(day,-7,TODAY()). Prior7d between -14d and -7d.
+      Quarter windows: Q1=Feb-Apr, Q2=May-Jul, Q3=Aug-Oct. YTD=DS>='2026-02-01'.
+    base_table:
+      database: SNOWSCIENCE
+      schema: LLM
+      table: CORTEX_CODE_USER_DAY_FACT
+    filters:
+      - name: customer_accounts_only
+        synonyms: [customers, real accounts]
+        description: Real customer accounts only
+        expr: SNOWFLAKE_ACCOUNT_TYPE = 'Customer'
+      - name: active_users_only
+        synonyms: [active, has usage]
+        description: At least one CoCo request
+        expr: TOTAL_DAILY_REQUESTS > 0
+      - name: q3_usage
+        synonyms: [q3 tokens, q3 credits, current quarter usage]
+        description: Q3 FY27 consumption
+        expr: DS BETWEEN '2026-08-01' AND '2026-10-31'
+      - name: q2_usage
+        synonyms: [q2 tokens, q2 credits, last quarter usage]
+        description: Q2 FY27 consumption
+        expr: DS BETWEEN '2026-05-01' AND '2026-07-31'
+      - name: ytd_usage
+        synonyms: [ytd tokens, ytd credits, full year usage]
+        description: FY27 YTD consumption
+        expr: DS >= '2026-02-01'
+    dimensions:
+      - name: usage_date
+        synonyms: [date, day, ds]
+        description: Daily usage date
+        expr: DS
+        data_type: DATE
+      - name: sf_account_name
+        synonyms: [account name, customer name]
+        description: Salesforce account name
+        expr: SALESFORCE_ACCOUNT_NAME
+        data_type: TEXT
+      - name: account_type
+        synonyms: [customer or partner]
+        description: Always filter to Customer
+        expr: SNOWFLAKE_ACCOUNT_TYPE
+        data_type: TEXT
+    measures:
+      - name: total_credits
+        synonyms: [credits, credit spend, cost, spend]
+        description: Total CoCo credit spend
+        expr: SUM(TOTAL_TOKEN_CREDITS)
+        data_type: NUMBER
+        default_aggregation: sum
+      - name: total_tokens
+        synonyms: [tokens, token volume]
+        description: Total input + output tokens
+        expr: SUM(TOTAL_TOKENS)
+        data_type: NUMBER
+        default_aggregation: sum
+      - name: last_7d_tokens
+        synonyms: [last week tokens, last 7d tokens]
+        description: Tokens in rolling last 7 days
+        expr: SUM(CASE WHEN DS >= DATEADD('day',-7,CURRENT_DATE()) THEN TOTAL_TOKENS ELSE 0 END)
+        data_type: NUMBER
+        default_aggregation: sum
+      - name: prior_7d_tokens
+        synonyms: [prior week tokens, wow baseline]
+        description: Tokens 7-14 days ago
+        expr: SUM(CASE WHEN DS >= DATEADD('day',-14,CURRENT_DATE()) AND DS < DATEADD('day',-7,CURRENT_DATE()) THEN TOTAL_TOKENS ELSE 0 END)
+        data_type: NUMBER
+        default_aggregation: sum
+      - name: token_wow_pct
+        synonyms: [token wow, token week over week, weekly token change]
+        description: WoW% change in tokens
+        expr: >
+          ROUND((SUM(CASE WHEN DS >= DATEADD('day',-7,CURRENT_DATE()) THEN TOTAL_TOKENS ELSE 0 END)
+            - SUM(CASE WHEN DS >= DATEADD('day',-14,CURRENT_DATE()) AND DS < DATEADD('day',-7,CURRENT_DATE()) THEN TOTAL_TOKENS ELSE 0 END))
+            * 100.0 / NULLIF(SUM(CASE WHEN DS >= DATEADD('day',-14,CURRENT_DATE()) AND DS < DATEADD('day',-7,CURRENT_DATE()) THEN TOTAL_TOKENS ELSE 0 END), 0), 1)
+        data_type: NUMBER
+        default_aggregation: sum
+      - name: active_accounts
+        synonyms: [accounts with usage, unique accounts]
+        description: Distinct accounts with CoCo usage
+        expr: COUNT(DISTINCT SALESFORCE_ACCOUNT_NAME)
+        data_type: NUMBER
+        default_aggregation: sum
+
+verified_queries:
+  - name: usmajors_q3_summary
+    question: Total and CoCo-qualified use cases for USMajors in Q3
+    sql: |
+      SELECT
+        COUNT(USE_CASE_ID)               AS total_use_cases,
+        COUNT_IF(IS_COCO_FINAL = TRUE)   AS coco_final_use_cases,
+        ROUND(COUNT_IF(IS_COCO_FINAL = TRUE) * 100.0 / NULLIF(COUNT(USE_CASE_ID), 0), 1) AS coco_pct
+      FROM TEMP.COCO_PARTNER_ADOPTION.V_OKR_USE_CASES_COCO_FINAL_Q3
+      WHERE THEATER_NAME = 'USMajors'
+
+  - name: usmajors_q2_summary
+    question: Total and CoCo-qualified use cases for USMajors in Q2
+    sql: |
+      SELECT
+        COUNT(USE_CASE_ID)               AS total_use_cases,
+        COUNT_IF(IS_COCO_FINAL = TRUE)   AS coco_final_use_cases,
+        ROUND(COUNT_IF(IS_COCO_FINAL = TRUE) * 100.0 / NULLIF(COUNT(USE_CASE_ID), 0), 1) AS coco_pct
+      FROM TEMP.COCO_PARTNER_ADOPTION.V_OKR_USE_CASES_COCO_FINAL_Q2
+      WHERE THEATER_NAME = 'USMajors'
+
+  - name: ytd_by_partner_group
+    question: FY27 YTD CoCo adoption rate by partner group
+    sql: |
+      SELECT
+        CASE
+          WHEN PARTNER_NAME IN ('Accenture','Capgemini Technologies LLC',
+            'Cognizant Technology Solutions US Corp','Deloitte Consulting',
+            'EY','Ernst & Young (EY)','IBM','IBM Consulting') THEN 'GSI'
+          WHEN PARTNER_NAME IN ('7Rivers, Inc','Aimpoint Digital','BlueCloud Services Inc',
+            'kipi.ai','Kipi.ai','evolv Consulting','Infostrux Solutions Inc.','Infosys','KPMG LLP',
+            'LTM','LTI Mindtree','phData, Inc.','Slalom, LLC.','Squadron Data Inc','Tredence Inc.',
+            'Spaulding Ridge','TEKsystems Global Services, LLC.','Blend360, LLC','Tiger Analytics Inc.',
+            'Atrium','Perficient Inc.','SDK Tek Services Ltd.','Merkle','Archetype Consulting',
+            'Apex Systems','Tata Consultancy Services','OneSix','Icon Analytics',
+            'Sparq Holdings, Inc.','CitiusTech Inc.','Hexaware Technologies') THEN 'NOAM RSI'
+          WHEN PARTNER_NAME IN ('NTT DATA Group Corporation','MegazoneCloud Corporation',
+            'Infinite Lambda Limited','Infinite Lambda Inc','INFINITE LAMBDA (SINGAPORE) PTE. LTD.',
+            'Altis Global Limited','Altis Consulting, ANZ','PROLIM Global Corporation') THEN 'APJ RSI'
+          WHEN PARTNER_NAME IN ('INFOMOTION GMBH','INFOMOTION GMBH, BearingPoint',
+            'CIVICA SOFTWARE, S.L.','Kubrick Group','KPC (Key Performance Consulting)','KPC') THEN 'EMEA RSI'
+        END AS partner_group,
+        COUNT(USE_CASE_ID)               AS total_uc,
+        COUNT_IF(IS_COCO_FINAL = TRUE)   AS coco_final_uc,
+        ROUND(COUNT_IF(IS_COCO_FINAL = TRUE) * 100.0 / NULLIF(COUNT(USE_CASE_ID), 0), 1) AS coco_pct
+      FROM TEMP.COCO_PARTNER_ADOPTION.V_OKR_USE_CASES_COCO_FINAL
+      WHERE PARTNER_NAME IN (
+          'Accenture','Capgemini Technologies LLC','Cognizant Technology Solutions US Corp',
+          'Deloitte Consulting','EY','Ernst & Young (EY)','IBM','IBM Consulting',
+          '7Rivers, Inc','Aimpoint Digital','BlueCloud Services Inc','kipi.ai','Kipi.ai',
+          'evolv Consulting','Infostrux Solutions Inc.','Infosys','KPMG LLP',
+          'LTM','LTI Mindtree','phData, Inc.','Slalom, LLC.','Squadron Data Inc','Tredence Inc.',
+          'Spaulding Ridge','TEKsystems Global Services, LLC.','Blend360, LLC',
+          'Tiger Analytics Inc.','Atrium','Perficient Inc.','SDK Tek Services Ltd.','Merkle',
+          'Archetype Consulting','Apex Systems','Tata Consultancy Services',
+          'OneSix','Icon Analytics','Sparq Holdings, Inc.','CitiusTech Inc.','Hexaware Technologies',
+          'NTT DATA Group Corporation','MegazoneCloud Corporation',
+          'Infinite Lambda Limited','Infinite Lambda Inc','INFINITE LAMBDA (SINGAPORE) PTE. LTD.',
+          'Altis Global Limited','Altis Consulting, ANZ','PROLIM Global Corporation',
+          'INFOMOTION GMBH','INFOMOTION GMBH, BearingPoint','CIVICA SOFTWARE, S.L.',
+          'Kubrick Group','KPC (Key Performance Consulting)','KPC'
+        )
+      GROUP BY partner_group ORDER BY partner_group

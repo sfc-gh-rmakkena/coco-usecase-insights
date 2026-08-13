@@ -1,0 +1,961 @@
+{
+  "content": [
+    {
+      "thinking": {
+        "text": "The user asks how many managed partners there are. This is a factual question about the data. Let me query the semantic model. First I need to load the deferred tool coco_adoption_uc.Searching for relevant tools...\nFound 2 relevant tools\n"
+      },
+      "type": "thinking"
+    },
+    {
+      "tool_use": {
+        "client_side_execute": false,
+        "input": {
+          "pruning_question": "How many distinct managed partners are there?"
+        },
+        "name": "coco_adoption_uc",
+        "tool_use_id": "toolu_bdrk_01VRHvXiWmDPfxpA9aobcVZV",
+        "type": "system_agentic_semantic_context"
+      },
+      "type": "tool_use"
+    },
+    {
+      "tool_result": {
+        "content": [
+          {
+            "json": {
+              "pruned_note": "**Note**: This semantic model fits within the agent's token budget, so it is shown in full. You do not need to set pruning_question on future calls referencing this same semantic model.",
+              "semantic_model_description": "CoCo (Cortex Code) partner adoption semantic model. Tracks use cases and token/credit consumption across ~44 managed OKR partners (GSI, NOAM RSI, APJ RSI, EMEA RSI groups).\nIS_COCO_FINAL is the canonical CoCo attribution metric (always use this by default):\n  IS_COCO_FINAL = IS_COCO = TRUE  (keyword/feature-flag detection)\n               OR account has CoCo credit consumption AND partner is mapped to that account\n\nIS_COCO = TRUE requires at least ONE of:\n  (1) SE Comments:      Opportunity notes contain \"coco\" or \"cortex code\"\n  (2) Partner Comments: Partner field contains \"#coco\"\n  (3) Feature Flag:     Prioritized Features includes \"AI - Cortex Code\"\n  (4) Account Usage:    Customer account has actual CoCo credits consumed (product usage signal)\n\nDate criteria (BOTH must be met for a use case to be in scope):\n  Stages 1-4 (Discovery \u2192 Won):    DECISION_DATE within selected quarter range\n  Stages 5-7 (Implementation \u2192 Deployed): GO_LIVE_DATE within selected quarter range\n\nFiscal year quarters (FY27):\n  Q1 FY27: 2026-02-01 to 2026-04-30\n  Q2 FY27: 2026-05-01 to 2026-07-31   \u2190 \"Q2\", \"last quarter\"\n  Q3 FY27: 2026-08-01 to 2026-10-31   \u2190 \"Q3\", \"current quarter\", \"this quarter\" (active)\n  Q4 FY27: 2026-11-01 to 2027-01-31\n\nPartner group scope:\n  GSI       \u2192 Global scope. Accenture, Capgemini, Cognizant, Deloitte, EY, IBM. No theater filter.\n  NOAM RSI  \u2192 NoAM theaters only (AMSExpansion, USMajors, AMSAcquisition, USPubSec).\n  APJ RSI   \u2192 Country-scoped: NTT Data (Japan), Megazone (Korea), Infinite Lambda (ASEAN), Altis (ANZ), Prolim (India).\n  EMEA RSI  \u2192 Region-scoped: Infomotion (CentralEMEA), Civica (SouthEMEA), Kubrick (UK), KPC (SouthEMEA).\n\nTheater name reference (use exact DB values):\n  AMSExpansion   \u2192 NoAM SMB/Commercial expansion accounts\n  USMajors       \u2192 US Major accounts (\"S Majors\", \"US Majors\", \"Majors\" all mean USMajors in DB)\n  AMSAcquisition \u2192 NoAM acquisition/new logo accounts\n  USPubSec       \u2192 US Public Sector\n  EMEA           \u2192 Europe, Middle East, Africa\n  APJ            \u2192 Asia Pacific, Japan\n\nToken WoW definitions:\n  Last 7d  = DS >= DATEADD('day', -7, CURRENT_DATE())\n  Prior 7d = DS >= DATEADD('day', -14, CURRENT_DATE()) AND DS < DATEADD('day', -7, CURRENT_DATE())\n  WoW%     = (last7 - prior7) / prior7 * 100\n  WoW \u0394    = last7 value minus prior7 value (change in weekly rate, NOT cumulative)\n\nConfidence scoring (IS_COCO_FINAL via account-level signal, TOTAL_SCORE >= 75):\n  S1 (0-30): Workload-matched bundled CoCo skill invocations\n  S2 (0-35): Custom skill usage (highest weight \u2014 proves partner built native CoCo workflows)\n  S3 (0-20): Tool invocations (file edits, terminal runs \u2014 deep usage signal)\n  S4 (0-15): Active days \u00d7 skill rate (sustained usage over time)\n  Band: High = TOTAL_SCORE >= 75 \u2192 IS_COCO_FINAL = TRUE\n        Medium = 40-74 \u2192 not IS_COCO_FINAL (monitor)\n        Low = 1-39 \u2192 weak signal\n        No Signal = 0 \u2192 not CoCo\n",
+              "semantic_model_key": "coco_adoption_uc",
+              "semantic_model_name": "coco_adoption_model",
+              "sql_best_practices": "## SQL Generation Rules and Best Practices\n\n**CRITICAL \u2014 Ambiguity Gate (check BEFORE writing SQL):**\nIf the user's question contains a business term that could map to more than one metric or dimension in the semantic model, STOP and do the following:\n1. Check the [Additional Instructions] section of your system prompt for an ambiguous terms table or clarification rules.\n2. If those instructions say to ask for clarification, you MUST respond with a clarification question to the user. Do NOT generate SQL. Do NOT pick what seems \"most likely.\"\n3. Only generate SQL if the term unambiguously maps to exactly one metric, or if no clarification rules exist in the Additional Instructions.\nViolating this gate by guessing a metric when clarification is required will produce incorrect results for the user.\n\nYou can write SQL against the provided semantic model to retrieve data. When doing so, you are an expert data scientist well-versed in BI concepts and your goal is to write accurate, readable queries to fetch the relevant data. Use the following sections as guidelines for your task.\n\nThe semantic model is explained in section 1. Standard SQL (using logical names from the semantic model, which are postprocessed to physical SQL) is detailed in section 2. General SQL rules are in section 3.\n\n### 1. How to use the Semantic Model\n\nA semantic model is intended to provide additional information about the relevant entities that you may want to query for an analysis.\n\nA semantic model is comprised of a set of logical tables. A logical table maps onto an actual SQL table or view, called a base table. Each logical table is comprised of facts, dimensions, and metrics.\n\n- **Facts** are row-level quantitative values (e.g., sales amount, quantity, cost). They are unaggregated and exist at the granularity of the table.\n- **Dimensions** are categorical attributes used to group, filter, and slice data (e.g., region, product category, date). They provide context to metrics. They are commonly used to GROUP BY.\n- **Metrics** are aggregations over facts using functions like SUM, AVG, COUNT. They represent business KPIs. If no aggregation is specified, use the default indicated in the column comment.\n\nMetrics can also exist at the model-level where they can span multiple logical tables.\n\nA semantic model can include the relationships between logical tables, specifying valid join paths. Only use the supported join paths provided; do not invent joins or switch left/right logical tables.\n\nA semantic model can include verified queries, which are SQL queries that are guaranteed to be correct for the corresponding user question.\n\nA logical table can include named filters, which are reusable WHERE-clause expressions (e.g., `is_active = TRUE`). Use these filters in your SQL when they match the user's intent rather than writing equivalent expressions from scratch.\n\nA semantic model can include admin-specified custom instructions which you should follow closely. The first is SQL generation custom instructions that affect how you write SQL. The next is question categorization custom instructions that indicate when you should or should not respond to a question. Question categorization custom instructions are a legacy field from another system, but try to follow them.\n\nA semantic model can include retrieved literals, which are the set of exact literals that are in some column of the base table; this can be helpful to match terms semantically (e.g. if the user asks about the price of all small cars, and there is a column called `car_types`, you could find `sedan-2door`, `sedan-4d`, `sports-2d` for your query, which are not text-wise related but semantically related).\n\n#### Advanced Features of Semantic Models\n\nA semantic model may define advanced features beyond basic facts, dimensions, and metrics.\n\n**Model-level metrics**: Metrics defined at the model level rather than within a single logical table. These metrics may span multiple tables. You must resolve the metric expression down to non-metric column references (facts and dimensions) and write the necessary joins yourself.\n\n**Asof joins**: A semantic model may contain **asof** relationship keys. Asof joins perform point-in-time lookups: each row from the left table is matched to the row in the right table whose key value is closest to (less than or equal to) the left key value. Use Snowflake's `ASOF JOIN ... MATCH_CONDITION(left.col >= right.col) ON equi_conditions` syntax as shown in the supported join paths.\n\n**Range joins**: A semantic model may contain **range** relationship keys. Range joins match each row from the left table to rows in the right table where the left column falls within a range defined by start/end columns. Use the non-equi join conditions as shown in the supported join paths (e.g., `(start_col IS NULL OR left_col >= start_col) AND (end_col IS NULL OR left_col < end_col)`).\n\n**Semi-additive metrics**: Some metrics in the semantic model may define `non_additive_dimensions`. These indicate the metric is **semi-additive** (e.g., a snapshot metric like account balance that should not be summed across time). Write subqueries with window functions (like `ROW_NUMBER`) to find the latest snapshot value.\n\n### 2. Writing Standard SQL against a Semantic Model\n\nStandard SQL uses the Snowflake SQL dialect with logical names from the semantic model. In this mode, you write queries using the logical table and column names (dimensions, facts, time_dimensions) defined in the semantic model. The SQL will be automatically postprocessed to resolve to physical table and column names before execution.\n\n- **Use Semantic Model Column Names**: ALWAYS use column names from the semantic model (dimensions and facts). The SQL will be automatically postprocessed to resolve to physical column names.\n- **Reference Logical Tables**: Use the logical table names from the semantic model with a `__` prefix. Do NOT use fully qualified physical table names (e.g., use `__orders` not `orders` or `DATABASE.SCHEMA.ORDERS`). This prefix is required for all table references, including in FROM, JOIN, and column qualifiers (e.g., `__orders.order_total`).\n- **Always query logical tables, not the underlying base tables**: The base tables can only be accessed through the logical tables using logical SQL. If you encounter errors running logical SQL, fix the query \u2014 do not fall back to querying base tables directly.\n- **Do not rewrite logical table CTEs**: The postprocessing step creates CTEs in the final SQL like `WITH __logical_table AS (SELECT ... FROM DB.SCH.BASE_TABLE)` to resolve the logical tables. You should NOT write these CTEs again on subsequent turns, as the SQL you write on logical tables in subsequent turns will be postprocessed to get the CTEs back. You can fully ignore those logical table CTEs.\n- **Identify metrics**: Metrics are typically calculations upon facts. If no specific aggregation mentioned, use the default aggregation indicated in the column comment.\n- **Identify dimensions for GROUP BY**: Dimensions provide context to data - they are descriptive attributes used to slice and dice data (e.g., geography, product categories, customer segments).\n- **Identify facts**: Facts are quantitative data that can be aggregated, summed, averaged, or counted. They are typically numeric fields.\n- **Count Correctly**: In single-table queries, use COUNT(DISTINCT column) for dimension columns that may have duplicate values. Use COUNT(column) without DISTINCT only if the column has unique values like a primary key.\n\nNote that you are not allowed to use all of the Snowflake SQL dialect, which is detailed in Section 3.\n\n### 3. Rules for SQL Generation\n\nAcross all queries you write, you should keep in mind these guidelines when they are relevant.\n\n**Current Date: 2026-08-13 (i.e., today is August 13, 2026)** - Use this as reference for relative time filters.\n\n#### Aggregation and Granularity\n- The primary key defines data granularity. When calculating metrics on different granularity, ALWAYS use GROUP BY to ensure correct aggregation.\n- Every column in SELECT must either have an aggregation function OR be included in GROUP BY.\n- Use PARTITION BY for window functions as needed.\n\n#### Time Series Analysis\n\n**IMPORTANT: ALWAYS use CURRENT_DATE (or CURRENT_TIMESTAMP) in SQL for any reference to \"today\", \"now\", or the current date. Do NOT hardcode specific date literals like '2026-03-22'. The current date provided above is for interpreting ambiguous time references only (e.g., inferring the year when not specified).**\n\n##### Current Date Reference\n- If a question asks about a specific month without a year (e.g., \"sales for March\"), assume the current year 2026.\n\n##### Time Frequency Conversion\n- For questions requiring time aggregation at different frequency than provided, use DATE_TRUNC() to convert and aggregate facts properly with GROUP BY.\n- To compare time to a NUMBER column, use DATE_PART() to extract year/month/day from a timestamp.\n- For day of week, use DAYOFWEEK() function.\n\n##### Calendar Time Units (week, month, year)\n- If the user asks about \"last week\", \"this month\", \"last year\", ALWAYS assume they mean the CALENDAR unit:\n  - \"last week\": DATE >= DATE_TRUNC('week', CURRENT_DATE - INTERVAL '1 week') AND DATE < DATE_TRUNC('week', CURRENT_DATE)\n  - \"this month\": DATE >= DATE_TRUNC('month', CURRENT_DATE)\n  - \"last year\": DATE >= DATE_TRUNC('year', CURRENT_DATE - INTERVAL '1 year') AND DATE < DATE_TRUNC('year', CURRENT_DATE)\n\n##### Past N Days\n- If the user asks \"past X days\" or \"last X days\", use: DATE >= DATEADD(day, -X, CURRENT_DATE)\n\n##### References to \"Today\" or \"Now\"\n- If the user mentions \"today\", \"as of today\", \"to today\", \"up to now\", \"until now\", or similar, ALWAYS use CURRENT_DATE in SQL.\n  - Example: \"from June 2025 to today\" \u2192 DATE >= '2025-06-01' AND DATE <= CURRENT_DATE\n  - Example: \"sales up to today\" \u2192 DATE <= CURRENT_DATE\n- Do NOT resolve \"today\" to a hardcoded date literal.\n\n##### Period-over-Period (DoD, MoM, YoY)\n- ALWAYS include current period, previous period, current value, and previous value in output columns.\n- Calculate BOTH absolute change AND percentage change unless specified otherwise.\n- DO NOT use LEAD() or LAG() for previous period values - these assume consecutive time data which may not be true.\n- Use self-joins or CTEs instead:\n```sql\nSELECT\n    curr.date AS curr_date,\n    prev.date AS prev_date,\n    curr.value AS curr_value,\n    prev.value AS prev_value,\n    curr.value - prev.value AS change,\n    (curr.value - prev.value) / NULLIF(prev.value, 0) AS pct_change\nFROM daily_table AS curr\nLEFT JOIN daily_table AS prev ON curr.date = prev.date + INTERVAL '1 day'\nORDER BY curr_date DESC NULLS LAST;\n```\n\n##### Rolling Window Metrics\n- For rolling metrics, ALWAYS: (1) aggregate by day/time granularity first, (2) create CTE to compute rolling metrics, (3) filter to time period last.\n```sql\nWITH daily_sales AS (\n    SELECT date, SUM(sales) AS daily_sales FROM table GROUP BY date\n),\nrolling_avg AS (\n    SELECT date, AVG(daily_sales) OVER (ORDER BY date ROWS BETWEEN 2 PRECEDING AND CURRENT ROW) AS rolling_avg_3d\n    FROM daily_sales\n)\nSELECT * FROM rolling_avg WHERE DATE_PART('YEAR', date) = 2026 ORDER BY date DESC NULLS LAST;\n```\n\n##### Missing Time Period\n- If no time range is specified, assume the ENTIRE available time period in the data.\n- Include MIN(date) as start_date and MAX(date) as end_date in output to show the time range used.\n\n#### Ranking, Sorting, and Top-K\n\n##### Sorting\n- When sorting by highest/lowest metric, ALWAYS include NULLS LAST: ORDER BY ratio DESC NULLS LAST\n- For time series without specific sorting, default to sorting time DESCENDING to show latest information first.\n\n##### Top K Queries\n- For simple top-K without partitions: use ORDER BY ... LIMIT K\n- For top-K within partitions (e.g., \"top 5 per month\"): use RANK() or ROW_NUMBER() OVER (PARTITION BY ... ORDER BY ...)\n```sql\nWITH ranked AS (\n    SELECT *, RANK() OVER (PARTITION BY month ORDER BY sales DESC NULLS LAST) AS rnk\n    FROM monthly_sales\n)\nSELECT * FROM ranked WHERE rnk <= 5 ORDER BY month DESC, rnk NULLS LAST;\n```\n\n#### Joins and Relationships\n\n##### Choosing the JOIN type (LEFT vs INNER)\nThe JOIN type must match the question's granularity:\n\n- **Identify the driving table first** \u2014 the entity in phrases like \"for each X\", \"every X\", \"per X\", or \"show me each X's ...\". Put it in `FROM`; join everything else to it. The driving table MUST be the table named in `FROM`, never one joined onto another via `JOIN` \u2014 the driving table on the wrong side of a `LEFT JOIN` still drops its rows.\n- **`LEFT JOIN`** related tables onto the driving table when the question asks about *every* / *all* / *for each* of the driving entity. This preserves driving-entity rows that have no matching related row. Handle the resulting NULLs explicitly in aggregates (`COALESCE`, or `CASE WHEN COUNT(...) = 0 THEN NULL ELSE ... END`).\n- **`INNER JOIN`** ONLY when the question explicitly restricts to rows *with* related data (\"X **with** Y\", \"X **that have** Y\"), or when a metric formula requires the related row to exist (e.g., a ratio whose denominator comes from the joined table).\n- **Never** use `INNER JOIN` to \"filter out NULLs\" implicitly \u2014 that silently drops rows the user wanted to see. If you need to filter NULLs, do it explicitly with `WHERE x IS NOT NULL`.\n- When in doubt between LEFT and INNER, prefer LEFT \u2014 silently dropping rows is a worse failure mode than including a row with NULL aggregates.\n\n```sql\n-- For \"show me the order count for each customer\":\n-- WRONG: __customers is on the right side of LEFT JOIN, so customers without orders are dropped\nSELECT c.id, COUNT(o.id) FROM __orders o LEFT JOIN __customers c ON o.cust_id = c.id GROUP BY c.id;\n\n-- CORRECT: __customers (the driving entity) is on the left\nSELECT c.id, COUNT(o.id) FROM __customers c LEFT JOIN __orders o ON o.cust_id = c.id GROUP BY c.id;\n```\n\n##### Other join rules\n- Use ONLY the supported join paths provided in the semantic model.\n- When joining multiple tables, assign aliases and ALWAYS qualify columns with table alias in ALL clauses.\n- Avoid joins in subqueries; use CTEs instead.\n- Be aware of data granularity: when joining one-to-many or many-to-many, consider data duplication during aggregations.\n- Extract unique records when necessary to avoid double-counting:\n```sql\n-- WRONG: AVG(income) on joined table counts each customer multiple times\n-- CORRECT: Extract unique customers first, then aggregate\nWITH unique_customers AS (\n    SELECT DISTINCT customer_id, income, region FROM orders o JOIN customers c ON ...\n)\nSELECT region, AVG(income) FROM unique_customers GROUP BY region;\n```\n\n#### Handling Text and Literal Values\n- **Use sample_values for exact matching**: Dimensions include sample_values showing actual data values. Use these to match user-mentioned entities:\n  - If user says \"California\", check sample_values to see if values are \"CA\", \"California\", \"CALIFORNIA\", etc.\n  - If user mentions a product name, find the closest match in sample_values\n- **Case-Insensitive Matching**: Use ILIKE instead of LIKE or = when exact case is uncertain\n- **Pattern Matching**: Use ILIKE '%pattern%' to find partial matches when sample_values don't have an exact match\n- **Escape single quotes**: Use two single quotes ('') to escape literal single quotes in strings\n\n#### Ratios and Percentages\n- DO NOT multiply by 100 for ratio/percentage calculations. Keep numbers as decimals.\n\n#### Error Prevention and Snowflake Syntax\n- When creating table or column aliases, avoid Snowflake SQL keywords (e.g., \"to\", \"date\", \"order\")\n- Handle NULL values with COALESCE(column, default_value)\n- Use NULLIF to prevent division by zero: value / NULLIF(denominator, 0)\n- Use double quotes for case-sensitive identifiers: \"ColumnName\"\n- Use FLATTEN() for semi-structured/array data\n- Use QUALIFY for post-aggregation filtering with window functions\n- Use TRY_CAST or TRY_TO_NUMBER for safe type conversions\n",
+              "tables": [
+                {
+                  "description": "One row per partner use case in CoCo OKR scope. IS_COCO = TRUE means explicitly keyword-tagged (SE/partner comments or feature flag). IS_COCO_FINAL (computed below) adds account-level usage signal. ALWAYS use IS_COCO as the primary CoCo filter here; supplement with token_usage join for full IS_COCO_FINAL. Stage date rule: stages 3-4 use DECISION_DATE; stages 5-7 use GO_LIVE_DATE.",
+                  "dimensions": [
+                    {
+                      "data_type": "TEXT",
+                      "description": "Unique Salesforce use case/opportunity identifier",
+                      "expr": "use_case_id",
+                      "name": "use_case_id",
+                      "synonyms": [
+                        "uc id",
+                        "sfdc id",
+                        "opportunity id",
+                        "id"
+                      ]
+                    },
+                    {
+                      "data_type": "TEXT",
+                      "description": "Partner company name. Aliases in DB: IBM Consulting = IBM, Ernst & Young (EY) = EY, LTI Mindtree = LTM, Kipi.ai = kipi.ai. Always include both alias forms in WHERE clauses. Group scope: GSIs = global, NOAM RSI = NoAM theaters, APJ RSI = country, EMEA RSI = region.",
+                      "expr": "partner_name",
+                      "name": "partner_name",
+                      "synonyms": [
+                        "partner",
+                        "SI",
+                        "system integrator",
+                        "company",
+                        "vendor",
+                        "implementation partner"
+                      ]
+                    },
+                    {
+                      "data_type": "TEXT",
+                      "description": "Name of the customer account. Join with token_usage via UPPER(ACCOUNT_NAME) = UPPER(SALESFORCE_ACCOUNT_NAME).",
+                      "expr": "account_name",
+                      "name": "account_name",
+                      "synonyms": [
+                        "customer",
+                        "customer account",
+                        "end customer",
+                        "company",
+                        "client"
+                      ]
+                    },
+                    {
+                      "data_type": "TEXT",
+                      "description": "Descriptive name of the use case or Salesforce opportunity",
+                      "expr": "use_case_name",
+                      "name": "use_case_name",
+                      "synonyms": [
+                        "uc name",
+                        "opportunity name",
+                        "project",
+                        "deal name"
+                      ]
+                    },
+                    {
+                      "data_type": "TEXT",
+                      "description": "Current lifecycle stage (exact string values): '3 - Technical / Business Validation' \u2014 Discovery/eval, filter by DECISION_DATE '4 - Use Case Won / Migration Plan'   \u2014 Won, filter by DECISION_DATE '5 - Implementation In Progress'       \u2014 Actively implementing, filter by GO_LIVE_DATE '6 - Implementation Complete'          \u2014 Done but not yet live, filter by GO_LIVE_DATE '7 - Deployed'                         \u2014 In production, filter by GO_LIVE_DATE NEVER use numeric values (5, 7) \u2014 always use the full string.",
+                      "expr": "use_case_stage",
+                      "name": "use_case_stage",
+                      "synonyms": [
+                        "stage",
+                        "lifecycle stage",
+                        "pipeline stage",
+                        "status",
+                        "progress"
+                      ]
+                    },
+                    {
+                      "data_type": "TEXT",
+                      "description": "Snowflake sales theater (exact DB values): AMSExpansion, USMajors (= \"S Majors\", \"Majors\"), AMSAcquisition, USPubSec = NoAM. EMEA, APJ = non-NoAM.",
+                      "expr": "theater_name",
+                      "name": "theater",
+                      "synonyms": [
+                        "theater name",
+                        "geo",
+                        "sales theater",
+                        "territory",
+                        "region group"
+                      ]
+                    },
+                    {
+                      "data_type": "TEXT",
+                      "description": "Geographic sub-region. APJ examples: Japan, Korea, ASEAN, ANZ, India. EMEA examples: CentralEMEA, SouthEMEA, UK.",
+                      "expr": "region_name",
+                      "name": "region",
+                      "synonyms": [
+                        "region name",
+                        "sub-region",
+                        "country",
+                        "sub-geo",
+                        "territory"
+                      ]
+                    },
+                    {
+                      "data_type": "TEXT",
+                      "description": "Derived partner management group: GSI = Accenture, Capgemini, Cognizant, Deloitte, EY, IBM (global scope) NOAM RSI = ~30 NoAM-scoped regional and PSE managed partners APJ RSI = 5 country-scoped APJ partners EMEA RSI = 4 region-scoped EMEA partners Use CASE WHEN PARTNER_NAME IN (...) THEN 'GSI' WHEN ... THEN 'NOAM RSI' ... END to compute.",
+                      "expr": "CASE WHEN partner_name IN ('Accenture', 'Capgemini Technologies LLC', 'Cognizant Technology Solutions US Corp', 'Deloitte Consulting', 'EY', 'Ernst & Young (EY)', 'IBM', 'IBM Consulting') THEN 'GSI' WHEN partner_name IN ('7Rivers, Inc', 'Aimpoint Digital', 'BlueCloud Services Inc', 'kipi.ai', 'Kipi.ai', 'evolv Consulting', 'Infostrux Solutions Inc.', 'Infosys', 'KPMG LLP', 'LTM', 'LTI Mindtree', 'phData, Inc.', 'Slalom, LLC.', 'Squadron Data Inc', 'Tredence Inc.', 'Spaulding Ridge', 'TEKsystems Global Services, LLC.', 'Blend360, LLC', 'Tiger Analytics Inc.', 'Atrium', 'Perficient Inc.', 'SDK Tek Services Ltd.', 'Merkle', 'Archetype Consulting', 'Apex Systems', 'Tata Consultancy Services', 'OneSix', 'Icon Analytics', 'Sparq Holdings, Inc.', 'CitiusTech Inc.', 'Hexaware Technologies') THEN 'NOAM RSI' WHEN partner_name IN ('NTT DATA Group Corporation', 'MegazoneCloud Corporation', 'Infinite Lambda Limited', 'Infinite Lambda Inc', 'INFINITE LAMBDA (SINGAPORE) PTE. LTD.', 'Altis Global Limited', 'Altis Consulting, ANZ', 'PROLIM Global Corporation') THEN 'APJ RSI' WHEN partner_name IN ('INFOMOTION GMBH', 'INFOMOTION GMBH, BearingPoint', 'CIVICA SOFTWARE, S.L.', 'Kubrick Group', 'KPC (Key Performance Consulting)', 'KPC') THEN 'EMEA RSI' ELSE 'Other' END",
+                      "name": "partner_group",
+                      "synonyms": [
+                        "group",
+                        "partner type",
+                        "segment",
+                        "tier",
+                        "category"
+                      ]
+                    },
+                    {
+                      "data_type": "TEXT",
+                      "description": "Technical category with prefix: AI: Agents, AI: Cortex AI Functions, Analytics: BI, DE: Ingestion, Platform: Governance, Apps & Collab: Build, etc.",
+                      "expr": "technical_use_case",
+                      "name": "technical_use_case",
+                      "synonyms": [
+                        "tech uc",
+                        "use case type",
+                        "workload category",
+                        "technical category"
+                      ]
+                    },
+                    {
+                      "data_type": "TEXT",
+                      "description": "Semicolon-separated: AI, Analytics, Data Engineering, Platform, Applications & Collaboration. Use ILIKE '%AI%' style filters.",
+                      "expr": "workloads",
+                      "name": "workloads",
+                      "synonyms": [
+                        "workload",
+                        "domain",
+                        "workload type",
+                        "business domain"
+                      ]
+                    },
+                    {
+                      "data_type": "TEXT",
+                      "description": "How IS_COCO was set: SE_COMMENTS (SE wrote coco/cortex code), PARTNER_COMMENTS (#coco tag), FEATURE_FLAG (AI - Cortex Code in Prioritized Features), MULTIPLE (more than one source).",
+                      "expr": "coco_source",
+                      "name": "coco_source",
+                      "synonyms": [
+                        "attribution source",
+                        "how coco detected",
+                        "detection method",
+                        "coco method"
+                      ]
+                    },
+                    {
+                      "data_type": "TEXT",
+                      "description": "Competing tools mentioned (GitHub Copilot, Cursor, Windsurf, etc.)",
+                      "expr": "competitors",
+                      "name": "competitors",
+                      "synonyms": [
+                        "competing tools",
+                        "competitive landscape",
+                        "alternative tools",
+                        "vs"
+                      ]
+                    },
+                    {
+                      "data_type": "DATE",
+                      "description": "Date the use case entered stage 3 or 4. Use to filter stages 3-4 use cases to a quarter. Date range for Q2 FY27: BETWEEN '2026-05-01' AND '2026-07-31' Date range for Q3 FY27: BETWEEN '2026-08-01' AND '2026-10-31'",
+                      "expr": "decision_date",
+                      "name": "decision_date",
+                      "synonyms": [
+                        "pipeline entry date",
+                        "stage 3 date",
+                        "stage 4 date",
+                        "entered pipeline",
+                        "won date"
+                      ]
+                    },
+                    {
+                      "data_type": "DATE",
+                      "description": "Date the use case entered stage 5, 6, or 7. Use to filter stages 5-7 to a quarter. Date range for Q2 FY27: BETWEEN '2026-05-01' AND '2026-07-31' Date range for Q3 FY27: BETWEEN '2026-08-01' AND '2026-10-31'",
+                      "expr": "go_live_date",
+                      "name": "go_live_date",
+                      "synonyms": [
+                        "go live",
+                        "deployment date",
+                        "implementation start",
+                        "stage 5 date"
+                      ]
+                    },
+                    {
+                      "data_type": "BOOLEAN",
+                      "description": "TRUE when CoCo is explicitly attributed via keyword or feature flag: SE_COMMENTS (notes contain \"coco\"/\"cortex code\"), PARTNER_COMMENTS (#coco), or FEATURE_FLAG (\"AI - Cortex Code\" in Prioritized Features). This is the keyword component of IS_COCO_FINAL. IS_COCO_FINAL = IS_COCO=TRUE OR (account has CoCo consumption AND confidence score >= 75)",
+                      "expr": "is_coco",
+                      "name": "is_coco",
+                      "synonyms": [
+                        "coco flag",
+                        "coco boolean",
+                        "keyword coco",
+                        "se tagged",
+                        "partner tagged"
+                      ]
+                    },
+                    {
+                      "data_type": "NUMBER",
+                      "description": "Estimated Annual Contract Value for this use case in USD",
+                      "expr": "use_case_eacv",
+                      "name": "eacv",
+                      "synonyms": [
+                        "acv",
+                        "estimated ACV",
+                        "opportunity value",
+                        "deal value",
+                        "contract value",
+                        "revenue"
+                      ]
+                    },
+                    {
+                      "data_type": "NUMBER",
+                      "description": "Number of days the use case has been in its current stage",
+                      "expr": "days_in_current_stage",
+                      "name": "days_in_stage",
+                      "synonyms": [
+                        "days in current stage",
+                        "time in stage",
+                        "stuck duration"
+                      ]
+                    }
+                  ],
+                  "filters": [
+                    {
+                      "description": "The ~44 partners officially tracked in the CoCo OKR program across all four groups: GSIs (global), NOAM RSIs (NoAM only), APJ RSIs (country-scoped), EMEA RSIs (region-scoped).",
+                      "expr": "partner_name IN ('Accenture', 'Capgemini Technologies LLC', 'Cognizant Technology Solutions US Corp', 'Deloitte Consulting', 'EY', 'Ernst & Young (EY)', 'IBM', 'IBM Consulting', '7Rivers, Inc', 'Aimpoint Digital', 'BlueCloud Services Inc', 'kipi.ai', 'Kipi.ai', 'evolv Consulting', 'Infostrux Solutions Inc.', 'Infosys', 'KPMG LLP', 'LTM', 'LTI Mindtree', 'phData, Inc.', 'Slalom, LLC.', 'Squadron Data Inc', 'Tredence Inc.', 'Spaulding Ridge', 'TEKsystems Global Services, LLC.', 'Blend360, LLC', 'Tiger Analytics Inc.', 'Atrium', 'Perficient Inc.', 'SDK Tek Services Ltd.', 'Merkle', 'Archetype Consulting', 'Apex Systems', 'Tata Consultancy Services', 'OneSix', 'Icon Analytics', 'Sparq Holdings, Inc.', 'CitiusTech Inc.', 'Hexaware Technologies', 'NTT DATA Group Corporation', 'MegazoneCloud Corporation', 'Infinite Lambda Limited', 'Infinite Lambda Inc', 'INFINITE LAMBDA (SINGAPORE) PTE. LTD.', 'Altis Global Limited', 'Altis Consulting, ANZ', 'PROLIM Global Corporation', 'INFOMOTION GMBH', 'INFOMOTION GMBH, BearingPoint', 'CIVICA SOFTWARE, S.L.', 'Kubrick Group', 'KPC (Key Performance Consulting)', 'KPC')",
+                      "name": "managed_partners",
+                      "synonyms": [
+                        "managed",
+                        "OKR partners",
+                        "tracked partners",
+                        "official partners",
+                        "44 partners",
+                        "all managed"
+                      ]
+                    },
+                    {
+                      "description": "Q3 FY27 (2026-08-01 to 2026-10-31) using correct stage-based date filters",
+                      "expr": "((use_case_stage IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan') AND decision_date BETWEEN '2026-08-01' AND '2026-10-31') OR (use_case_stage IN ('5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed') AND go_live_date BETWEEN '2026-08-01' AND '2026-10-31'))",
+                      "name": "q3_fy27",
+                      "synonyms": [
+                        "q3",
+                        "Q3 FY27",
+                        "current quarter",
+                        "this quarter",
+                        "active period",
+                        "aug-oct 2026"
+                      ]
+                    },
+                    {
+                      "description": "Q2 FY27 (2026-05-01 to 2026-07-31) using correct stage-based date filters",
+                      "expr": "((use_case_stage IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan') AND decision_date BETWEEN '2026-05-01' AND '2026-07-31') OR (use_case_stage IN ('5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed') AND go_live_date BETWEEN '2026-05-01' AND '2026-07-31'))",
+                      "name": "q2_fy27",
+                      "synonyms": [
+                        "q2",
+                        "Q2 FY27",
+                        "last quarter",
+                        "previous quarter",
+                        "may-jul 2026"
+                      ]
+                    },
+                    {
+                      "description": "Q1 FY27 (2026-02-01 to 2026-04-30)",
+                      "expr": "((use_case_stage IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan') AND decision_date BETWEEN '2026-02-01' AND '2026-04-30') OR (use_case_stage IN ('5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed') AND go_live_date BETWEEN '2026-02-01' AND '2026-04-30'))",
+                      "name": "q1_fy27",
+                      "synonyms": [
+                        "q1",
+                        "Q1 FY27",
+                        "feb-apr 2026"
+                      ]
+                    },
+                    {
+                      "description": "Use cases with IS_COCO = TRUE. Covers attribution via SE comments (\"coco\"/\"cortex code\"), partner comments (\"#coco\"), or feature flag (\"AI - Cortex Code\"). This is the keyword-only signal. IS_COCO_FINAL also adds account-level usage.",
+                      "expr": "is_coco = TRUE",
+                      "name": "is_coco_keyword",
+                      "synonyms": [
+                        "coco attached",
+                        "cortex code attached",
+                        "keyword coco",
+                        "IS_COCO true"
+                      ]
+                    },
+                    {
+                      "description": "Use cases at stage 7 - Deployed (fully in production)",
+                      "expr": "use_case_stage = '7 - Deployed'",
+                      "name": "deployed",
+                      "synonyms": [
+                        "stage 7",
+                        "go-live",
+                        "production",
+                        "live",
+                        "go lives",
+                        "deployed"
+                      ]
+                    },
+                    {
+                      "description": "GSI partners \u2014 global scope (no theater restriction). Accenture, Capgemini, Cognizant, Deloitte, EY (+ alias Ernst & Young), IBM (+ alias IBM Consulting).",
+                      "expr": "partner_name IN ('Accenture', 'Capgemini Technologies LLC', 'Cognizant Technology Solutions US Corp', 'Deloitte Consulting', 'EY', 'Ernst & Young (EY)', 'IBM', 'IBM Consulting')",
+                      "name": "gsi_group",
+                      "synonyms": [
+                        "gsi",
+                        "global system integrators",
+                        "GSI partners",
+                        "big SIs",
+                        "tier 1"
+                      ]
+                    },
+                    {
+                      "description": "NOAM RSI partners \u2014 NoAM theaters only (AMSExpansion, USMajors, AMSAcquisition, USPubSec). Includes former regional SIs and PSE managed partners. ~30 partners: 7Rivers, Aimpoint, Apex, Archetype, Atrium, Blend360, BlueCloud, CitiusTech, evolv, Hexaware, Icon Analytics, Infosys, Infostrux, kipi.ai, KPMG, LTM, Merkle, OneSix, Perficient, phData, SDK Tek, Slalom, Sparq, Spaulding Ridge, Squadron Data, TCS, TEKsystems, Tiger Analytics, Tredence.",
+                      "expr": "partner_name IN ('7Rivers, Inc', 'Aimpoint Digital', 'BlueCloud Services Inc', 'kipi.ai', 'Kipi.ai', 'evolv Consulting', 'Infostrux Solutions Inc.', 'Infosys', 'KPMG LLP', 'LTM', 'LTI Mindtree', 'phData, Inc.', 'Slalom, LLC.', 'Squadron Data Inc', 'Tredence Inc.', 'Spaulding Ridge', 'TEKsystems Global Services, LLC.', 'Blend360, LLC', 'Tiger Analytics Inc.', 'Atrium', 'Perficient Inc.', 'SDK Tek Services Ltd.', 'Merkle', 'Archetype Consulting', 'Apex Systems', 'Tata Consultancy Services', 'OneSix', 'Icon Analytics', 'Sparq Holdings, Inc.', 'CitiusTech Inc.', 'Hexaware Technologies')",
+                      "name": "noam_rsi_group",
+                      "synonyms": [
+                        "NOAM RSI",
+                        "north america regional SIs",
+                        "NOAM partners",
+                        "US partners",
+                        "regional SIs"
+                      ]
+                    },
+                    {
+                      "description": "APJ RSI partners \u2014 country-scoped: NTT Data (Japan), Megazone (Korea), Infinite Lambda (ASEAN), Altis (ANZ), Prolim (India). Each partner is scoped to their specific country/sub-region in APJ.",
+                      "expr": "partner_name IN ('NTT DATA Group Corporation', 'MegazoneCloud Corporation', 'Infinite Lambda Limited', 'Infinite Lambda Inc', 'INFINITE LAMBDA (SINGAPORE) PTE. LTD.', 'Altis Global Limited', 'Altis Consulting, ANZ', 'PROLIM Global Corporation')",
+                      "name": "apj_rsi_group",
+                      "synonyms": [
+                        "APJ RSI",
+                        "Asia Pacific Japan partners",
+                        "APJ partners",
+                        "APAC"
+                      ]
+                    },
+                    {
+                      "description": "EMEA RSI partners \u2014 region-scoped: Infomotion (CentralEMEA/Germany), Civica (SouthEMEA/Spain), Kubrick (UK), KPC (SouthEMEA/France).",
+                      "expr": "partner_name IN ('INFOMOTION GMBH', 'INFOMOTION GMBH, BearingPoint', 'CIVICA SOFTWARE, S.L.', 'Kubrick Group', 'KPC (Key Performance Consulting)', 'KPC')",
+                      "name": "emea_rsi_group",
+                      "synonyms": [
+                        "EMEA RSI",
+                        "Europe Middle East Africa partners",
+                        "EMEA partners"
+                      ]
+                    },
+                    {
+                      "description": "NoAM theaters only (AMSExpansion, USMajors, AMSAcquisition, USPubSec)",
+                      "expr": "theater IN ('AMSExpansion', 'USMajors', 'AMSAcquisition', 'USPubSec')",
+                      "name": "noam_theaters",
+                      "synonyms": [
+                        "NoAM",
+                        "North America",
+                        "US",
+                        "AMER",
+                        "Americas"
+                      ]
+                    },
+                    {
+                      "description": "USMajors theater \u2014 large US enterprise accounts",
+                      "expr": "theater = 'USMajors'",
+                      "name": "usmajors_theater",
+                      "synonyms": [
+                        "USMajors",
+                        "US Majors",
+                        "S Majors",
+                        "Majors",
+                        "enterprise accounts",
+                        "major accounts"
+                      ]
+                    },
+                    {
+                      "description": "AMSExpansion theater \u2014 US commercial/expansion accounts",
+                      "expr": "theater = 'AMSExpansion'",
+                      "name": "ams_expansion_theater",
+                      "synonyms": [
+                        "AMSExpansion",
+                        "AMS Expansion",
+                        "expansion",
+                        "commercial",
+                        "mid-market"
+                      ]
+                    }
+                  ],
+                  "metrics": [
+                    {
+                      "description": "Total number of use cases in scope (always apply managed_partners + quarter filter)",
+                      "expr": "COUNT(use_case_id)",
+                      "name": "total_use_cases",
+                      "synonyms": [
+                        "number of use cases",
+                        "uc count",
+                        "total UCs",
+                        "use case count",
+                        "all UCs"
+                      ]
+                    },
+                    {
+                      "description": "Number of CoCo-attributed use cases (IS_COCO = TRUE \u2014 keyword/feature flag signal). NOTE: IS_COCO_FINAL also includes account-level usage signal. When asked for IS_COCO_FINAL, also join to token_usage to check for active consumption. For most questions, IS_COCO is a good proxy for IS_COCO_FINAL.",
+                      "expr": "COUNT_IF(is_coco = TRUE)",
+                      "name": "coco_use_cases",
+                      "synonyms": [
+                        "coco uc count",
+                        "CoCo UCs",
+                        "IS_COCO_FINAL count",
+                        "coco-qualified",
+                        "attributed UCs"
+                      ]
+                    },
+                    {
+                      "description": "CoCo attachment rate as % of total UCs. OKR targets: 75% for GSIs and NOAM RSIs, 50% for APJ/EMEA RSIs.",
+                      "expr": "ROUND(COUNT_IF(is_coco = TRUE) * 100.0 / NULLIF(COUNT(use_case_id), 0), 1)",
+                      "name": "coco_pct",
+                      "synonyms": [
+                        "coco rate",
+                        "coco attachment rate",
+                        "coco %",
+                        "coco adoption percentage",
+                        "adoption rate"
+                      ]
+                    },
+                    {
+                      "description": "Number of stage 7 (Deployed) use cases",
+                      "expr": "COUNT_IF(use_case_stage = '7 - Deployed')",
+                      "name": "deployed_use_cases",
+                      "synonyms": [
+                        "stage 7 count",
+                        "go-live count",
+                        "deployed UCs",
+                        "productions",
+                        "go lives",
+                        "in production"
+                      ]
+                    },
+                    {
+                      "description": "Number of deployed (stage 7) CoCo-attributed use cases",
+                      "expr": "COUNT_IF(use_case_stage = '7 - Deployed' AND is_coco = TRUE)",
+                      "name": "coco_deployed_use_cases",
+                      "synonyms": [
+                        "coco go-lives",
+                        "deployed coco",
+                        "stage 7 with coco",
+                        "production coco UCs"
+                      ]
+                    },
+                    {
+                      "description": "Total estimated ACV in USD across in-scope use cases",
+                      "expr": "SUM(eacv)",
+                      "name": "total_eacv",
+                      "synonyms": [
+                        "total ACV",
+                        "pipeline value",
+                        "total revenue",
+                        "opportunity value",
+                        "eacv total"
+                      ]
+                    },
+                    {
+                      "description": "Total eACV of IS_COCO=TRUE use cases in USD",
+                      "expr": "SUM(CASE WHEN is_coco = TRUE THEN eacv ELSE 0 END)",
+                      "name": "coco_eacv",
+                      "synonyms": [
+                        "coco ACV",
+                        "coco revenue",
+                        "coco pipeline value",
+                        "attributed revenue"
+                      ]
+                    },
+                    {
+                      "description": "Number of distinct partner companies in scope",
+                      "expr": "COUNT(DISTINCT partner_name)",
+                      "name": "distinct_partners",
+                      "synonyms": [
+                        "partner count",
+                        "number of partners",
+                        "unique partners",
+                        "partners in scope"
+                      ]
+                    }
+                  ],
+                  "name": "use_cases"
+                },
+                {
+                  "description": "Daily Cortex Code credit/token consumption per user per account (SNOWSCIENCE.LLM.CORTEX_CODE_USER_DAY_FACT). Always filter SNOWFLAKE_ACCOUNT_TYPE = 'Customer' AND TOTAL_DAILY_REQUESTS > 0. Join to use_cases via UPPER(SALESFORCE_ACCOUNT_NAME) = UPPER(use_cases.ACCOUNT_NAME).\nToken WoW:\n  Last 7d:  DS >= DATEADD('day', -7, CURRENT_DATE())\n  Prior 7d: DS >= DATEADD('day', -14, CURRENT_DATE()) AND DS < DATEADD('day', -7, CURRENT_DATE())\n  WoW%:     (last7 - prior7) / prior7 * 100\n  WoW \u0394:    last7 - prior7 (change in weekly rate \u2014 not total cumulative spend)\n\nQuarter credit windows:\n  Q3 FY27: DS BETWEEN '2026-08-01' AND '2026-10-31'\n  Q2 FY27: DS BETWEEN '2026-05-01' AND '2026-07-31'\n  Q1 FY27: DS BETWEEN '2026-02-01' AND '2026-04-30'",
+                  "dimensions": [
+                    {
+                      "data_type": "DATE",
+                      "description": "Date of CoCo usage (daily grain)",
+                      "expr": "ds",
+                      "name": "usage_date",
+                      "synonyms": [
+                        "date",
+                        "day",
+                        "ds",
+                        "activity date"
+                      ]
+                    },
+                    {
+                      "data_type": "TEXT",
+                      "description": "Snowflake user identifier",
+                      "expr": "user_id",
+                      "name": "user_id",
+                      "synonyms": [
+                        "user",
+                        "developer",
+                        "snowflake user"
+                      ]
+                    },
+                    {
+                      "data_type": "TEXT",
+                      "description": "Snowflake account identifier (not the Salesforce account)",
+                      "expr": "account_id",
+                      "name": "account_id",
+                      "synonyms": [
+                        "snowflake account id",
+                        "sfac",
+                        "locator"
+                      ]
+                    },
+                    {
+                      "data_type": "TEXT",
+                      "description": "Salesforce account name. Join to use_cases: UPPER(SALESFORCE_ACCOUNT_NAME) = UPPER(DT_OKR_USE_CASES.ACCOUNT_NAME)",
+                      "expr": "salesforce_account_name",
+                      "name": "sf_account_name",
+                      "synonyms": [
+                        "account name",
+                        "customer name",
+                        "company",
+                        "salesforce account"
+                      ]
+                    },
+                    {
+                      "data_type": "TEXT",
+                      "description": "Always filter to \"Customer\" \u2014 never count partner/internal usage",
+                      "expr": "snowflake_account_type",
+                      "name": "account_type",
+                      "synonyms": [
+                        "customer or partner",
+                        "account category"
+                      ]
+                    },
+                    {
+                      "data_type": "TEXT",
+                      "description": "Customer industry vertical",
+                      "expr": "industry",
+                      "name": "industry",
+                      "synonyms": [
+                        "vertical",
+                        "sector",
+                        "industry group"
+                      ]
+                    }
+                  ],
+                  "filters": [
+                    {
+                      "description": "Filter to real customer accounts (excludes partner/internal Snowflake accounts)",
+                      "expr": "account_type = 'Customer'",
+                      "name": "customer_accounts_only",
+                      "synonyms": [
+                        "customers",
+                        "real accounts",
+                        "production usage",
+                        "exclude internal"
+                      ]
+                    },
+                    {
+                      "description": "Rows with at least one CoCo request made",
+                      "expr": "total_daily_requests > 0",
+                      "name": "active_users_only",
+                      "synonyms": [
+                        "active",
+                        "has usage",
+                        "non-zero",
+                        "with requests"
+                      ]
+                    },
+                    {
+                      "description": "Q3 FY27 token/credit consumption (2026-08-01 to 2026-10-31)",
+                      "expr": "usage_date BETWEEN '2026-08-01' AND '2026-10-31'",
+                      "name": "q3_fy27_usage",
+                      "synonyms": [
+                        "q3 credits",
+                        "q3 tokens",
+                        "current quarter usage",
+                        "Q3 FY27"
+                      ]
+                    },
+                    {
+                      "description": "Q2 FY27 token/credit consumption (2026-05-01 to 2026-07-31)",
+                      "expr": "usage_date BETWEEN '2026-05-01' AND '2026-07-31'",
+                      "name": "q2_fy27_usage",
+                      "synonyms": [
+                        "q2 credits",
+                        "q2 tokens",
+                        "last quarter usage",
+                        "Q2 FY27"
+                      ]
+                    },
+                    {
+                      "description": "Usage from the most recent 7-day window (rolling)",
+                      "expr": "usage_date >= DATEADD(DAY, -7, CURRENT_DATE)",
+                      "name": "last_7_days",
+                      "synonyms": [
+                        "last week",
+                        "this week",
+                        "recent",
+                        "last 7d",
+                        "last7"
+                      ]
+                    },
+                    {
+                      "description": "Usage from 7-14 days ago (the prior window for WoW comparison)",
+                      "expr": "usage_date >= DATEADD(DAY, -14, CURRENT_DATE) AND usage_date < DATEADD(DAY, -7, CURRENT_DATE)",
+                      "name": "prior_7_days",
+                      "synonyms": [
+                        "previous week",
+                        "prior week",
+                        "prior 7d",
+                        "prior7",
+                        "wow baseline"
+                      ]
+                    }
+                  ],
+                  "metrics": [
+                    {
+                      "description": "Total CoCo credit spend (all token types including cache). Primary billing metric.",
+                      "expr": "SUM(total_token_credits)",
+                      "name": "total_credits",
+                      "synonyms": [
+                        "credits",
+                        "credit spend",
+                        "cost",
+                        "dollar spend",
+                        "token credits",
+                        "spend amount"
+                      ]
+                    },
+                    {
+                      "description": "Total input + output tokens (excludes cache tokens). Primary volume metric.",
+                      "expr": "SUM(total_tokens)",
+                      "name": "total_tokens",
+                      "synonyms": [
+                        "tokens",
+                        "token count",
+                        "token volume",
+                        "input+output tokens"
+                      ]
+                    },
+                    {
+                      "description": "Token consumption in the rolling last 7 days (WoW numerator)",
+                      "expr": "SUM(CASE WHEN usage_date >= DATEADD(DAY, -7, CURRENT_DATE) THEN total_tokens ELSE 0 END)",
+                      "name": "last_7d_tokens",
+                      "synonyms": [
+                        "last week tokens",
+                        "recent tokens",
+                        "last 7d tokens",
+                        "this week tokens"
+                      ]
+                    },
+                    {
+                      "description": "Token consumption 7-14 days ago (WoW denominator)",
+                      "expr": "SUM(CASE WHEN usage_date >= DATEADD(DAY, -14, CURRENT_DATE) AND usage_date < DATEADD(DAY, -7, CURRENT_DATE) THEN total_tokens ELSE 0 END)",
+                      "name": "prior_7d_tokens",
+                      "synonyms": [
+                        "prior week tokens",
+                        "previous week tokens",
+                        "prior 7d",
+                        "wow baseline tokens"
+                      ]
+                    },
+                    {
+                      "description": "Credit spend in the rolling last 7 days (WoW numerator)",
+                      "expr": "SUM(CASE WHEN usage_date >= DATEADD(DAY, -7, CURRENT_DATE) THEN total_token_credits ELSE 0 END)",
+                      "name": "last_7d_credits",
+                      "synonyms": [
+                        "last week credits",
+                        "recent credits",
+                        "last 7d spend",
+                        "this week spend"
+                      ]
+                    },
+                    {
+                      "description": "Credit spend 7-14 days ago (WoW denominator)",
+                      "expr": "SUM(CASE WHEN usage_date >= DATEADD(DAY, -14, CURRENT_DATE) AND usage_date < DATEADD(DAY, -7, CURRENT_DATE) THEN total_token_credits ELSE 0 END)",
+                      "name": "prior_7d_credits",
+                      "synonyms": [
+                        "prior week credits",
+                        "previous week spend",
+                        "prior 7d credits"
+                      ]
+                    },
+                    {
+                      "description": "Week-over-week % change in token consumption (last 7d vs prior 7d). Positive = growing usage, negative = declining. 0 means no change or no prior data.",
+                      "expr": "ROUND((SUM(CASE WHEN usage_date >= DATEADD(DAY, -7, CURRENT_DATE) THEN total_tokens ELSE 0 END) - SUM(CASE WHEN usage_date >= DATEADD(DAY, -14, CURRENT_DATE) AND usage_date < DATEADD(DAY, -7, CURRENT_DATE) THEN total_tokens ELSE 0 END)) * 100.0 / NULLIF(SUM(CASE WHEN usage_date >= DATEADD(DAY, -14, CURRENT_DATE) AND usage_date < DATEADD(DAY, -7, CURRENT_DATE) THEN total_tokens ELSE 0 END), 0), 1)",
+                      "name": "token_wow_pct",
+                      "synonyms": [
+                        "token wow",
+                        "token week over week",
+                        "token trend",
+                        "token change %",
+                        "weekly token change"
+                      ]
+                    },
+                    {
+                      "description": "Week-over-week % change in credit spend (last 7d vs prior 7d)",
+                      "expr": "ROUND((SUM(CASE WHEN usage_date >= DATEADD(DAY, -7, CURRENT_DATE) THEN total_token_credits ELSE 0 END) - SUM(CASE WHEN usage_date >= DATEADD(DAY, -14, CURRENT_DATE) AND usage_date < DATEADD(DAY, -7, CURRENT_DATE) THEN total_token_credits ELSE 0 END)) * 100.0 / NULLIF(SUM(CASE WHEN usage_date >= DATEADD(DAY, -14, CURRENT_DATE) AND usage_date < DATEADD(DAY, -7, CURRENT_DATE) THEN total_token_credits ELSE 0 END), 0), 1)",
+                      "name": "credit_wow_pct",
+                      "synonyms": [
+                        "credit wow",
+                        "spend wow",
+                        "credit week over week",
+                        "spend trend",
+                        "weekly credit change"
+                      ]
+                    },
+                    {
+                      "description": "Credits from CLI/terminal surface \u2014 indicates production developer workflow",
+                      "expr": "SUM(cli_token_credits)",
+                      "name": "cli_credits",
+                      "synonyms": [
+                        "cli spend",
+                        "terminal credits",
+                        "developer CLI",
+                        "production usage cost"
+                      ]
+                    },
+                    {
+                      "description": "Credits from VS Code Desktop extension",
+                      "expr": "SUM(desktop_token_credits)",
+                      "name": "desktop_credits",
+                      "synonyms": [
+                        "vscode credits",
+                        "desktop spend",
+                        "IDE usage cost",
+                        "extension credits"
+                      ]
+                    },
+                    {
+                      "description": "Credits from Snowsight web UI \u2014 typically exploratory/POC usage",
+                      "expr": "SUM(ui_token_credits)",
+                      "name": "ui_credits",
+                      "synonyms": [
+                        "snowsight credits",
+                        "web UI cost",
+                        "browser usage",
+                        "exploratory spend"
+                      ]
+                    },
+                    {
+                      "description": "Number of distinct customer accounts with any CoCo consumption",
+                      "expr": "COUNT(DISTINCT sf_account_name)",
+                      "name": "active_accounts",
+                      "synonyms": [
+                        "accounts with usage",
+                        "unique accounts",
+                        "distinct accounts",
+                        "consuming accounts"
+                      ]
+                    },
+                    {
+                      "description": "Number of distinct users consuming CoCo",
+                      "expr": "COUNT(DISTINCT user_id)",
+                      "name": "active_users",
+                      "synonyms": [
+                        "user count",
+                        "distinct users",
+                        "developers",
+                        "devs using coco"
+                      ]
+                    },
+                    {
+                      "description": "Total CoCo API requests (all surfaces)",
+                      "expr": "SUM(total_daily_requests)",
+                      "name": "daily_requests",
+                      "synonyms": [
+                        "requests",
+                        "total requests",
+                        "api calls",
+                        "completions"
+                      ]
+                    }
+                  ],
+                  "name": "token_usage"
+                }
+              ],
+              "validation_warnings": [
+                "Verified query 'usmajors_q2_total_and_coco' referred to physical tables. The sql query was transformed to use logical table names.",
+                "Verified query 'usmajors_q2_top_accounts_by_tokens' referred to physical tables. The sql query was transformed to use logical table names.",
+                "Verified query 'usmajors_q2_stage_breakdown' referred to physical tables. The sql query was transformed to use logical table names.",
+                "Verified query 'coco_q3_summary_all_groups' referred to physical tables. The sql query was transformed to use logical table names.",
+                "Verified query 'token_wow_by_partner_q3' referred to physical tables. The sql query was transformed to use logical table names.",
+                "Verified query 'coco_by_partner_q2' referred to physical tables. The sql query was transformed to use logical table names."
+              ],
+              "verified_queries": [
+                {
+                  "question": "How many total use cases and CoCo-qualified use cases are there in USMajors theater in Q2?",
+                  "sql": "SELECT COUNT(use_case_id) AS total_use_cases, COUNT_IF(is_coco = TRUE) AS coco_use_cases, ROUND(COUNT_IF(is_coco = TRUE) * 100.0 / NULLIF(COUNT(use_case_id), 0), 1) AS coco_pct FROM __use_cases WHERE theater_name = 'USMajors' AND ((use_case_stage IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan') AND decision_date BETWEEN '2026-05-01' AND '2026-07-31') OR (use_case_stage IN ('5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed') AND go_live_date BETWEEN '2026-05-01' AND '2026-07-31'))"
+                },
+                {
+                  "question": "What are the top 5 accounts by token consumption in USMajors theater in Q2?",
+                  "sql": "WITH usmajors_accounts AS (SELECT DISTINCT UPPER(account_name) AS account_name_upper FROM __use_cases WHERE theater_name = 'USMajors' AND ((use_case_stage IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan') AND decision_date BETWEEN '2026-05-01' AND '2026-07-31') OR (use_case_stage IN ('5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed') AND go_live_date BETWEEN '2026-05-01' AND '2026-07-31'))) SELECT f.salesforce_account_name AS account_name, SUM(f.total_tokens) AS total_tokens, ROUND(SUM(f.total_token_credits), 2) AS total_credits FROM __token_usage AS f INNER JOIN usmajors_accounts AS ua ON UPPER(f.salesforce_account_name) = ua.account_name_upper WHERE f.snowflake_account_type = 'Customer' AND f.total_daily_requests > 0 AND f.ds BETWEEN '2026-05-01' AND '2026-07-31' GROUP BY f.salesforce_account_name ORDER BY total_tokens DESC LIMIT 5"
+                },
+                {
+                  "question": "How many use cases are in each stage for USMajors theater in Q2?",
+                  "sql": "SELECT use_case_stage, COUNT(use_case_id) AS total_use_cases, COUNT_IF(is_coco = TRUE) AS coco_use_cases FROM __use_cases WHERE theater_name = 'USMajors' AND ((use_case_stage IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan') AND decision_date BETWEEN '2026-05-01' AND '2026-07-31') OR (use_case_stage IN ('5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed') AND go_live_date BETWEEN '2026-05-01' AND '2026-07-31')) GROUP BY use_case_stage ORDER BY use_case_stage"
+                },
+                {
+                  "question": "What is the overall CoCo adoption summary for managed partners in Q3 by partner group?",
+                  "sql": "SELECT CASE WHEN partner_name IN ('Accenture', 'Capgemini Technologies LLC', 'Cognizant Technology Solutions US Corp', 'Deloitte Consulting', 'EY', 'Ernst & Young (EY)', 'IBM', 'IBM Consulting') THEN 'GSI' WHEN partner_name IN ('7Rivers, Inc', 'Aimpoint Digital', 'BlueCloud Services Inc', 'kipi.ai', 'Kipi.ai', 'evolv Consulting', 'Infostrux Solutions Inc.', 'Infosys', 'KPMG LLP', 'LTM', 'LTI Mindtree', 'phData, Inc.', 'Slalom, LLC.', 'Squadron Data Inc', 'Tredence Inc.', 'Spaulding Ridge', 'TEKsystems Global Services, LLC.', 'Blend360, LLC', 'Tiger Analytics Inc.', 'Atrium', 'Perficient Inc.', 'SDK Tek Services Ltd.', 'Merkle', 'Archetype Consulting', 'Apex Systems', 'Tata Consultancy Services', 'OneSix', 'Icon Analytics', 'Sparq Holdings, Inc.', 'CitiusTech Inc.', 'Hexaware Technologies') THEN 'NOAM RSI' WHEN partner_name IN ('NTT DATA Group Corporation', 'MegazoneCloud Corporation', 'Infinite Lambda Limited', 'Infinite Lambda Inc', 'INFINITE LAMBDA (SINGAPORE) PTE. LTD.', 'Altis Global Limited', 'Altis Consulting, ANZ', 'PROLIM Global Corporation') THEN 'APJ RSI' WHEN partner_name IN ('INFOMOTION GMBH', 'INFOMOTION GMBH, BearingPoint', 'CIVICA SOFTWARE, S.L.', 'Kubrick Group', 'KPC (Key Performance Consulting)', 'KPC') THEN 'EMEA RSI' END AS partner_group, COUNT(use_case_id) AS total_use_cases, COUNT_IF(is_coco = TRUE) AS coco_use_cases, ROUND(COUNT_IF(is_coco = TRUE) * 100.0 / NULLIF(COUNT(use_case_id), 0), 1) AS coco_pct, COUNT_IF(use_case_stage = '7 - Deployed') AS deployed_uc, COUNT_IF(use_case_stage = '7 - Deployed' AND is_coco = TRUE) AS coco_deployed FROM __use_cases WHERE partner_name IN ('Accenture', 'Capgemini Technologies LLC', 'Cognizant Technology Solutions US Corp', 'Deloitte Consulting', 'EY', 'Ernst & Young (EY)', 'IBM', 'IBM Consulting', '7Rivers, Inc', 'Aimpoint Digital', 'BlueCloud Services Inc', 'kipi.ai', 'Kipi.ai', 'evolv Consulting', 'Infostrux Solutions Inc.', 'Infosys', 'KPMG LLP', 'LTM', 'LTI Mindtree', 'phData, Inc.', 'Slalom, LLC.', 'Squadron Data Inc', 'Tredence Inc.', 'Spaulding Ridge', 'TEKsystems Global Services, LLC.', 'Blend360, LLC', 'Tiger Analytics Inc.', 'Atrium', 'Perficient Inc.', 'SDK Tek Services Ltd.', 'Merkle', 'Archetype Consulting', 'Apex Systems', 'Tata Consultancy Services', 'OneSix', 'Icon Analytics', 'Sparq Holdings, Inc.', 'CitiusTech Inc.', 'Hexaware Technologies', 'NTT DATA Group Corporation', 'MegazoneCloud Corporation', 'Infinite Lambda Limited', 'Infinite Lambda Inc', 'INFINITE LAMBDA (SINGAPORE) PTE. LTD.', 'Altis Global Limited', 'Altis Consulting, ANZ', 'PROLIM Global Corporation', 'INFOMOTION GMBH', 'INFOMOTION GMBH, BearingPoint', 'CIVICA SOFTWARE, S.L.', 'Kubrick Group', 'KPC (Key Performance Consulting)', 'KPC') AND ((use_case_stage IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan') AND decision_date BETWEEN '2026-08-01' AND '2026-10-31') OR (use_case_stage IN ('5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed') AND go_live_date BETWEEN '2026-08-01' AND '2026-10-31')) GROUP BY partner_group ORDER BY partner_group"
+                },
+                {
+                  "question": "What is the last 7-day token consumption and WoW% for each managed partner in Q3?",
+                  "sql": "WITH partner_q3_accounts AS (SELECT DISTINCT CASE WHEN partner_name IN ('IBM', 'IBM Consulting') THEN 'IBM' WHEN partner_name IN ('EY', 'Ernst & Young (EY)') THEN 'EY' WHEN partner_name IN ('LTM', 'LTI Mindtree') THEN 'LTM' WHEN partner_name IN ('kipi.ai', 'Kipi.ai') THEN 'kipi.ai' ELSE partner_name END AS canonical_partner, UPPER(account_name) AS account_name_upper FROM __use_cases WHERE partner_name IN ('Accenture', 'Capgemini Technologies LLC', 'Cognizant Technology Solutions US Corp', 'Deloitte Consulting', 'EY', 'Ernst & Young (EY)', 'IBM', 'IBM Consulting', '7Rivers, Inc', 'Aimpoint Digital', 'BlueCloud Services Inc', 'kipi.ai', 'Kipi.ai', 'evolv Consulting', 'Infostrux Solutions Inc.', 'Infosys', 'KPMG LLP', 'LTM', 'LTI Mindtree', 'phData, Inc.', 'Slalom, LLC.', 'Squadron Data Inc', 'Tredence Inc.', 'Spaulding Ridge', 'TEKsystems Global Services, LLC.', 'Blend360, LLC', 'Tiger Analytics Inc.', 'Atrium', 'Perficient Inc.', 'SDK Tek Services Ltd.', 'Merkle', 'Archetype Consulting', 'Apex Systems', 'Tata Consultancy Services', 'OneSix', 'Icon Analytics', 'Sparq Holdings, Inc.', 'CitiusTech Inc.', 'Hexaware Technologies', 'NTT DATA Group Corporation', 'MegazoneCloud Corporation', 'Infinite Lambda Limited', 'Infinite Lambda Inc', 'INFINITE LAMBDA (SINGAPORE) PTE. LTD.', 'Altis Global Limited', 'Altis Consulting, ANZ', 'PROLIM Global Corporation', 'INFOMOTION GMBH', 'INFOMOTION GMBH, BearingPoint', 'CIVICA SOFTWARE, S.L.', 'Kubrick Group', 'KPC (Key Performance Consulting)', 'KPC') AND is_coco = TRUE AND ((use_case_stage IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan') AND decision_date BETWEEN '2026-08-01' AND '2026-10-31') OR (use_case_stage IN ('5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed') AND go_live_date BETWEEN '2026-08-01' AND '2026-10-31'))) SELECT pa.canonical_partner, SUM(CASE WHEN f.ds >= DATEADD(DAY, -7, CURRENT_DATE) THEN f.total_tokens ELSE 0 END) AS last7_tokens, SUM(CASE WHEN f.ds >= DATEADD(DAY, -14, CURRENT_DATE) AND f.ds < DATEADD(DAY, -7, CURRENT_DATE) THEN f.total_tokens ELSE 0 END) AS prior7_tokens, ROUND((SUM(CASE WHEN f.ds >= DATEADD(DAY, -7, CURRENT_DATE) THEN f.total_tokens ELSE 0 END) - SUM(CASE WHEN f.ds >= DATEADD(DAY, -14, CURRENT_DATE) AND f.ds < DATEADD(DAY, -7, CURRENT_DATE) THEN f.total_tokens ELSE 0 END)) * 100.0 / NULLIF(SUM(CASE WHEN f.ds >= DATEADD(DAY, -14, CURRENT_DATE) AND f.ds < DATEADD(DAY, -7, CURRENT_DATE) THEN f.total_tokens ELSE 0 END), 0), 1) AS token_wow_pct FROM __token_usage AS f INNER JOIN partner_q3_accounts AS pa ON UPPER(f.salesforce_account_name) = pa.account_name_upper WHERE f.snowflake_account_type = 'Customer' AND f.total_daily_requests > 0 AND f.ds >= DATEADD(DAY, -14, CURRENT_DATE) GROUP BY pa.canonical_partner ORDER BY last7_tokens DESC NULLS LAST"
+                },
+                {
+                  "question": "What is the CoCo attachment rate for each managed partner in Q2?",
+                  "sql": "SELECT partner_name, COUNT(use_case_id) AS total_use_cases, COUNT_IF(is_coco = TRUE) AS coco_use_cases, ROUND(COUNT_IF(is_coco = TRUE) * 100.0 / NULLIF(COUNT(use_case_id), 0), 1) AS coco_pct FROM __use_cases WHERE partner_name IN ('Accenture', 'Capgemini Technologies LLC', 'Cognizant Technology Solutions US Corp', 'Deloitte Consulting', 'EY', 'Ernst & Young (EY)', 'IBM', 'IBM Consulting', '7Rivers, Inc', 'Aimpoint Digital', 'BlueCloud Services Inc', 'kipi.ai', 'Kipi.ai', 'evolv Consulting', 'Infostrux Solutions Inc.', 'Infosys', 'KPMG LLP', 'LTM', 'LTI Mindtree', 'phData, Inc.', 'Slalom, LLC.', 'Squadron Data Inc', 'Tredence Inc.', 'Spaulding Ridge', 'TEKsystems Global Services, LLC.', 'Blend360, LLC', 'Tiger Analytics Inc.', 'Atrium', 'Perficient Inc.', 'SDK Tek Services Ltd.', 'Merkle', 'Archetype Consulting', 'Apex Systems', 'Tata Consultancy Services', 'OneSix', 'Icon Analytics', 'Sparq Holdings, Inc.', 'CitiusTech Inc.', 'Hexaware Technologies', 'NTT DATA Group Corporation', 'MegazoneCloud Corporation', 'Infinite Lambda Limited', 'Infinite Lambda Inc', 'INFINITE LAMBDA (SINGAPORE) PTE. LTD.', 'Altis Global Limited', 'Altis Consulting, ANZ', 'PROLIM Global Corporation', 'INFOMOTION GMBH', 'INFOMOTION GMBH, BearingPoint', 'CIVICA SOFTWARE, S.L.', 'Kubrick Group', 'KPC (Key Performance Consulting)', 'KPC') AND ((use_case_stage IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan') AND decision_date BETWEEN '2026-05-01' AND '2026-07-31') OR (use_case_stage IN ('5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed') AND go_live_date BETWEEN '2026-05-01' AND '2026-07-31')) GROUP BY partner_name ORDER BY coco_pct DESC"
+                }
+              ]
+            },
+            "type": "json"
+          }
+        ],
+        "name": "coco_adoption_uc",
+        "status": "success",
+        "tool_use_id": "toolu_bdrk_01VRHvXiWmDPfxpA9aobcVZV",
+        "type": "system_agentic_semantic_context"
+      },
+      "type": "tool_result"
+    },
+    {
+      "thinking": {
+        "text": "The managed_partners filter lists partner names including aliases. I should count distinct canonical partners, collapsing aliases. Let me query the data using the managed_partners filter and count distinct, but aliases inflate. Better to count distinct canonical names. Let me just count distinct partner_name that actually appear in the data among the managed list, then collapse aliases.\n\nActually simplest: query distinct partner_name in the data within managed list, and I know from the metadata it's ~44 partners. Let me count canonical partners."
+      },
+      "type": "thinking"
+    },
+    {
+      "tool_use": {
+        "client_side_execute": false,
+        "input": {
+          "semantic_model": "coco_adoption_uc",
+          "sql": "SELECT COUNT(DISTINCT canonical_partner) AS num_managed_partners\nFROM (\n  SELECT DISTINCT\n    CASE\n      WHEN partner_name IN ('IBM','IBM Consulting') THEN 'IBM'\n      WHEN partner_name IN ('EY','Ernst & Young (EY)') THEN 'EY'\n      WHEN partner_name IN ('LTM','LTI Mindtree') THEN 'LTM'\n      WHEN partner_name IN ('kipi.ai','Kipi.ai') THEN 'kipi.ai'\n      WHEN partner_name IN ('Infinite Lambda Limited','Infinite Lambda Inc','INFINITE LAMBDA (SINGAPORE) PTE. LTD.') THEN 'Infinite Lambda'\n      WHEN partner_name IN ('Altis Global Limited','Altis Consulting, ANZ') THEN 'Altis'\n      WHEN partner_name IN ('INFOMOTION GMBH','INFOMOTION GMBH, BearingPoint') THEN 'INFOMOTION'\n      WHEN partner_name IN ('KPC (Key Performance Consulting)','KPC') THEN 'KPC'\n      ELSE partner_name\n    END AS canonical_partner\n  FROM __use_cases\n  WHERE partner_name IN ('Accenture', 'Capgemini Technologies LLC', 'Cognizant Technology Solutions US Corp', 'Deloitte Consulting', 'EY', 'Ernst & Young (EY)', 'IBM', 'IBM Consulting', '7Rivers, Inc', 'Aimpoint Digital', 'BlueCloud Services Inc', 'kipi.ai', 'Kipi.ai', 'evolv Consulting', 'Infostrux Solutions Inc.', 'Infosys', 'KPMG LLP', 'LTM', 'LTI Mindtree', 'phData, Inc.', 'Slalom, LLC.', 'Squadron Data Inc', 'Tredence Inc.', 'Spaulding Ridge', 'TEKsystems Global Services, LLC.', 'Blend360, LLC', 'Tiger Analytics Inc.', 'Atrium', 'Perficient Inc.', 'SDK Tek Services Ltd.', 'Merkle', 'Archetype Consulting', 'Apex Systems', 'Tata Consultancy Services', 'OneSix', 'Icon Analytics', 'Sparq Holdings, Inc.', 'CitiusTech Inc.', 'Hexaware Technologies', 'NTT DATA Group Corporation', 'MegazoneCloud Corporation', 'Infinite Lambda Limited', 'Infinite Lambda Inc', 'INFINITE LAMBDA (SINGAPORE) PTE. LTD.', 'Altis Global Limited', 'Altis Consulting, ANZ', 'PROLIM Global Corporation', 'INFOMOTION GMBH', 'INFOMOTION GMBH, BearingPoint', 'CIVICA SOFTWARE, S.L.', 'Kubrick Group', 'KPC (Key Performance Consulting)', 'KPC')\n)"
+        },
+        "name": "system_execute_sql",
+        "tool_use_id": "toolu_bdrk_019qyjhPTt4v5RctDaXue9qq",
+        "type": "system_execute_sql"
+      },
+      "type": "tool_use"
+    },
+    {
+      "tool_result": {
+        "content": [
+          {
+            "json": {
+              "query_id": "01c65aeb-0918-e8cd-0001-dd8913ced843",
+              "result_set": {
+                "data": [
+                  [
+                    "43"
+                  ]
+                ],
+                "resultSetMetaData": {
+                  "format": "jsonv2",
+                  "numRows": 1,
+                  "partition": 0,
+                  "partitionInfo": [
+                    {
+                      "rowCount": 1,
+                      "uncompressedSize": 17
+                    }
+                  ],
+                  "rowType": [
+                    {
+                      "length": 0,
+                      "name": "NUM_MANAGED_PARTNERS",
+                      "nullable": false,
+                      "precision": 18,
+                      "scale": 0,
+                      "type": "fixed"
+                    }
+                  ]
+                },
+                "statementHandle": "01c65aeb-0918-e8cd-0001-dd8913ced843"
+              },
+              "semantic_model_path": "@TEMP.COCO_PARTNER_ADOPTION.COCO_AGENT_STAGE/coco_adoption_model.yaml",
+              "sql": "WITH __use_cases AS (\n  SELECT\n    partner_name\n  FROM temp.coco_partner_adoption.dt_okr_use_cases\n)\nSELECT\n  COUNT(DISTINCT canonical_partner) AS num_managed_partners\nFROM (\n  SELECT DISTINCT\n    CASE\n      WHEN partner_name IN ('IBM', 'IBM Consulting')\n      THEN 'IBM'\n      WHEN partner_name IN ('EY', 'Ernst & Young (EY)')\n      THEN 'EY'\n      WHEN partner_name IN ('LTM', 'LTI Mindtree')\n      THEN 'LTM'\n      WHEN partner_name IN ('kipi.ai', 'Kipi.ai')\n      THEN 'kipi.ai'\n      WHEN partner_name IN (\n        'Infinite Lambda Limited',\n        'Infinite Lambda Inc',\n        'INFINITE LAMBDA (SINGAPORE) PTE. LTD.'\n      )\n      THEN 'Infinite Lambda'\n      WHEN partner_name IN ('Altis Global Limited', 'Altis Consulting, ANZ')\n      THEN 'Altis'\n      WHEN partner_name IN ('INFOMOTION GMBH', 'INFOMOTION GMBH, BearingPoint')\n      THEN 'INFOMOTION'\n      WHEN partner_name IN ('KPC (Key Performance Consulting)', 'KPC')\n      THEN 'KPC'\n      ELSE partner_name\n    END AS canonical_partner\n  FROM __use_cases\n  WHERE\n    partner_name IN (\n      'Accenture',\n      'Capgemini Technologies LLC',\n      'Cognizant Technology Solutions US Corp',\n      'Deloitte Consulting',\n      'EY',\n      'Ernst & Young (EY)',\n      'IBM',\n      'IBM Consulting',\n      '7Rivers, Inc',\n      'Aimpoint Digital',\n      'BlueCloud Services Inc',\n      'kipi.ai',\n      'Kipi.ai',\n      'evolv Consulting',\n      'Infostrux Solutions Inc.',\n      'Infosys',\n      'KPMG LLP',\n      'LTM',\n      'LTI Mindtree',\n      'phData, Inc.',\n      'Slalom, LLC.',\n      'Squadron Data Inc',\n      'Tredence Inc.',\n      'Spaulding Ridge',\n      'TEKsystems Global Services, LLC.',\n      'Blend360, LLC',\n      'Tiger Analytics Inc.',\n      'Atrium',\n      'Perficient Inc.',\n      'SDK Tek Services Ltd.',\n      'Merkle',\n      'Archetype Consulting',\n      'Apex Systems',\n      'Tata Consultancy Services',\n      'OneSix',\n      'Icon Analytics',\n      'Sparq Holdings, Inc.',\n      'CitiusTech Inc.',\n      'Hexaware Technologies',\n      'NTT DATA Group Corporation',\n      'MegazoneCloud Corporation',\n      'Infinite Lambda Limited',\n      'Infinite Lambda Inc',\n      'INFINITE LAMBDA (SINGAPORE) PTE. LTD.',\n      'Altis Global Limited',\n      'Altis Consulting, ANZ',\n      'PROLIM Global Corporation',\n      'INFOMOTION GMBH',\n      'INFOMOTION GMBH, BearingPoint',\n      'CIVICA SOFTWARE, S.L.',\n      'Kubrick Group',\n      'KPC (Key Performance Consulting)',\n      'KPC'\n    )\n) /* Generated by Cortex */;"
+            },
+            "type": "json"
+          }
+        ],
+        "name": "system_execute_sql",
+        "status": "success",
+        "tool_use_id": "toolu_bdrk_019qyjhPTt4v5RctDaXue9qq",
+        "type": "system_execute_sql"
+      },
+      "type": "tool_result"
+    },
+    {
+      "text": "There are **43** distinct managed OKR partners represented in the data (counting alias forms like IBM/IBM Consulting and EY/Ernst & Young as single partners). These span four groups:\n\n- **GSI** (global scope): Accenture, Capgemini, Cognizant, Deloitte, EY, IBM\n- **NOAM RSI** (NoAM theaters): ~30 partners including Slalom, KPMG, phData, Tredence, Infosys, TCS, and others\n- **APJ RSI** (country-scoped): NTT Data, Megazone, Infinite Lambda, Altis, Prolim\n- **EMEA RSI** (region-scoped): Infomotion/BearingPoint, Civica, Kubrick, KPC\n\nThe program is typically referred to as \"~44 managed partners\"; the count of **43** reflects partners that actually appear in the current use-case data.",
+      "type": "text"
+    },
+    {
+      "suggested_queries": [
+        {
+          "query": "How many managed partners are in each partner group (GSI, NOAM RSI, APJ RSI, EMEA RSI)?"
+        },
+        {
+          "query": "Which managed partners have the highest CoCo attachment rate in Q3?"
+        },
+        {
+          "query": "How many use cases does each managed partner have in Q3?"
+        }
+      ],
+      "type": "suggested_queries"
+    }
+  ],
+  "metadata": {
+    "usage": {
+      "tokens_consumed": [
+        {
+          "context_window": 1000000,
+          "input_tokens": {
+            "cache_read": 87683,
+            "cache_write": 31896,
+            "total": 119587,
+            "uncached": 8
+          },
+          "model_name": "claude-opus-4-8",
+          "output_tokens": {
+            "total": 2019
+          }
+        }
+      ]
+    }
+  },
+  "role": "assistant",
+  "schema_version": "v2",
+  "sequence_number": 149,
+  "status": "completed"
+}
