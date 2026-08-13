@@ -2500,37 +2500,50 @@ def get_pc_coco_uc_engagements(_conn, region=None, partner_names=None, start_dat
     reg, pf = _pc_filters(region, partner_names, "a")
     sd = start_date or "2025-12-01"
     ed = end_date or "2100-01-01"
+    from utils import PARTNER_PIPELINE_CROSSWALK
+    _xw_rows = ",\n            ".join(
+        f"('{p.replace(chr(39), chr(39)*2)}','{c.replace(chr(39), chr(39)*2)}')"
+        for c, names in PARTNER_PIPELINE_CROSSWALK.items() for p in names) or "('','')"
     query = f"""
-    WITH a AS (
-        SELECT a.PARTNER_NAME, a.SALESFORCE_ACCOUNT_NAME,
+    WITH xw AS (
+        SELECT * FROM VALUES
+            {_xw_rows}
+        AS t(pipeline, canon)
+    ),
+    a AS (
+        SELECT COALESCE(xw.canon, a.PARTNER_NAME) AS PARTNER_NAME,
+               a.SALESFORCE_ACCOUNT_ID,
+               MAX(a.SALESFORCE_ACCOUNT_NAME) AS ACCOUNT_NAME,
                COUNT(DISTINCT a.USER_ID || '|' || a.DEPLOYMENT) AS CONSULTANTS,
                SUM(a.TOTAL_TOKENS) AS TOKENS,
                SUM(a.TOTAL_DAILY_USER_PROMPTS) AS PROMPTS,
                COUNT(DISTINCT a.DS) AS ACTIVE_DAYS
         FROM {SCHEMA}.V_PARTNER_CONSULTANT_ACTIVITY a
+        LEFT JOIN xw ON UPPER(a.PARTNER_NAME) = UPPER(xw.pipeline)
         WHERE a.SNOWFLAKE_ACCOUNT_TYPE = 'Customer'
           AND a.DS BETWEEN '{sd}' AND '{ed}'
-          AND a.SALESFORCE_ACCOUNT_NAME IS NOT NULL{reg}{pf}
+          AND a.SALESFORCE_ACCOUNT_ID IS NOT NULL{reg}{pf}
         GROUP BY 1,2
     ),
     uc AS (
-        SELECT PARTNER_NAME, ACCOUNT_NAME,
-               COUNT(DISTINCT USE_CASE_ID) AS COCO_UCS,
-               SUM(COALESCE(USE_CASE_EACV,0)) AS EACV,
-               COUNT(DISTINCT CASE WHEN IS_DEPLOYED THEN USE_CASE_ID END) AS DEPLOYED_UCS,
-               LISTAGG(DISTINCT TECHNICAL_USE_CASE, ' ; ') AS TECH_USE_CASE,
-               LISTAGG(DISTINCT WORKLOADS, ' ; ') AS WORKLOADS
-        FROM {SCHEMA}.PARTNER_COCO_USE_CASES
-        WHERE ACCOUNT_NAME IS NOT NULL AND PARTNER_NAME IS NOT NULL
+        SELECT p.PARTNER_NAME, d.ACCOUNT_ID,
+               COUNT(DISTINCT p.USE_CASE_ID) AS COCO_UCS,
+               SUM(COALESCE(p.USE_CASE_EACV,0)) AS EACV,
+               COUNT(DISTINCT CASE WHEN p.IS_DEPLOYED THEN p.USE_CASE_ID END) AS DEPLOYED_UCS,
+               LISTAGG(DISTINCT p.TECHNICAL_USE_CASE, ' ; ') AS TECH_USE_CASE,
+               LISTAGG(DISTINCT p.WORKLOADS, ' ; ') AS WORKLOADS
+        FROM {SCHEMA}.PARTNER_COCO_USE_CASES p
+        JOIN MDM.MDM_INTERFACES.DIM_USE_CASE d ON d.USE_CASE_ID = p.USE_CASE_ID
+        WHERE d.ACCOUNT_ID IS NOT NULL AND p.PARTNER_NAME IS NOT NULL
         GROUP BY 1,2
     )
-    SELECT a.PARTNER_NAME, a.SALESFORCE_ACCOUNT_NAME AS ACCOUNT_NAME,
+    SELECT a.PARTNER_NAME, a.ACCOUNT_NAME,
            uc.COCO_UCS, uc.DEPLOYED_UCS, uc.EACV,
            a.CONSULTANTS, a.TOKENS, a.PROMPTS, a.ACTIVE_DAYS,
            uc.TECH_USE_CASE, uc.WORKLOADS
     FROM a
     JOIN uc
-      ON a.SALESFORCE_ACCOUNT_NAME = uc.ACCOUNT_NAME
+      ON a.SALESFORCE_ACCOUNT_ID = uc.ACCOUNT_ID
      AND UPPER(a.PARTNER_NAME) = UPPER(uc.PARTNER_NAME)
     ORDER BY a.TOKENS DESC
     """
