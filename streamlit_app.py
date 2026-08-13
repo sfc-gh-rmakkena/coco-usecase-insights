@@ -21,7 +21,7 @@ if "selected_region" not in st.session_state:
 if "selected_theater" not in st.session_state:
     st.session_state.selected_theater = "All"
 if "selected_partners" not in st.session_state:
-    st.session_state.selected_partners = []
+    st.session_state.selected_partners = list(PARTNER_GROUPS)
 if "okr_start_date" not in st.session_state:
     st.session_state.okr_start_date = date(2026, 8, 1)
 if "okr_end_date" not in st.session_state:

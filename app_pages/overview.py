@@ -71,6 +71,38 @@ st.markdown("""
     color: rgba(0,40,70,0.65) !important;
     font-size: 10px !important;
 }
+.coco-sentiment-box {
+    border: 2px solid #29B5E8;
+    border-radius: 8px;
+    padding: 12px 16px;
+    background: rgba(41,181,232,0.06);
+}
+.coco-sentiment-title {
+    color: #003a5c;
+    font-weight: 700;
+    font-size: 18px;
+    margin-bottom: 10px;
+}
+.coco-sentiment-metrics {
+    display: flex;
+    gap: 48px;
+}
+.coco-sentiment-item {
+    flex: 0 0 auto;
+}
+.coco-sentiment-label {
+    color: #0b6c96;
+    font-weight: 700;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+.coco-sentiment-value {
+    color: #003a5c;
+    font-weight: 800;
+    font-size: 28px;
+    line-height: 1.2;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -231,11 +263,26 @@ else:
 _go_lives_pct      = round(_all_deployed_partner * 100.0 / _partner_total, 1) if _partner_total > 0 else 0.0
 _coco_go_lives_pct = round(_go_live_coco * 100.0 / coco_count, 1) if coco_count > 0 else 0.0
 
-c1, c2, c3, c4, c5, c6 = st.columns(6)
-c1.metric("Total UC",                  _all_uc_total,
-          help="All use cases in scope — partner and non-partner (MDM, Stages 3–7, date range filtered)")
-c2.metric("Total Go-Lives",            _all_go_lives,
-          help="All Stage 7 deployed use cases regardless of partner attachment (MDM)")
+st.markdown(
+    f"""<div class="coco-sentiment-box">
+  <div class="coco-sentiment-title">Overall Company Sentiment</div>
+  <div class="coco-sentiment-metrics">
+    <div class="coco-sentiment-item" title="All use cases in scope — partner and non-partner (MDM, Stages 3–7, date range filtered)">
+      <div class="coco-sentiment-label">Total UC</div>
+      <div class="coco-sentiment-value">{_all_uc_total:,}</div>
+    </div>
+    <div class="coco-sentiment-item" title="All Stage 7 deployed use cases regardless of partner attachment (MDM)">
+      <div class="coco-sentiment-label">Total Go-Lives</div>
+      <div class="coco-sentiment-value">{_all_go_lives:,}</div>
+    </div>
+  </div>
+</div>""",
+    unsafe_allow_html=True,
+)
+
+st.write("")
+
+c3, c4, c5, c6 = st.columns(4)
 _managed_partner_count = int(_bc_managed['PARTNER_NAME'].nunique()) if len(_bc_managed) > 0 else int(s['TOTAL_PARTNERS'])
 
 c3.metric("Total Partner UC",          _partner_total,

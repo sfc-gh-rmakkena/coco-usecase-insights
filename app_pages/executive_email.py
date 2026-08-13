@@ -1584,7 +1584,7 @@ recipients_input = st.text_area(
 default_prompt = f"""You are writing a polished executive briefing for Snowflake leadership on CoCo partner use case performance for Q3 FY27 (Aug–Oct 2026). This will be read by VPs and the CEO — keep it sharp, data-rich, and action-oriented.
 Do NOT include a title, heading, or subject line like "Cortex Code (CoCo) Partner Use Case Traction" at the top of the email. Start directly with the Note block.
 
-SCOPE: 4 partner groups — GSIs report GLOBAL numbers; NOAM RSIs report NoAM only; APJ RSIs report their respective APJ geo region; EMEA RSIs report their respective EMEA geo region.
+SCOPE: 4 partner groups — GSIs report GLOBAL numbers; NOAM RSIs report NoAM only; APJ RSIs report their respective APJ geo region; EMEA RSIs report their respective EMEA geo region.  All numbers in your output MUST come from the PRE-COMPUTED METRICS in the data context. Do NOT perform arithmetic, comparisons, or derivations on raw data — the metrics are final. Do not Fabricate any date 
 
 Follow this EXACT structure with 9 sections:
 
@@ -1599,14 +1599,15 @@ Follow this EXACT structure with 9 sections:
 - Bullet 3: "**Top GSIs by EACV:** ([top 3 GSIs])"
 - Bullet 4: "**Top RSIs by EACV:** ([top 3 RSI partners across all 3 RSI groups])"
 - Bullet 5: "**Competitive displacement:** [top 3 competitors by count]"
-- Bullet 6: "**[Detailed Partner CoCo usecase dashboard](https://app.snowflake.com/sfcogsops/snowhouse_aws_us_west_2/#/streamlit-apps/TEMP.COCO_PARTNER_ADOPTION.COCO_USECASE_INSIGHTS)**"
+- Bullet 6: "**Top Skills used:** [top 3 Skills]"
+- Bullet 7: "**[Detailed Partner CoCo usecase dashboard](https://app.snowflake.com/sfcogsops/snowhouse_aws_us_west_2/#/streamlit-apps/TEMP.COCO_PARTNER_ADOPTION.COCO_USECASE_INSIGHTS)**"
 
 ## OKR PROGRESS — REGIONAL BREAKDOWN
 | Group | Scope | Total UCs | CoCo UCs | CoCo % | Partners Meeting Goal% |
 - Show 4 rows: GSI (Global), NOAM RSI, APJ RSI, EMEA RSI
 - Use "OKR PROGRESS — REGIONAL BREAKDOWN" data from context (each row has group name, total UCs, CoCo UCs, CoCo %, partners meeting goal)
 - Goal% is 75% for GSI and NOAM RSI, 50% for APJ RSI and EMEA RSI — reflect the correct target per row
-- After table: ONE sentence — which group is lagging most and what it signals for enablement focus
+- After table:  take the Q3 timeline (August to Oct) for the narrative - dont use it in sentence, also consider trend in no of coco usecase . If trend is postive based on no of coco usecases WOW %  for GSI and NOAM RSI use postive tone on the trending to target. One sentence —   looking into overall pipeline for each groups that can be converted to Coco adoption and  how are we trending  . Any specific usecase trend is seeing high coco adoption in terms of no of usecases vs low adoption by theatre. Among  GSI  partners Which Region and Theatre is leading and is lagging
 
 ## MANAGED PARTNER PIPELINE OVERVIEW
 | Stage | Total UCs | CoCo UCs | CoCo % | Total EACV | CoCo EACV |
@@ -1616,22 +1617,23 @@ Follow this EXACT structure with 9 sections:
 | Partner | Total UCs | CoCo UCs | CoCo% | WoW Δ% | WoW Δ UCs | EACV | AI | DE | Analytics | Q3 Tokens | Q3 Credits | Last 7d Credits | 7D Credits WoW% |
 - Show ALL GSI partners. Sort by EACV descending. UCs are GLOBAL (all regions).
 - WoW Δ% and WoW Δ UCs from adoption WoW data — show "-" if N/A
-- After table: one sentence listing GSIs below 75% in ascending order of CoCo%.
+- After table: one sentence . Give one senetence which GSI's are leading and  are lagging by region, based on last 4 weeks trend what GSI's are doing - type of engagements
+
 
 ## PARTNER SCORECARD — NOAM RSI (NoAM only, target 75%)
 | Partner | Total UCs | CoCo UCs | CoCo% | WoW Δ% | WoW Δ UCs | EACV | AI | DE | Analytics | Q3 Tokens | Q3 Credits | Last 7d Credits | 7D Credits WoW% |
 - Show ALL NOAM RSI partners. Sort by EACV descending. UCs are NoAM scope only.
-- After table: one sentence listing NOAM RSIs below 75% in ascending order of CoCo%.
+- After table: one sentence . Give one senetence which RSI's are leading and  are lagging by theatre, based on last 4 weeks trend what RSI's are doing - type of engagements
 
 ## PARTNER SCORECARD — APJ RSI (APJ geo-restricted, target 50%)
 | Partner | Total UCs | CoCo UCs | CoCo% | WoW Δ% | WoW Δ UCs | EACV | AI | DE | Analytics | Q3 Tokens | Q3 Credits | Last 7d Credits | 7D Credits WoW% |
 - Show ALL APJ RSI partners. Sort by EACV descending. UCs are each partner's respective APJ region.
-- After table: one sentence listing APJ RSIs below 50% in ascending order of CoCo%.
+- After table: one sentence . Give one senetence which RSI's are leading and  are lagging by theatre, based on last 4 weeks trend what RSI's are doing - type of engagements
 
 ## PARTNER SCORECARD — EMEA RSI (EMEA geo-restricted, target 50%)
 | Partner | Total UCs | CoCo UCs | CoCo% | WoW Δ% | WoW Δ UCs | EACV | AI | DE | Analytics | Q3 Tokens | Q3 Credits | Last 7d Credits | 7D Credits WoW% |
 - Show ALL EMEA RSI partners. Sort by EACV descending. UCs are each partner's respective EMEA region.
-- After table: one sentence listing EMEA RSIs below 50% in ascending order of CoCo%.
+- After table: one sentence . Give one senetence which RSI's are leading and  are lagging by theatre, based on last 4 weeks trend what RSI's are doing - type of engagements
 
 ## NOTABLE WINS (managed partners only)
 4 bullets — exactly one per region group. Use data from "NOTABLE WINS BY REGION" in context.
