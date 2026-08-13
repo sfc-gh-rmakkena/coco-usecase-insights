@@ -2340,3 +2340,112 @@ def get_coco_final_trend_4w(_conn, partners: tuple, region: str = "NoAM") -> lis
             label = str(row['WEEK_START'])[:10]
         result.append((label, float(row['COCO_PCT']) if pd.notna(row['COCO_PCT']) else 0.0))
     return result
+
+
+# ============================================================================
+# Partner Consultants subsection (Tier-1 + Tier-2 resolved; account-anchored)
+# Reads pipeline tables built daily by SP_REFRESH_PARTNER_CONSULTANTS.
+# ============================================================================
+
+def _pc_filters(region, partner_names, alias="r"):
+    reg = "" if (not region or region == "Global") else f" AND {alias}.PARTNER_REGION = '{region.replace(chr(39),chr(39)+chr(39))}'"
+    pf = ""
+    if partner_names:
+        pl = "','".join(p.replace("'", "''") for p in partner_names)
+        pf = f" AND {alias}.PARTNER_NAME IN ('{pl}')"
+    return reg, pf
+
+
+@st.cache_data(ttl=timedelta(minutes=30))
+def get_pc_activity(_conn, context, region=None, partner_names=None, start_date=None, end_date=None):
+    """Per-partner resolved-consultant activity in a context ('Customer' or 'Partner'),
+    windowed by DS; includes true rolling 7-day token change. Consultants = distinct resolved logins."""
+    reg, pf = _pc_filters(region, partner_names, "r")
+    sd = start_date or "2025-12-01"
+    ed = end_date or "2100-01-01"
+    query = f"""
+    WITH r AS (
+        SELECT USER_ID, DEPLOYMENT, PARTNER_NAME, MATCH_TIER
+        FROM {SCHEMA}.PARTNER_CONSULTANT_RESOLVED r WHERE 1=1{reg}{pf}
+    )
+    SELECT r.PARTNER_NAME AS PARTNER_NAME,
+        COUNT(DISTINCT f.USER_ID || '|' || f.DEPLOYMENT) AS CONSULTANTS,
+        COUNT(DISTINCT CASE WHEN r.MATCH_TIER='Tier2' THEN f.USER_ID || '|' || f.DEPLOYMENT END) AS TIER2_CONSULTANTS,
+        SUM(f.TOTAL_TOKENS) AS TOKENS,
+        SUM(f.TOTAL_DAILY_USER_PROMPTS) AS PROMPTS,
+        SUM(f.TOTAL_DAILY_REQUESTS) AS REQUESTS,
+        SUM(CASE WHEN f.DS >= DATEADD('day',-7,CURRENT_DATE()) THEN f.TOTAL_TOKENS ELSE 0 END) AS LAST7_TOKENS,
+        SUM(CASE WHEN f.DS >= DATEADD('day',-14,CURRENT_DATE()) AND f.DS < DATEADD('day',-7,CURRENT_DATE()) THEN f.TOTAL_TOKENS ELSE 0 END) AS PRIOR7_TOKENS
+    FROM r
+    JOIN SNOWSCIENCE.LLM.CORTEX_CODE_USER_DAY_FACT f
+      ON f.USER_ID = r.USER_ID AND f.DEPLOYMENT = r.DEPLOYMENT
+    WHERE f.SNOWFLAKE_ACCOUNT_TYPE = '{context}' AND f.TOTAL_DAILY_REQUESTS > 0
+      AND f.DS BETWEEN '{sd}' AND '{ed}'
+    GROUP BY 1
+    """
+    import pandas as pd
+    df = _conn.query(query)
+    if len(df) > 0:
+        for c in ["CONSULTANTS", "TIER2_CONSULTANTS", "TOKENS", "PROMPTS", "REQUESTS", "LAST7_TOKENS", "PRIOR7_TOKENS"]:
+            if c in df.columns:
+                df[c] = pd.to_numeric(df[c], errors="coerce")
+        df["WOW_PCT"] = ((df["LAST7_TOKENS"] - df["PRIOR7_TOKENS"]) /
+                         df["PRIOR7_TOKENS"].replace(0, float("nan")) * 100).round(1)
+    return df
+
+
+@st.cache_data(ttl=timedelta(minutes=30))
+def get_pc_top_skills(_conn, context, region=None, partner_names=None, start_date=None, end_date=None, top=3):
+    reg, pf = _pc_filters(region, partner_names, "s")
+    sd = start_date or "2025-12-01"
+    ed = end_date or "2100-01-01"
+    query = f"""
+    WITH s AS (
+        SELECT PARTNER_NAME, PARTNER_REGION, skill, SUM(invocations) AS inv
+        FROM {SCHEMA}.PARTNER_CONSULTANT_SKILLS s
+        WHERE context = '{context}' AND week_start BETWEEN '{sd}' AND '{ed}'
+          AND skill NOT ILIKE '%student%'{reg}{pf}
+        GROUP BY 1,2,3
+    ),
+    ranked AS (SELECT PARTNER_NAME, skill, ROW_NUMBER() OVER (PARTITION BY PARTNER_NAME ORDER BY inv DESC) AS rn FROM s)
+    SELECT PARTNER_NAME, LISTAGG(skill, ', ') WITHIN GROUP (ORDER BY rn) AS TOP_SKILLS
+    FROM ranked WHERE rn <= {int(top)} GROUP BY 1
+    """
+    return _conn.query(query)
+
+
+@st.cache_data(ttl=timedelta(minutes=30))
+def get_pc_totals(_conn, region=None, partner_names=None):
+    reg, pf = _pc_filters(region, partner_names, "r")
+    query = f"""
+    SELECT r.PARTNER_NAME AS PARTNER_NAME, COUNT(*) AS TOTAL_CONSULTANTS,
+           COUNT(CASE WHEN r.MATCH_TIER='Tier2' THEN 1 END) AS TIER2_CONSULTANTS
+    FROM {SCHEMA}.PARTNER_CONSULTANT_RESOLVED r WHERE 1=1{reg}{pf}
+    GROUP BY 1
+    """
+    import pandas as pd
+    df = _conn.query(query)
+    for c in ["TOTAL_CONSULTANTS", "TIER2_CONSULTANTS"]:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+    return df
+
+
+@st.cache_data(ttl=timedelta(minutes=30))
+def get_pc_usecase_counts(_conn):
+    """CoCo-attached use-case counts per partner (all + active/open) from PARTNER_COCO_USE_CASES."""
+    query = f"""
+    SELECT PARTNER_NAME,
+        COUNT(DISTINCT USE_CASE_ID) AS COCO_UCS,
+        COUNT(DISTINCT CASE WHEN NOT COALESCE(IS_LOST,FALSE) AND NOT COALESCE(IS_DEPLOYED,FALSE) THEN USE_CASE_ID END) AS ACTIVE_COCO_UCS
+    FROM {SCHEMA}.PARTNER_COCO_USE_CASES
+    WHERE PARTNER_NAME IS NOT NULL
+    GROUP BY 1
+    """
+    import pandas as pd
+    df = _conn.query(query)
+    for c in ["COCO_UCS", "ACTIVE_COCO_UCS"]:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+    return df
+
