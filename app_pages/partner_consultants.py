@@ -221,9 +221,10 @@ data_context = f"""SCOPE: Region {region} | Period {start_date} to {end_date}
 Partner filter: {', '.join(selected_partners) if selected_partners else 'all partners'}
 
 ATTRIBUTION: strict. A row below means consultants from partner P were active in customer
-account A, AND partner P owns at least one CoCo-attached use case in account A. Matching is
-by exact account name because no shared account ID exists between the usage and use-case
-records, so some genuine engagements will be missing.
+account A, AND partner P owns at least one CoCo-attached use case in account A. Accounts are
+matched on Salesforce account ID, not name. Coverage is still partial: the limit is the strict
+partner requirement, because the partner whose consultants work in an account is often not the
+partner named on that account's CoCo use case.
 
 PRE-COMPUTED TOTALS — use these verbatim. Do NOT sum columns yourself and do NOT compute
 any percentage that is not already given here.
@@ -251,6 +252,7 @@ RULES ON NUMBERS
 - Name real partners and real customer accounts from the data. Never invent an account name.
 
 WHAT THE DATA MEANS
+- SCOPE: this briefing covers ONLY section 1 of the page, "Customer engagements — activity partner consultants drive". Every figure is consultant activity inside CUSTOMER accounts. Say nothing about the partner's own internal adoption, partner-own-account usage, or their internal consultant bench — that is a different section and its data is not provided here.
 - Attribution is strict: the partner whose consultants are active also owns a CoCo-attached use case in that same account.
 - WORKLOADS and TECH_USE_CASE = the kind of work the engagement covers (e.g. "DE: Ingestion", "AI: Agents", "Analytics: Business Intelligence").
 - The skills list = what the consultants actually invoked inside CoCo.
@@ -287,7 +289,7 @@ Exactly 3 bullets. Each bullet = one type of work, not one partner.
 2 bullets maximum. Each names a partner or a work type and the specific action to take, justified by a figure from the data.
 
 ## COVERAGE NOTE
-One italic sentence stating what share of customer-account tokens could be matched to a CoCo-attached use case, using the figure from PRE-COMPUTED TOTALS, and that unmatched activity is excluded.
+One italic sentence, prefixed with the heading above, stating what share of customer-account tokens could be matched to a CoCo-attached use case, using the figure from PRE-COMPUTED TOTALS. State that the unmatched remainder is excluded because it could not be tied to a CoCo use case owned by the same partner. Do NOT say the limitation is account-name matching — accounts are matched on Salesforce account ID.
 
 FORMATTING RULES
 - Markdown table only where specified above; everywhere else use bullets
