@@ -2,15 +2,15 @@
 
 Two stacked views built on the Tier-1 (account-anchored) + Tier-2 (identity-linked) resolved
 partner-consultant pipeline (SP_REFRESH_PARTNER_CONSULTANTS, refreshed daily):
-  1. Customer engagements - activity partner consultants drive in customer accounts (with CoCo-attached UCs).
-  2. Partner-own account usage - the partner's internal CoCo adoption.
+Shows the customer engagements partner consultants drive in customer accounts that have
+CoCo-attached use cases.
 Honors the sidebar Region / Partner / date filters.
 """
 import pandas as pd
 import streamlit as st
 
 from utils.queries import (get_pc_activity, get_pc_coco_uc_engagements, get_pc_top_skills,
-                           get_pc_totals, get_pc_usecase_counts)
+                           get_pc_usecase_counts)
 from utils import resolve_partner_filter, PARTNER_RENAME_MAP, canonical_partner
 
 conn = st.session_state.conn
@@ -116,53 +116,10 @@ else:
     st.download_button("Download (CSV)", show1.to_csv(index=False).encode("utf-8"),
                        file_name="partner_consultants_customer.csv", mime="text/csv", key="pc_dl1")
 
-st.divider()
-
-# =============================== View 2 ====================================
-st.subheader("2. Partner-own account usage")
-st.caption("The partner's internal CoCo adoption - consultants using CoCo inside the partner's own account.")
-
-act2 = _norm_partner(get_pc_activity(conn, "Partner", region, partner_list, start_date, end_date))
-tot = _norm_partner(get_pc_totals(conn, region, partner_list))
-sk2 = _norm_partner(get_pc_top_skills(conn, "Partner", region, partner_list, start_date, end_date))
-ucc2 = _norm_partner(get_pc_usecase_counts(conn))
-
-if len(act2) == 0:
-    st.info("No partner-own-account consultant activity for the current filters.")
-else:
-    v2 = tot.merge(act2, on="PARTNER_NAME", how="left", suffixes=("", "_act"))
-    v2 = v2.merge(sk2, on="PARTNER_NAME", how="left")
-    v2 = v2.merge(ucc2[["PARTNER_NAME", "ACTIVE_COCO_UCS"]], on="PARTNER_NAME", how="left")
-    for c in ["CONSULTANTS", "TOKENS", "PROMPTS", "ACTIVE_COCO_UCS"]:
-        v2[c] = v2[c].fillna(0)
-    v2["ACTIVE_COCO_UCS"] = v2["ACTIVE_COCO_UCS"].astype(int)
-    v2 = v2.sort_values("TOKENS", ascending=False)
-
-    k = st.columns(3)
-    k[0].metric("Partners", f"{v2['PARTNER_NAME'].nunique():,}")
-    k[1].metric("Total consultants", f"{int(v2['TOTAL_CONSULTANTS'].sum()):,}")
-    k[2].metric("Partner-acct tokens", f"{int(v2['TOKENS'].sum())/1e9:.2f}B")
-
-    show2 = v2[["PARTNER_NAME", "TOTAL_CONSULTANTS", "ACTIVE_COCO_UCS",
-                "TOKENS", "PROMPTS", "TOP_SKILLS", "WOW_PCT"]]
-    st.dataframe(
-        show2.style.map(_wow_bg, subset=["WOW_PCT"]),
-        use_container_width=True, hide_index=True, height=460,
-        column_config={
-            "PARTNER_NAME": st.column_config.TextColumn("Partner", width="medium"),
-            "TOTAL_CONSULTANTS": st.column_config.NumberColumn("# Total consultants", format="%d"),
-            "ACTIVE_COCO_UCS": st.column_config.NumberColumn("Active CoCo UCs", format="%d"),
-            "TOKENS": st.column_config.NumberColumn("Tokens", format="%d"),
-            "PROMPTS": st.column_config.NumberColumn("Prompts", format="%d"),
-            "TOP_SKILLS": st.column_config.TextColumn("Top skills"),
-            "WOW_PCT": st.column_config.NumberColumn("Tokens 7d change", format="%+.1f%%", help="Last 7 days vs prior 7 days."),
-        })
-    st.download_button("Download (CSV)", show2.to_csv(index=False).encode("utf-8"),
-                       file_name="partner_consultants_partner.csv", mime="text/csv", key="pc_dl2")
 
 st.session_state.ask_ai_context = (
     f"Current page: Partner Consultants (Tier-1+Tier-2 resolved). Region: {region}. Period: {start_date} to {end_date}.\n"
-    "Two views: customer-engagement activity and partner-own-account usage per partner."
+    "Shows customer-engagement activity per partner."
 )
 
 # ============================ Summary Prompt ===============================
