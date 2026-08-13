@@ -79,49 +79,65 @@ Stage:      @TEMP.COCO_PARTNER_ADOPTION.STREAMLIT/COCO_USECASE_INSIGHTS/
 
 ## Deployment
 
+Deploys go through the Snowflake CLI (`snow`), which bundles the artifacts listed
+under each entity in `snowflake.yml`, uploads them to the stage, and recreates the
+app. Both the PROD and DEV apps are defined as entities in `snowflake.yml`, so the
+entity ID is required — without it the CLI errors out because two Streamlits are
+defined.
+
 ### Deploy to PROD
 
-Upload files to the Snowflake stage and recreate the Streamlit app:
-
-```sql
--- Upload all source files
-PUT 'file:///path/to/streamlit_app.py' @TEMP.COCO_PARTNER_ADOPTION.STREAMLIT/COCO_USECASE_INSIGHTS/ AUTO_COMPRESS=FALSE OVERWRITE=TRUE;
-PUT 'file:///path/to/utils/queries.py' @TEMP.COCO_PARTNER_ADOPTION.STREAMLIT/COCO_USECASE_INSIGHTS/utils/ AUTO_COMPRESS=FALSE OVERWRITE=TRUE;
-PUT 'file:///path/to/utils/cortex_helpers.py' @TEMP.COCO_PARTNER_ADOPTION.STREAMLIT/COCO_USECASE_INSIGHTS/utils/ AUTO_COMPRESS=FALSE OVERWRITE=TRUE;
-PUT 'file:///path/to/utils/__init__.py' @TEMP.COCO_PARTNER_ADOPTION.STREAMLIT/COCO_USECASE_INSIGHTS/utils/ AUTO_COMPRESS=FALSE OVERWRITE=TRUE;
-PUT 'file:///path/to/utils/config.py' @TEMP.COCO_PARTNER_ADOPTION.STREAMLIT/COCO_USECASE_INSIGHTS/utils/ AUTO_COMPRESS=FALSE OVERWRITE=TRUE;
--- (repeat for each app_pages/*.py file)
-
--- Recreate the app
-CREATE OR REPLACE STREAMLIT TEMP.COCO_PARTNER_ADOPTION.COCO_USECASE_INSIGHTS
-    FROM '@TEMP.COCO_PARTNER_ADOPTION.STREAMLIT/COCO_USECASE_INSIGHTS/'
-    MAIN_FILE = 'streamlit_app.py'
-    QUERY_WAREHOUSE = 'COCO_PARTNER_ADOPTION_WH';
+```bash
+snow streamlit deploy coco_usecase_insights \
+  --project . \
+  --replace \
+  --connection snowhouse \
+  --role SALES_ENGINEER \
+  --warehouse COCO_PARTNER_ADOPTION_WH \
+  --database TEMP \
+  --schema COCO_PARTNER_ADOPTION
 ```
 
 ### Deploy to DEV
 
-Same steps as PROD but targeting the DEV schema and stage:
-
-```sql
--- Upload all source files to DEV stage
-PUT 'file:///path/to/streamlit_app.py' @TEMP.COCO_PARTNER_ADOPTION_DEV.STREAMLIT/ AUTO_COMPRESS=FALSE OVERWRITE=TRUE;
-PUT 'file:///path/to/utils/queries.py' @TEMP.COCO_PARTNER_ADOPTION_DEV.STREAMLIT/utils/ AUTO_COMPRESS=FALSE OVERWRITE=TRUE;
-PUT 'file:///path/to/utils/cortex_helpers.py' @TEMP.COCO_PARTNER_ADOPTION_DEV.STREAMLIT/utils/ AUTO_COMPRESS=FALSE OVERWRITE=TRUE;
-PUT 'file:///path/to/utils/__init__.py' @TEMP.COCO_PARTNER_ADOPTION_DEV.STREAMLIT/utils/ AUTO_COMPRESS=FALSE OVERWRITE=TRUE;
-PUT 'file:///path/to/utils/config.py' @TEMP.COCO_PARTNER_ADOPTION_DEV.STREAMLIT/utils/ AUTO_COMPRESS=FALSE OVERWRITE=TRUE;
--- (repeat for each app_pages/*.py file)
-
--- Recreate the DEV app
-CREATE OR REPLACE STREAMLIT TEMP.COCO_PARTNER_ADOPTION_DEV.COCO_USECASE_INSIGHTS_DEV
-    FROM '@TEMP.COCO_PARTNER_ADOPTION_DEV.STREAMLIT'
-    MAIN_FILE = 'streamlit_app.py'
-    QUERY_WAREHOUSE = 'COCO_PARTNER_ADOPTION_WH'
-    TITLE = 'CoCo Use Case Intelligence (DEV)';
+```bash
+snow streamlit deploy coco_usecase_insights_dev \
+  --project . \
+  --replace \
+  --connection snowhouse \
+  --role SALES_ENGINEER \
+  --warehouse COCO_PARTNER_ADOPTION_WH \
+  --database TEMP \
+  --schema COCO_PARTNER_ADOPTION_DEV
 ```
 
-> **Note:** The app auto-detects its environment from `CURRENT_SCHEMA()` at runtime.
-> No manual config is needed — DEV app automatically routes to `TEMP.COCO_PARTNER_ADOPTION_DEV`.
+### Notes and gotchas
+
+- **Clear `__pycache__` first.** The bundle includes everything under `utils/` and
+  `app_pages/`, so locally generated `.pyc` files get uploaded to the stage. They are
+  gitignored but not deploy-ignored. Run `find . -name __pycache__ -type d -exec rm -rf {} +`
+  before deploying, or pass `--prune` to drop stage files that no longer exist locally.
+- **`--replace` only adds and overwrites.** It never deletes stage files. Use `--prune`
+  to remove orphans.
+- **`scripts/deploy.sh` is currently broken.** It passes `--file`, which Snowflake CLI
+  3.x removed, and omits the entity ID. Use the commands above until it is updated.
+- **`snowflake.dev.yml` is legacy.** It uses the old top-level `streamlit:` format and was
+  only reachable via the removed `--file` flag. The DEV target now lives in `snowflake.yml`
+  as the `coco_usecase_insights_dev` entity.
+- The app auto-detects its environment from `CURRENT_SCHEMA()` at runtime, so no config
+  change is needed — the DEV app automatically routes to `TEMP.COCO_PARTNER_ADOPTION_DEV`.
+
+### Run locally
+
+`.streamlit/secrets.toml` holds the connection config (`authenticator = "externalbrowser"`).
+Set `user` to your own Snowflake login or SSO fails with *"the user you were trying to
+authenticate as differs from the user currently logged in at the IDP"*.
+
+```bash
+streamlit run streamlit_app.py --server.port 8512
+```
+
+Imported modules under `utils/` are not hot-reloaded — restart the server after editing them.
 
 ## Dependencies
 
