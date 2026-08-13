@@ -87,6 +87,10 @@ act = _norm_partner(get_pc_activity(conn, "Customer", region, partner_list, star
 sk = _norm_partner(get_pc_top_skills(conn, "Customer", region, partner_list, start_date, end_date))
 ucc = _norm_partner(get_pc_usecase_counts(conn))
 
+_v1_totals = "(no customer-account consultant activity for this filter)"
+_v1_ctx = "(none)"
+_mom_ctx = "(no momentum data)"
+
 if len(act) == 0:
     st.info("No customer-account consultant activity for the current filters.")
 else:
@@ -115,6 +119,29 @@ else:
         })
     st.download_button("Download (CSV)", show1.to_csv(index=False).encode("utf-8"),
                        file_name="partner_consultants_customer.csv", mime="text/csv", key="pc_dl1")
+
+    # Exactly the figures rendered in the three tiles and the table above, so the
+    # summary and the page can never disagree.
+    _v1_totals = (
+        f"Partners active in customer accounts: {v1['PARTNER_NAME'].nunique():,}\n"
+        f"Consultants in customer accounts: {int(v1['CONSULTANTS'].sum()):,}\n"
+        f"Customer-account tokens: {int(v1['TOKENS'].sum()):,}\n"
+        f"Prompts: {int(v1['PROMPTS'].sum()):,}\n"
+        f"CoCo-attached use cases across these partners: {int(v1['COCO_UCS'].sum()):,}"
+    )
+    _v1 = show1.copy()
+    _v1["TOKEN_SHARE_PCT"] = (_v1["TOKENS"] * 100.0 / max(int(v1["TOKENS"].sum()), 1)).round(1)
+    # Missing skills must read as absent, not as NaN, or the model renders "NaN"
+    # in the summary table or invents a skill to fill the gap.
+    _v1["TOP_SKILLS"] = _v1["TOP_SKILLS"].fillna("(not captured)")
+    _v1_ctx = _v1.to_string(index=False, max_colwidth=70)
+
+    # Momentum is only meaningful on a material token base: a +6,000% swing on
+    # 300K tokens is noise. Restrict the eligible set in code, because the model
+    # ignores a written "only if material" instruction.
+    _mom = _v1.head(8)[["PARTNER_NAME", "TOKENS", "WOW_PCT"]].dropna(subset=["WOW_PCT"])
+    _mom_ctx = (_mom.sort_values("WOW_PCT", ascending=False).to_string(index=False)
+                if len(_mom) else "(no momentum data)")
 
 
 st.session_state.ask_ai_context = (
@@ -185,17 +212,39 @@ else:
 data_context = f"""SCOPE: Region {region} | Period {start_date} to {end_date}
 Partner filter: {', '.join(selected_partners) if selected_partners else 'all partners'}
 
+=======================================================================
+PRIMARY BASIS — SECTION 1 RESULTS: "Customer engagements — activity partner
+consultants drive". These are the exact figures shown on the page. The exec
+summary headline numbers MUST come from here, so the readout and the page agree.
+=======================================================================
+
+SECTION 1 TOTALS — use these verbatim for all headline figures.
+{_v1_totals}
+
+SECTION 1 PER-PARTNER TABLE (as displayed; TOKEN_SHARE_PCT = share of customer-account
+tokens; TOP_SKILLS = what consultants invoked; WOW_PCT = tokens last 7d vs prior 7d)
+{_v1_ctx}
+
+MOMENTUM — the ONLY partners whose week-over-week change may be quoted. These are the
+top 8 by tokens, so the percentage sits on a material base.
+{_mom_ctx}
+
+=======================================================================
+SUPPORTING DETAIL — a STRICT-ATTRIBUTION SUBSET of the above, used only for
+account names, region and consultant depth. These totals are SMALLER than the
+Section 1 totals. Never present a figure from this subset as an overall total.
+=======================================================================
+
 ATTRIBUTION: strict. A row below means consultants from partner P were active in customer
 account A, AND partner P owns at least one CoCo-attached use case in account A. Accounts are
-matched on Salesforce account ID, not name. Coverage is still partial: the limit is the strict
+matched on Salesforce account ID, not name. Coverage is partial: the limit is the strict
 partner requirement, because the partner whose consultants work in an account is often not the
 partner named on that account's CoCo use case.
 
-PRE-COMPUTED TOTALS — use these verbatim. Do NOT sum columns yourself and do NOT compute
-any percentage that is not already given here.
+SUBSET TOTALS (a subset — not overall totals)
 {_eng_totals}
 
-PER-PARTNER ROLLUP (TOKEN_SHARE_PCT = share of the matched engagement tokens above)
+SUBSET PER-PARTNER ROLLUP (TOKEN_SHARE_PCT = share of the matched subset tokens)
 {_partner_ctx}
 
 ENGAGEMENT DETAIL — one row per partner + customer account.
@@ -212,48 +261,45 @@ actually did inside the tool, most used first)
 {_skills_ctx}
 """
 
-default_prompt = """You are writing a CEO-level readout on what partner consultants are actually DOING inside Snowflake customer accounts that have Cortex Code (CoCo) attached use cases.
+default_prompt = """You are writing an EXECUTIVE SUMMARY on what partner consultants are actually DOING inside Snowflake customer accounts that have Cortex Code (CoCo) attached use cases.
 
 Audience: the CEO and VPs. They have 60 seconds. Be specific and concrete. No hedging, no filler, no restating the methodology.
 
 RULES ON NUMBERS
-- Every total, count and percentage MUST be copied verbatim from PRE-COMPUTED TOTALS or from the TOKEN_SHARE_PCT column.
+- All headline figures (partners, consultants, tokens, prompts, CoCo-attached use cases) MUST be copied verbatim from SECTION 1 TOTALS. These are the numbers on the page, so your summary must match them.
+- Use the SUPPORTING DETAIL subset ONLY for customer account names, theatre/region and per-account consultant depth. Its totals are smaller — never present them as overall totals.
 - Do NOT sum columns, do NOT compute your own shares or averages, do NOT invent partners, accounts, consultants, skills or figures.
 - Name real partners and real customer accounts from the data. Never invent an account name.
 
 WHAT THE DATA MEANS
-- SCOPE: this briefing covers ONLY section 1 of the page, "Customer engagements — activity partner consultants drive". Every figure is consultant activity inside CUSTOMER accounts. Say nothing about the partner's own internal adoption, partner-own-account usage, or their internal consultant bench — that is a different section and its data is not provided here.
-- Attribution is strict: the partner whose consultants are active also owns a CoCo-attached use case in that same account.
+- Every figure is consultant activity inside CUSTOMER accounts. Say nothing about the partner's own internal adoption or their internal consultant bench — that data is not provided here.
+- TOP_SKILLS / the skills list = what the consultants actually invoked inside CoCo.
 - WORKLOADS and TECH_USE_CASE = the kind of work the engagement covers (e.g. "DE: Ingestion", "AI: Agents", "Analytics: Business Intelligence").
-- The skills list = what the consultants actually invoked inside CoCo.
-- Tokens = depth of CoCo usage. TOKEN_SHARE_PCT = that partner's share of the matched engagement tokens.
-
-Follow this EXACT structure.
-
-CONSULTANT COUNTS: the data gives consultants PER ENGAGEMENT only. Quote individual engagement figures ("43 consultants at EY - Client Technologies") but never state a total or average consultant count across engagements — the same person can appear in more than one account, so summing would be wrong.
+- Tokens = depth of CoCo usage. WOW_PCT = tokens last 7 days vs prior 7 days, i.e. momentum.
 
 Produce EXACTLY three things, in this order, and nothing else.
 
-## SUMMARY
+## EXECUTIVE SUMMARY
 A single paragraph of 3 sentences, or 4 at the absolute maximum. No bullets, no sub-headings, no lists. This is about WHAT THE CONSULTANTS ARE DOING inside customer accounts — not a financial recap. Assign the content as follows:
-1. What kind of customer engagements these are: name the dominant WORKLOADS / TECH_USE_CASE categories and how many engagements and CoCo use cases sit behind them, using PRE-COMPUTED TOTALS for the counts.
-2. Depth of the partner consultants in these customers: name the two or three accounts with the deepest presence, quoting consultants and active days for each from the engagement detail, and the tokens they consumed.
-3. What they actually did in the tool: name at least three specific CoCo skills from the skills block, and which partners used them.
-4. Where this work sits: name the leading theatres or regions by engagements and consultants from the WHERE THE WORK SITS block.
+1. The headline from SECTION 1 TOTALS: how many partners have consultants active in customer accounts, how many consultants, the token volume, and how many CoCo-attached use cases they sit against.
+2. What kind of work it is: name the dominant WORKLOADS / TECH_USE_CASE categories, and name at least three specific CoCo skills consultants invoked.
+3. Depth: name the two or three customer accounts with the deepest partner presence, quoting consultants and active days for each from the supporting detail. Depth means MANY consultants sustained over MANY active days — rank on those two columns. Never call an account "deep" when it has only a handful of consultants or a couple of active days, however many tokens it burned.
+4. Where the work sits: the leading theatres or regions. You may add a momentum call-out, but ONLY using a partner listed in the MOMENTUM block. Quoting a week-over-week percentage for any partner outside that block is a factual error, because the swing sits on an immaterial token base.
 Do NOT lead with EACV or dollar figures — mention money only if a sentence has room left. Do not simply restate the table.
 
 ## WHO IS DRIVING IT
-| Partner | Engagements | CoCo UCs | Deployed | EACV | Tokens | Share of tokens |
-- One row per partner from the PER-PARTNER ROLLUP, sorted by tokens descending. Use TOKEN_SHARE_PCT for the last column.
+| Partner | CoCo UCs | Consultants | Tokens | Share of tokens | Key skills | 7d change |
+- One row per partner from the SECTION 1 PER-PARTNER TABLE, sorted by tokens descending. Use TOKEN_SHARE_PCT for the share column and WOW_PCT for the 7d change.
 - Table only. Write NO narrative sentences after this table.
 
 ## COVERAGE NOTE
-One italic sentence stating what share of customer-account tokens could be matched to a CoCo-attached use case, using the figure from PRE-COMPUTED TOTALS, and that the unmatched remainder is excluded because it could not be tied to a CoCo use case owned by the same partner. Do NOT say the limitation is account-name matching — accounts are matched on Salesforce account ID.
+One italic sentence stating what share of customer-account tokens could be matched to a CoCo-attached use case owned by the same partner, using the figure from the SUBSET TOTALS, and noting that account-level and regional detail is drawn from that matched portion only. Do NOT say the limitation is account-name matching — accounts are matched on Salesforce account ID.
 
 FORMATTING RULES
-- HARD LIMIT: the SUMMARY paragraph is at most 4 sentences and at most 130 words. Count them before you answer. Being shorter is better than being complete.
+- HARD LIMIT: the EXECUTIVE SUMMARY paragraph is at most 4 sentences and at most 130 words. Count them before you answer. Being shorter is better than being complete.
 - Do NOT add any section that is not listed above. No "What the work is", no "Notable engagements", no "So what", no closing remarks.
-- Numbers with commas; tokens may use M suffix; EACV as $XK or $X.XM
+- Numbers with commas; tokens may use M or B suffix; EACV as $XK or $X.XM
+- If TOP_SKILLS reads "(not captured)" for a partner, leave the skills cell as "n/a". Never write "NaN" and never guess a skill.
 - Direct, declarative, executive tone
 - No greeting, no sign-off, no methodology paragraph"""
 

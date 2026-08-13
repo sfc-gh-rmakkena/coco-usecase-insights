@@ -22,7 +22,8 @@ class Shim:
 
 conn = Shim()
 
-from utils.queries import get_pc_coco_uc_engagements, get_pc_top_skills
+from utils.queries import (get_pc_coco_uc_engagements, get_pc_top_skills,
+                           get_pc_activity, get_pc_usecase_counts)
 from utils.cortex_helpers import cortex_complete
 
 partners = resolve_partner_filter(list(PARTNER_GROUPS))
@@ -60,11 +61,48 @@ totals = (f"CoCo-attached engagements: {len(_e)}\n"
           f"Tokens: {int(tot_tokens):,}\n"
           f"Consultants: {int(_e.CONSULTANTS.sum())}")
 
+# Section 1 (what the page displays) - the PRIMARY basis
+act = get_pc_activity(conn, "Customer", REGION, partners, START, END)
+act["PARTNER_NAME"] = act["PARTNER_NAME"].map(canonical_partner).replace(PARTNER_RENAME_MAP)
+ucc = get_pc_usecase_counts(conn)
+ucc["PARTNER_NAME"] = ucc["PARTNER_NAME"].map(canonical_partner).replace(PARTNER_RENAME_MAP)
+v1 = act.merge(_sk, on="PARTNER_NAME", how="left")
+v1 = v1.merge(ucc.groupby("PARTNER_NAME", as_index=False)["COCO_UCS"].sum(), on="PARTNER_NAME", how="left")
+v1["COCO_UCS"] = v1["COCO_UCS"].fillna(0).astype(int)
+v1 = v1.sort_values("TOKENS", ascending=False)
+_v1_totals = (
+    f"Partners active in customer accounts: {v1['PARTNER_NAME'].nunique():,}\n"
+    f"Consultants in customer accounts: {int(v1['CONSULTANTS'].sum()):,}\n"
+    f"Customer-account tokens: {int(v1['TOKENS'].sum()):,}\n"
+    f"Prompts: {int(v1['PROMPTS'].sum()):,}\n"
+    f"CoCo-attached use cases across these partners: {int(v1['COCO_UCS'].sum()):,}"
+)
+print("\n=== SECTION 1 TOTALS (must match page tiles) ===")
+print(_v1_totals)
+v1["TOP_SKILLS"] = v1["TOP_SKILLS"].fillna("(not captured)")
+_v1_ctx = v1.to_string(index=False, max_colwidth=70)
+_mom = v1.head(8)[["PARTNER_NAME", "TOKENS", "WOW_PCT"]].dropna(subset=["WOW_PCT"])
+_mom_ctx = _mom.sort_values("WOW_PCT", ascending=False).to_string(index=False)
+print("\n=== MOMENTUM ELIGIBLE (top 8 by tokens) ===")
+print(_mom_ctx)
+
 src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
                         "..", "app_pages", "partner_consultants.py")).read()
 spec = re.search(r'default_prompt = f?"""(.*?)"""', src, re.S).group(1)
 
-data_context = f"""PRE-COMPUTED TOTALS
+data_context = f"""PRIMARY BASIS - SECTION 1 RESULTS (page figures; headline numbers MUST come from here)
+
+SECTION 1 TOTALS - use verbatim
+{_v1_totals}
+
+SECTION 1 PER-PARTNER TABLE
+{_v1_ctx}
+
+MOMENTUM - the ONLY partners whose week-over-week change may be quoted (top 8 by tokens)
+{_mom_ctx}
+
+SUPPORTING DETAIL - STRICT-ATTRIBUTION SUBSET (smaller; for account names, region, depth only)
+SUBSET TOTALS
 {totals}
 
 ENGAGEMENT DETAIL
