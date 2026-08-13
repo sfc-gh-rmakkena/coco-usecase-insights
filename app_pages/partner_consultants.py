@@ -260,22 +260,24 @@ Follow this EXACT structure.
 
 ## THE HEADLINE
 Exactly 3 sentences, no bullets.
-1. How many CoCo-attached engagements, how many partners, and the token volume in them — verbatim from PRE-COMPUTED TOTALS.
-2. What kind of work dominates, based on WORKLOADS and TECH_USE_CASE.
+1. State, verbatim from PRE-COMPUTED TOTALS: how many CoCo-attached engagements, how many partners, how many customer accounts, the token volume, and how many of the use cases are already deployed.
+2. What kind of work dominates, naming the WORKLOADS / TECH_USE_CASE categories AND the specific CoCo skills consultants invoked most from the skills block.
 3. The single most important pattern a CEO should take away.
+
+CONSULTANT COUNTS: the data gives consultants PER ENGAGEMENT only. Quote individual engagement figures ("43 consultants at EY - Client Technologies") but never state a total or average consultant count across engagements — the same person can appear in more than one account, so summing would be wrong.
 
 ## WHAT THE WORK IS
 Exactly 3 bullets. Each bullet = one type of work, not one partner.
 - Format: "**[Work type]** — [which partners and accounts, with token figures]"
 - Group by WORKLOADS / TECH_USE_CASE (Data Engineering, AI, Analytics, Platform, Applications & Collaboration). Pick the 3 work types with the most tokens behind them.
 - Assign each engagement to exactly ONE work type — its dominant one. Never mention the same engagement's tokens under two work types, and never restate a token figure you have already attributed.
-- Name at most 3 partner+account pairs per bullet. One short clause each, not a list of skills.
-- Where the skills data supports it, name at most 2 skills per bullet to say what they actually did in the tool.
+- Name at most 3 partner+account pairs per bullet, each with its consultant count from the engagement detail. One short clause each.
+- Every bullet MUST name at least one specific CoCo skill from the skills block to show what the consultants actually did in the tool, not just what the use case was about. If no skill data exists for those partners, say so rather than inventing one.
 
 ## WHO IS DRIVING IT
 | Partner | Engagements | CoCo UCs | Deployed | EACV | Tokens | Share of tokens |
 - One row per partner from the PER-PARTNER ROLLUP, sorted by tokens descending. Use TOKEN_SHARE_PCT for the last column.
-- After the table, exactly 2 sentences: which partners are concentrated in a few deep engagements versus spread thin across many, and which have high token consumption but nothing deployed yet.
+- After the table, exactly 2 sentences: which partners are concentrated in a few deep engagements versus spread thin across many, and which have high token consumption but nothing deployed yet. Use the Deployed column to separate delivered work from work still in flight.
 
 ## NOTABLE ENGAGEMENTS
 3 bullets, the three highest-token engagements.
