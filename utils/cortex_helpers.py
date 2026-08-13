@@ -107,34 +107,50 @@ def run_cortex_agent(question: str, agent_fqn: str = "TEMP.COCO_PARTNER_ADOPTION
             None,
             60000,
         )
-        # SiS wraps the SSE content as a string in resp["content"]
+        # SiS returns content as a JSON array of event objects:
+        # [{"event": "response.thinking.delta", "data": {...}}, ..., {"event": "response", "data": {...}}]
         raw = resp.get("content", "") if isinstance(resp, dict) else str(resp)
-        event_type = None
         final_response = None
         delta_parts = []
         sql_text = None
         sql_result_text = None
 
-        for line in raw.splitlines():
-            line = line.strip()
-            if line.startswith("event: "):
-                event_type = line[7:].strip()
-                continue
-            if not line.startswith("data: "):
-                continue
-            raw_json = line[6:].strip()
-            if raw_json == "[DONE]":
-                break
-            try:
-                data = json.loads(raw_json)
-            except json.JSONDecodeError:
-                continue
-            if event_type == "response":
-                final_response = data
-            elif event_type == "message.delta":
-                for item in data.get("delta", {}).get("content", []):
-                    if item.get("type") == "text":
-                        delta_parts.append(item.get("text", ""))
+        # Try JSON array format (SiS native format)
+        try:
+            events = json.loads(raw) if isinstance(raw, str) else raw
+            if isinstance(events, list):
+                for event in events:
+                    evt = event.get("event", "")
+                    data = event.get("data", {})
+                    if evt == "response":
+                        final_response = data
+                    elif evt == "message.delta":
+                        for item in data.get("delta", {}).get("content", []):
+                            if item.get("type") == "text":
+                                delta_parts.append(item.get("text", ""))
+        except (json.JSONDecodeError, TypeError, AttributeError):
+            # Fallback: try SSE line format
+            event_type = None
+            for line in (raw or "").splitlines():
+                line = line.strip()
+                if line.startswith("event: "):
+                    event_type = line[7:].strip()
+                    continue
+                if not line.startswith("data: "):
+                    continue
+                raw_json = line[6:].strip()
+                if raw_json == "[DONE]":
+                    break
+                try:
+                    data = json.loads(raw_json)
+                except json.JSONDecodeError:
+                    continue
+                if event_type == "response":
+                    final_response = data
+                elif event_type == "message.delta":
+                    for item in data.get("delta", {}).get("content", []):
+                        if item.get("type") == "text":
+                            delta_parts.append(item.get("text", ""))
 
         if final_response:
             answer_parts = []
@@ -150,7 +166,7 @@ def run_cortex_agent(question: str, agent_fqn: str = "TEMP.COCO_PARTNER_ADOPTION
             return {"answer": "".join(answer_parts).strip(), "sql": sql_text, "sql_result": sql_result_text}
 
         fallback = "".join(delta_parts).strip()
-        return {"answer": fallback or str(resp)[:800], "sql": sql_text, "sql_result": sql_result_text}
+        return {"answer": fallback or "No response from agent.", "sql": sql_text, "sql_result": sql_result_text}
 
     except ImportError:
         pass  # not in SiS
