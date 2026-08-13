@@ -11,7 +11,7 @@ import streamlit as st
 
 from utils.queries import (get_pc_activity, get_pc_coco_uc_engagements, get_pc_top_skills,
                            get_pc_totals, get_pc_usecase_counts)
-from utils import resolve_partner_filter, PARTNER_RENAME_MAP
+from utils import resolve_partner_filter, PARTNER_RENAME_MAP, canonical_partner
 
 conn = st.session_state.conn
 _reg = st.session_state.get("selected_region", "Global")
@@ -53,7 +53,9 @@ def _norm_partner(df):
     if len(df) == 0 or "PARTNER_NAME" not in df.columns:
         return df
     df = df.copy()
-    df["PARTNER_NAME"] = df["PARTNER_NAME"].replace(PARTNER_RENAME_MAP)
+    # canonical_partner also fixes case drift (roster 'accenture' -> 'Accenture'), which
+    # otherwise both displays oddly and fails to merge with the use-case counts.
+    df["PARTNER_NAME"] = df["PARTNER_NAME"].map(canonical_partner).replace(PARTNER_RENAME_MAP)
     if not df["PARTNER_NAME"].duplicated().any():
         return df
 

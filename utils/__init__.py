@@ -178,6 +178,27 @@ PARTNER_RENAME_MAP = {
 }
 # Results in: {'Ernst & Young (EY)': 'EY', 'IBM Consulting': 'IBM', 'Kipi.ai': 'kipi.ai', 'LTI Mindtree': 'LTM'}
 
+# Case-insensitive lookup from any known spelling to its canonical display name.
+# The partner-consultant pipeline stores some names in a different case than the
+# use-case taxonomy — e.g. the roster has 'accenture' while use cases have
+# 'Accenture' — which made an exact-match filter return nothing for that partner.
+PARTNER_CANONICAL_BY_LOWER = {}
+for _key, _names in PARTNER_ALIASES.items():
+    # Group entries ('--- GSIs ---') list their member partners; non-group entries map a
+    # canonical name to its alternate spellings. Both need to be in the lookup, or
+    # partners that only appear inside a group (e.g. Accenture) would be missed.
+    _candidates = list(_names) if _key.startswith('---') else [_key] + list(_names)
+    for _name in _candidates:
+        PARTNER_CANONICAL_BY_LOWER.setdefault(
+            _name.lower(), PARTNER_RENAME_MAP.get(_name, _name))
+
+
+def canonical_partner(name):
+    """Map any known spelling/casing of a partner name to its canonical form."""
+    if name is None:
+        return name
+    return PARTNER_CANONICAL_BY_LOWER.get(str(name).lower(), name)
+
 
 def resolve_partner_filter(partner_names):
     """Return list of all partner names to match for given sidebar selections.

@@ -2351,8 +2351,11 @@ def _pc_filters(region, partner_names, alias="r"):
     reg = "" if (not region or region == "Global") else f" AND {alias}.PARTNER_REGION = '{region.replace(chr(39),chr(39)+chr(39))}'"
     pf = ""
     if partner_names:
-        pl = "','".join(p.replace("'", "''") for p in partner_names)
-        pf = f" AND {alias}.PARTNER_NAME IN ('{pl}')"
+        # Case-insensitive: the consultant pipeline stores some partners in a different
+        # case than the sidebar taxonomy (roster 'accenture' vs sidebar 'Accenture'),
+        # which made an exact IN (...) match return zero rows for those partners.
+        pl = "','".join(p.replace("'", "''").upper() for p in partner_names)
+        pf = f" AND UPPER({alias}.PARTNER_NAME) IN ('{pl}')"
     return reg, pf
 
 
@@ -2458,7 +2461,7 @@ def get_pc_coco_uc_engagements(_conn, region=None, partner_names=None, start_dat
     FROM a
     JOIN uc
       ON a.SALESFORCE_ACCOUNT_NAME = uc.ACCOUNT_NAME
-     AND a.PARTNER_NAME = uc.PARTNER_NAME
+     AND UPPER(a.PARTNER_NAME) = UPPER(uc.PARTNER_NAME)
     ORDER BY a.TOKENS DESC
     """
     import pandas as pd
