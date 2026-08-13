@@ -8,6 +8,62 @@ def cortex_complete(conn, model, prompt):
     return result.iloc[0]['RESPONSE'] if len(result) > 0 else ""
 
 
+def _format_result_set(rs) -> str:
+    """Render a Cortex Agent ResultSet (SQL API shape) as plain text."""
+    if not isinstance(rs, dict):
+        return ""
+    meta = rs.get("resultSetMetaData") or {}
+    cols = [c.get("name", "") for c in (meta.get("rowType") or [])]
+    rows = rs.get("data") or []
+    lines = []
+    if cols:
+        lines.append(" | ".join(cols))
+    for row in rows[:20]:
+        lines.append(" | ".join("" if v is None else str(v) for v in row))
+    if len(rows) > 20:
+        lines.append(f"... ({len(rows)} rows total)")
+    return "\n".join(lines)
+
+
+def _extract_tool_output(content_items):
+    """Pull (sql, result_text) out of an agent response `content` array.
+
+    Documented shape (Cortex Agents Run API — MessageContentItem/tool_result):
+        {"type": "tool_result",
+         "tool_result": {"content": [{"type": "json",
+                                      "json": {"sql": ..., "result_set": {...}}}]}}
+
+    Since Apr 2026 the tool type is `system_execute_sql` (previously
+    `cortex_analyst_text_to_sql`); both nest the payload identically. Also
+    tolerates a flattened `content` and a `text`/`answer` json field so older
+    payload variants still yield something.
+    """
+    sql = None
+    result_text = None
+    for item in content_items or []:
+        if item.get("type") not in ("tool_result", "tool_results"):
+            continue
+        tr = item.get("tool_result") or item.get("tool_results") or item
+        inner = tr.get("content") if isinstance(tr, dict) else None
+        if not isinstance(inner, list):
+            inner = item.get("content") if isinstance(item.get("content"), list) else []
+        for c in inner:
+            if c.get("type") == "text" and not result_text:
+                result_text = c.get("text")
+                continue
+            payload = c.get("json")
+            if not isinstance(payload, dict):
+                continue
+            sql = payload.get("sql", sql)
+            if payload.get("result_set") is not None:
+                rendered = _format_result_set(payload["result_set"])
+                if rendered:
+                    result_text = rendered
+            elif payload.get("text") and not result_text:
+                result_text = payload["text"]
+    return sql, result_text
+
+
 def _parse_agent_sse(response) -> dict:
     """Parse SSE stream from Cortex Agent REST API.
 
@@ -61,12 +117,7 @@ def _parse_agent_sse(response) -> dict:
         for item in final_response.get("content", []):
             if item.get("type") == "text":
                 answer_parts.append(item.get("text", ""))
-            elif item.get("type") == "tool_results":
-                for tr in item.get("tool_results", []):
-                    for c in tr.get("content", []):
-                        if c.get("type") == "json" and isinstance(c.get("json"), dict):
-                            sql_text = c["json"].get("sql", sql_text)
-                            sql_result_text = c["json"].get("text", sql_result_text)
+        sql_text, sql_result_text = _extract_tool_output(final_response.get("content", []))
         return {
             "answer": "".join(answer_parts).strip(),
             "sql": sql_text,
@@ -157,12 +208,7 @@ def run_cortex_agent(question: str, agent_fqn: str = "TEMP.COCO_PARTNER_ADOPTION
             for item in final_response.get("content", []):
                 if item.get("type") == "text":
                     answer_parts.append(item.get("text", ""))
-                elif item.get("type") == "tool_results":
-                    for tr in item.get("tool_results", []):
-                        for c in tr.get("content", []):
-                            if c.get("type") == "json" and isinstance(c.get("json"), dict):
-                                sql_text = c["json"].get("sql", sql_text)
-                                sql_result_text = c["json"].get("text", sql_result_text)
+            sql_text, sql_result_text = _extract_tool_output(final_response.get("content", []))
             return {"answer": "".join(answer_parts).strip(), "sql": sql_text, "sql_result": sql_result_text}
 
         fallback = "".join(delta_parts).strip()
@@ -171,7 +217,8 @@ def run_cortex_agent(question: str, agent_fqn: str = "TEMP.COCO_PARTNER_ADOPTION
     except ImportError:
         pass  # not in SiS
     except Exception as e:
-        return {"answer": f"Agent call failed (SiS path): {e}", "sql": None, "sql_result": None}
+        return {"answer": f"Agent call failed (SiS path): {e}", "sql": None, "sql_result": None,
+                "error": True}
 
     # --- Path 2: Local development — direct REST via requests ---
     try:
@@ -198,6 +245,7 @@ def run_cortex_agent(question: str, agent_fqn: str = "TEMP.COCO_PARTNER_ADOPTION
                 "answer": f"Agent API error {response.status_code}: {response.text[:400]}",
                 "sql": None,
                 "sql_result": None,
+                "error": True,
             }
 
         # Collect all raw lines for parsing (also keeps them for debug)
@@ -239,11 +287,7 @@ def run_cortex_agent(question: str, agent_fqn: str = "TEMP.COCO_PARTNER_ADOPTION
             for item in final_response.get("content", []):
                 if item.get("type") == "text":
                     answer_parts.append(item.get("text", ""))
-                elif item.get("type") == "tool_result":
-                    for c in item.get("content", []):
-                        if c.get("type") == "json" and isinstance(c.get("json"), dict):
-                            sql_text = c["json"].get("sql", sql_text)
-                            sql_result_text = c["json"].get("text", sql_result_text)
+            sql_text, sql_result_text = _extract_tool_output(final_response.get("content", []))
             answer = "".join(answer_parts).strip()
             if answer:
                 return {"answer": answer, "sql": sql_text, "sql_result": sql_result_text}
@@ -255,7 +299,9 @@ def run_cortex_agent(question: str, agent_fqn: str = "TEMP.COCO_PARTNER_ADOPTION
 
         # Last resort: return raw lines so user can see what came back
         raw_dump = "\n".join(raw_lines[:30])
-        return {"answer": f"(Could not parse agent response. Raw output below)\n```\n{raw_dump}\n```", "sql": None, "sql_result": None}
+        return {"answer": f"(Could not parse agent response. Raw output below)\n```\n{raw_dump}\n```", "sql": None, "sql_result": None,
+                "error": True}
 
     except Exception as e:
-        return {"answer": f"Agent call failed (local path): {e}", "sql": None, "sql_result": None}
+        return {"answer": f"Agent call failed (local path): {e}", "sql": None, "sql_result": None,
+                "error": True}

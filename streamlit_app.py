@@ -149,15 +149,20 @@ with st.sidebar:
                 response = result.get("answer", "") if isinstance(result, dict) else result
                 st.markdown(response)
 
-        st.session_state.ask_ai_history.append({"role": "user", "content": question})
-        # Store SQL + result in history so follow-up questions can reference previous query context
-        _hist_entry = {"role": "assistant", "content": response}
-        if isinstance(result, dict):
-            if result.get("sql"):
-                _hist_entry["sql"] = result["sql"]
-            if result.get("sql_result"):
-                _hist_entry["sql_result"] = result["sql_result"]
-        st.session_state.ask_ai_history.append(_hist_entry)
+        # Don't persist failed calls: an error string stored as an assistant turn
+        # poisons the context of every following question.
+        if isinstance(result, dict) and result.get("error"):
+            st.warning("That call failed, so it was not added to the chat history.")
+        else:
+            st.session_state.ask_ai_history.append({"role": "user", "content": question})
+            # Store SQL + result in history so follow-up questions can reference previous query context
+            _hist_entry = {"role": "assistant", "content": response}
+            if isinstance(result, dict):
+                if result.get("sql"):
+                    _hist_entry["sql"] = result["sql"]
+                if result.get("sql_result"):
+                    _hist_entry["sql_result"] = result["sql_result"]
+            st.session_state.ask_ai_history.append(_hist_entry)
 
     if history:
         if st.button("Clear chat", key="ask_ai_clear", use_container_width=True):
