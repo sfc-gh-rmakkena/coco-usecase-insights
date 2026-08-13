@@ -2531,7 +2531,9 @@ def get_pc_coco_uc_engagements(_conn, region=None, partner_names=None, start_dat
                SUM(COALESCE(p.USE_CASE_EACV,0)) AS EACV,
                COUNT(DISTINCT CASE WHEN p.IS_DEPLOYED THEN p.USE_CASE_ID END) AS DEPLOYED_UCS,
                LISTAGG(DISTINCT p.TECHNICAL_USE_CASE, ' ; ') AS TECH_USE_CASE,
-               LISTAGG(DISTINCT p.WORKLOADS, ' ; ') AS WORKLOADS
+               LISTAGG(DISTINCT p.WORKLOADS, ' ; ') AS WORKLOADS,
+               MAX(p.THEATER_NAME) AS THEATER_NAME,
+               MAX(p.REGION_NAME) AS REGION_NAME
         FROM {SCHEMA}.PARTNER_COCO_USE_CASES p
         JOIN MDM.MDM_INTERFACES.DIM_USE_CASE d ON d.USE_CASE_ID = p.USE_CASE_ID
         WHERE d.ACCOUNT_ID IS NOT NULL AND p.PARTNER_NAME IS NOT NULL
@@ -2540,6 +2542,7 @@ def get_pc_coco_uc_engagements(_conn, region=None, partner_names=None, start_dat
     SELECT a.PARTNER_NAME, a.ACCOUNT_NAME,
            uc.COCO_UCS, uc.DEPLOYED_UCS, uc.EACV,
            a.CONSULTANTS, a.TOKENS, a.PROMPTS, a.ACTIVE_DAYS,
+           uc.THEATER_NAME, uc.REGION_NAME,
            uc.TECH_USE_CASE, uc.WORKLOADS
     FROM a
     JOIN uc

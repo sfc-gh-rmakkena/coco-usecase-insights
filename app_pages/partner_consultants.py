@@ -181,6 +181,7 @@ if len(eng) == 0:
     _eng_ctx = "(none)"
     _partner_ctx = "(none)"
     _skills_ctx = "(none)"
+    _geo_ctx = "(none)"
 else:
     _eng_tokens = int(eng["TOKENS"].sum())
     _coverage = (f"{_eng_tokens * 100.0 / _all_cust_tokens:.1f}%"
@@ -200,9 +201,16 @@ else:
 
     _e = eng.copy()
     _e["TOKEN_SHARE_PCT"] = (_e["TOKENS"] * 100.0 / _eng_tokens).round(1)
-    _eng_ctx = _e[["PARTNER_NAME", "ACCOUNT_NAME", "COCO_UCS", "DEPLOYED_UCS", "EACV",
+    _eng_ctx = _e[["PARTNER_NAME", "ACCOUNT_NAME", "THEATER_NAME", "REGION_NAME",
+                   "COCO_UCS", "DEPLOYED_UCS", "EACV",
                    "CONSULTANTS", "TOKENS", "TOKEN_SHARE_PCT", "ACTIVE_DAYS",
                    "WORKLOADS", "TECH_USE_CASE"]].to_string(index=False, max_colwidth=60)
+
+    _geo = (_e.groupby("THEATER_NAME", as_index=False)
+              .agg(ENGAGEMENTS=("ACCOUNT_NAME", "nunique"), COCO_UCS=("COCO_UCS", "sum"),
+                   CONSULTANTS=("CONSULTANTS", "sum"), TOKENS=("TOKENS", "sum"))
+              .sort_values("TOKENS", ascending=False))
+    _geo_ctx = _geo.to_string(index=False)
 
     _p = (_e.groupby("PARTNER_NAME", as_index=False)
             .agg(ENGAGEMENTS=("ACCOUNT_NAME", "nunique"),
@@ -234,8 +242,13 @@ PER-PARTNER ROLLUP (TOKEN_SHARE_PCT = share of the matched engagement tokens abo
 {_partner_ctx}
 
 ENGAGEMENT DETAIL — one row per partner + customer account.
-WORKLOADS and TECH_USE_CASE describe the KIND OF WORK the use case covers.
+THEATER_NAME and REGION_NAME say WHERE the use case sits. CONSULTANTS and ACTIVE_DAYS
+show how deep the partner is in that customer. WORKLOADS and TECH_USE_CASE describe the
+KIND OF WORK the use case covers.
 {_eng_ctx}
+
+WHERE THE WORK SITS — engagements, use cases, consultants and tokens by theatre
+{_geo_ctx}
 
 COCO SKILLS INVOKED by these partners' consultants in customer accounts (what they
 actually did inside the tool, most used first)
@@ -265,11 +278,12 @@ CONSULTANT COUNTS: the data gives consultants PER ENGAGEMENT only. Quote individ
 Produce EXACTLY three things, in this order, and nothing else.
 
 ## SUMMARY
-A single paragraph of 3 sentences, or 4 at the absolute maximum. No bullets, no sub-headings, no lists. Assign the content as follows:
-1. State, verbatim from PRE-COMPUTED TOTALS, all five of: how many CoCo-attached engagements, how many partners, how many customer accounts, the token volume, and how many use cases are already deployed. All five are mandatory — do not drop the partner count.
-2. What kind of work dominates, naming the WORKLOADS / TECH_USE_CASE categories AND at least two specific CoCo skills consultants invoked from the skills block.
-3. Who is driving it: the top two or three partners by tokens with their token share, and whether their work is deployed or still in flight.
-4. OPTIONAL fourth sentence only if it earns its place: the single action to take, tied to a figure.
+A single paragraph of 3 sentences, or 4 at the absolute maximum. No bullets, no sub-headings, no lists. This is about WHAT THE CONSULTANTS ARE DOING inside customer accounts — not a financial recap. Assign the content as follows:
+1. What kind of customer engagements these are: name the dominant WORKLOADS / TECH_USE_CASE categories and how many engagements and CoCo use cases sit behind them, using PRE-COMPUTED TOTALS for the counts.
+2. Depth of the partner consultants in these customers: name the two or three accounts with the deepest presence, quoting consultants and active days for each from the engagement detail, and the tokens they consumed.
+3. What they actually did in the tool: name at least three specific CoCo skills from the skills block, and which partners used them.
+4. Where this work sits: name the leading theatres or regions by engagements and consultants from the WHERE THE WORK SITS block.
+Do NOT lead with EACV or dollar figures — mention money only if a sentence has room left. Do not simply restate the table.
 
 ## WHO IS DRIVING IT
 | Partner | Engagements | CoCo UCs | Deployed | EACV | Tokens | Share of tokens |
