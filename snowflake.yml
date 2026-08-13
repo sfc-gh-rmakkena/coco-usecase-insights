@@ -12,3 +12,17 @@ entities:
       - environment.yml
       - app_pages/
       - utils/
+  coco_usecase_insights_dev:
+    type: streamlit
+    identifier:
+      name: COCO_USECASE_INSIGHTS_DEV
+      database: TEMP
+      schema: COCO_PARTNER_ADOPTION_DEV
+    stage: STREAMLIT
+    query_warehouse: COCO_PARTNER_ADOPTION_WH
+    main_file: streamlit_app.py
+    artifacts:
+      - streamlit_app.py
+      - environment.yml
+      - app_pages/
+      - utils/

@@ -173,6 +173,7 @@ page = st.navigation({
         st.Page("app_pages/deep_dive.py", title="Use Case Explorer", icon=":material/search_insights:"),
         st.Page("app_pages/comments_intelligence.py", title="Comments & AI Insights", icon=":material/smart_toy:"),
         st.Page("app_pages/trends.py", title="Trends & Aging", icon=":material/trending_up:"),
+        st.Page("app_pages/partner_consultants.py", title="Partner Consultants", icon=":material/groups:"),
     ],
     "OKR & Reports": [
         st.Page("app_pages/okr_adoption.py",    title="OKR: CoCo Adoption",      icon=":material/check_circle:"),
