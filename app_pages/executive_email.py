@@ -11,6 +11,7 @@ from utils.queries import (
     get_partner_coco_coverage, get_partner_credit_consumption, get_adoption_overview,
     get_bulk_confidence_scores, get_pipeline_wow, get_gsi_wow, get_noam_si_wow,
     get_recent_wins, get_coco_final_wow, get_coco_final_trend_4w, save_coco_final_snapshot,
+    get_coco_uc_weekly_counts,
     get_partners_at_target_trend_4w, save_okr_target_count,
     get_partner_velocity_data, get_account_coco_credits,
 )
@@ -1366,7 +1367,8 @@ def _okr_row(grp_df, label, target_pct):
     meeting = int((_pm['PCT'] >= target_pct / 100.0).sum())
     return (
         f"  {label}: {total} total UCs, {coco} CoCo UCs, {pct}% CoCo adoption, "
-        f"{meeting}/{len(_pm)} partners meeting goal ({target_pct}%)\n"
+        f"{meeting}/{len(_pm)} partners meeting goal ({target_pct}%), "
+        f"{total - coco} non-CoCo UCs still open as convertible pipeline\n"
     )
 
 if len(managed_bulk_conf) > 0 and '_GROUP' in managed_bulk_conf.columns:
@@ -1374,6 +1376,35 @@ if len(managed_bulk_conf) > 0 and '_GROUP' in managed_bulk_conf.columns:
     regional_okr_ctx += _okr_row(managed_bulk_conf[managed_bulk_conf['_GROUP'] == 'NOAM RSI'], 'NOAM RSI (NoAM only)',       75)
     regional_okr_ctx += _okr_row(managed_bulk_conf[managed_bulk_conf['_GROUP'] == 'APJ RSI'],  'APJ RSI (APJ geo)',          50)
     regional_okr_ctx += _okr_row(managed_bulk_conf[managed_bulk_conf['_GROUP'] == 'EMEA RSI'], 'EMEA RSI (EMEA geo)',        50)
+
+# Quarter-progress trend — is the number of CoCo use cases still climbing, and how much
+# runway is left? Deliberately expressed as weeks remaining rather than calendar dates.
+_weeks_left = max(0, -(-(datetime.strptime(Q3_END, '%Y-%m-%d').date() - datetime.now().date()).days // 7))
+quarter_trend_ctx = f"  Weeks remaining in the quarter: {_weeks_left}\n"
+
+_wk = get_coco_uc_weekly_counts(conn, tuple(MANAGED_PARTNERS), weeks=6)
+if len(_wk) >= 6:
+    _last3 = _wk.tail(3)['COCO_UCS'].mean()
+    _prior3 = _wk.iloc[-6:-3]['COCO_UCS'].mean()
+    _delta = _last3 - _prior3
+    _dir = 'increasing' if _delta > 0 else ('declining' if _delta < 0 else 'flat')
+    _pct_chg = (_delta / _prior3 * 100) if _prior3 else 0.0
+    quarter_trend_ctx += (
+        f"  CoCo use cases, average of last 3 weeks: {_last3:.0f}\n"
+        f"  CoCo use cases, average of prior 3 weeks: {_prior3:.0f}\n"
+        f"  Direction of the 3-week average: {_dir} by {abs(_delta):.0f} use cases ({_pct_chg:+.1f}%)\n"
+        f"  Latest week CoCo UCs: {int(_wk.iloc[-1]['COCO_UCS'])} of {int(_wk.iloc[-1]['TOTAL_UCS'])} total UCs\n"
+        f"  Weekly CoCo UC counts oldest to newest: "
+        + ", ".join(f"{int(r.COCO_UCS)}" for r in _wk.itertuples()) + "\n"
+    )
+elif len(_wk) > 0:
+    quarter_trend_ctx += (
+        f"  Only {len(_wk)} weekly snapshots available — not enough for a 3-week average "
+        f"comparison. Latest week CoCo UCs: {int(_wk.iloc[-1]['COCO_UCS'])} of "
+        f"{int(_wk.iloc[-1]['TOTAL_UCS'])}.\n"
+    )
+else:
+    quarter_trend_ctx += "  No weekly snapshot data available for a trend comparison.\n"
 
 # Recent wins context — last 7 days (deployments, competitive wins, pipeline moves)
 recent_wins_ctx = ""
@@ -1540,6 +1571,9 @@ OKR PROGRESS — NoAM SIs WoW (CoCo engagement — LW=last week, PW=prior week):
 OKR PROGRESS — REGIONAL BREAKDOWN (4 groups; GSI/NOAM goal=75%, APJ/EMEA goal=50%):
 {regional_okr_ctx}
 
+QUARTER PROGRESS TREND (weeks left, and whether the count of CoCo use cases is still climbing):
+{quarter_trend_ctx}
+
 COMMENT HIGHLIGHTS (managed partners only, Top 10 by EACV):
 {comment_ctx}
 
@@ -1593,7 +1627,7 @@ Follow this EXACT structure with 9 sections:
 - Show 4 rows: GSI (Global), NOAM RSI, APJ RSI, EMEA RSI
 - Use "OKR PROGRESS — REGIONAL BREAKDOWN" data from context (each row has group name, total UCs, CoCo UCs, CoCo %, partners meeting goal)
 - Goal% is 75% for GSI and NOAM RSI, 50% for APJ RSI and EMEA RSI — reflect the correct target per row
-- After table:  take the Q3 timeline (August to Oct) for the narrative - dont use it in sentence, also consider trend in no of coco usecase . If trend is postive based on no of coco usecases WOW %  for GSI and NOAM RSI use postive tone on the trending to target. One sentence —   looking into overall pipeline for each groups that can be converted to Coco adoption and  how are we trending  . Any specific usecase trend is seeing high coco adoption in terms of no of usecases vs low adoption by theatre. Among  GSI  partners Which Region and Theatre is leading and is lagging
+- After table: 2 sentences on whether we are trending in the right direction, using the QUARTER PROGRESS TREND data. Sentence 1: state the weeks remaining in the quarter and whether the 3-week average count of CoCo use cases is increasing, declining or flat, quoting the two 3-week averages and the direction from the data. Sentence 2: state the convertible pipeline still open (the non-CoCo UC counts per group) and which group has the most room to convert. Write in normal sentence case — do not copy capitalisation from these instructions or from the data labels. Do NOT mention calendar months or quarter start/end dates. Do NOT compute your own averages or percentages — every figure comes from QUARTER PROGRESS TREND or the table above.
 
 ## MANAGED PARTNER PIPELINE OVERVIEW
 | Stage | Total UCs | CoCo UCs | CoCo % | Total EACV | CoCo EACV |

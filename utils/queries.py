@@ -2418,6 +2418,35 @@ def get_pc_top_skills(_conn, context, region=None, partner_names=None, start_dat
 
 
 @st.cache_data(ttl=timedelta(minutes=30))
+def get_coco_uc_weekly_counts(_conn, partners: tuple, weeks: int = 6):
+    """Weekly CoCo use-case COUNTS (not percentages) from the snapshot table.
+
+    Returns a DataFrame of WEEK_START, COCO_UCS, TOTAL_UCS ascending by week, so the
+    caller can compare a trailing 3-week average against the prior 3 weeks. Counts are
+    used rather than COCO_PCT because percentage can fall while the number of CoCo use
+    cases is still growing (the denominator moves too).
+    """
+    ps = "','".join(p.replace("'", "''") for p in partners)
+    query = f"""
+    SELECT WEEK_START,
+           SUM(COCO_UCS)  AS COCO_UCS,
+           SUM(TOTAL_UCS) AS TOTAL_UCS
+    FROM {SCHEMA}.IS_COCO_FINAL_WEEKLY_SNAPSHOT
+    WHERE PARTNER_NAME IN ('{ps}')
+    GROUP BY 1
+    ORDER BY 1 DESC
+    LIMIT {int(weeks)}
+    """
+    import pandas as pd
+    df = _conn.query(query)
+    if len(df) > 0:
+        for c in ["COCO_UCS", "TOTAL_UCS"]:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+        df = df.sort_values("WEEK_START").reset_index(drop=True)
+    return df
+
+
+@st.cache_data(ttl=timedelta(minutes=30))
 def get_pc_coco_uc_engagements(_conn, region=None, partner_names=None, start_date=None, end_date=None):
     """Consultant activity in customer accounts where THAT SAME partner owns a
     CoCo-attached use case (strict attribution), with the kind of work attached.
