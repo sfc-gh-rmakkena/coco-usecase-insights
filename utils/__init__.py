@@ -200,9 +200,48 @@ def canonical_partner(name):
     return PARTNER_CANONICAL_BY_LOWER.get(str(name).lower(), name)
 
 
+# Sidebar/use-case taxonomy name -> the name(s) the partner-consultant pipeline uses.
+# These are two independent naming systems: the sidebar comes from the use-case taxonomy
+# while PARTNER_CONSULTANT_RESOLVED comes from the ultimate-parent account name, so an
+# exact match fails for most partners and the page silently showed zero rows.
+# Only unambiguous single-candidate matches are listed. Deliberately NOT mapped:
+#   Tata Consultancy Services -> the pipeline has 'Tata Group of Companies' and
+#     'Tata Elxsi', which are different legal entities from TCS.
+#   Apex Systems, Blend360, Hexaware Technologies, KPC, kipi.ai, LTM/LTI Mindtree,
+#     Merkle, SDK Tek Services, Squadron Data Inc, TEKsystems -> no pipeline entry at
+#     all, so they have genuinely no resolved consultants rather than a naming gap.
+PARTNER_PIPELINE_CROSSWALK = {
+    'Aimpoint Digital':                       ['Aimpoint Digital, LP'],
+    'Capgemini Technologies LLC':             ['Capgemini Self-Service 2019-07-03 14:03:01Z'],
+    'CitiusTech Inc.':                        ['CITIUSTECH HEALTHCARE TECHNOLOGY PRIVATE LIMITED'],
+    'Cognizant Technology Solutions US Corp': ['Cognizant Technology Solutions Corporation-NJ (Life Sciences)'],
+    # The only IBM entity in the pipeline is the Canadian one, so IBM reflects Canada
+    # consultants only. Better than zero, but it is not IBM global.
+    'IBM':                                    ['IBM Canada Limited'],
+    'INFOMOTION GMBH':                        ['INFOMOTION'],
+    'Infosys':                                ['Infosys Technologies Limited'],
+    'MegazoneCloud Corporation':              ['Megazone'],
+    'NTT DATA Group Corporation':             ['NTT'],
+    'Perficient Inc.':                        ['Perficient'],
+    'Tiger Analytics Inc.':                   ['Tiger Analytics'],
+    'Tredence Inc.':                          ['Tredence'],
+    'phData, Inc.':                           ['phdata'],
+}
+
+# Pipeline spellings must also resolve back to the canonical display name, otherwise
+# rows render under the pipeline name and fail to merge with use-case counts.
+for _canon, _pipeline_names in PARTNER_PIPELINE_CROSSWALK.items():
+    for _pn in _pipeline_names:
+        PARTNER_CANONICAL_BY_LOWER[_pn.lower()] = PARTNER_RENAME_MAP.get(_canon, _canon)
+
+
 def resolve_partner_filter(partner_names):
     """Return list of all partner names to match for given sidebar selections.
-    
+
+    Expands group labels to their members, then adds the partner-consultant pipeline's
+    own spelling for each name via PARTNER_PIPELINE_CROSSWALK, so a sidebar selection
+    matches both the use-case taxonomy and the consultant tables.
+
     Args:
         partner_names: list of selected partner names from multiselect (empty = all)
     """
@@ -211,4 +250,6 @@ def resolve_partner_filter(partner_names):
     resolved = []
     for name in partner_names:
         resolved.extend(PARTNER_ALIASES.get(name, [name]))
+    for name in list(resolved):
+        resolved.extend(PARTNER_PIPELINE_CROSSWALK.get(name, []))
     return list(set(resolved))
