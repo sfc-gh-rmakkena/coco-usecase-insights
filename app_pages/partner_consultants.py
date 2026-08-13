@@ -260,42 +260,29 @@ WHAT THE DATA MEANS
 
 Follow this EXACT structure.
 
-## THE HEADLINE
-Exactly 3 sentences, no bullets.
-1. State, verbatim from PRE-COMPUTED TOTALS: how many CoCo-attached engagements, how many partners, how many customer accounts, the token volume, and how many of the use cases are already deployed.
-2. What kind of work dominates, naming the WORKLOADS / TECH_USE_CASE categories AND the specific CoCo skills consultants invoked most from the skills block.
-3. The single most important pattern a CEO should take away.
-
 CONSULTANT COUNTS: the data gives consultants PER ENGAGEMENT only. Quote individual engagement figures ("43 consultants at EY - Client Technologies") but never state a total or average consultant count across engagements — the same person can appear in more than one account, so summing would be wrong.
 
-## WHAT THE WORK IS
-Exactly 3 bullets. Each bullet = one type of work, not one partner.
-- Format: "**[Work type]** — [which partners and accounts, with token figures]"
-- Group by WORKLOADS / TECH_USE_CASE (Data Engineering, AI, Analytics, Platform, Applications & Collaboration). Pick the 3 work types with the most tokens behind them.
-- Assign each engagement to exactly ONE work type — its dominant one. Never mention the same engagement's tokens under two work types, and never restate a token figure you have already attributed.
-- Name at most 3 partner+account pairs per bullet, each with its consultant count from the engagement detail. One short clause each.
-- Every bullet MUST name at least one specific CoCo skill from the skills block to show what the consultants actually did in the tool, not just what the use case was about. If no skill data exists for those partners, say so rather than inventing one.
+Produce EXACTLY three things, in this order, and nothing else.
+
+## SUMMARY
+A single paragraph of 3 sentences, or 4 at the absolute maximum. No bullets, no sub-headings, no lists. Assign the content as follows:
+1. State, verbatim from PRE-COMPUTED TOTALS, all five of: how many CoCo-attached engagements, how many partners, how many customer accounts, the token volume, and how many use cases are already deployed. All five are mandatory — do not drop the partner count.
+2. What kind of work dominates, naming the WORKLOADS / TECH_USE_CASE categories AND at least two specific CoCo skills consultants invoked from the skills block.
+3. Who is driving it: the top two or three partners by tokens with their token share, and whether their work is deployed or still in flight.
+4. OPTIONAL fourth sentence only if it earns its place: the single action to take, tied to a figure.
 
 ## WHO IS DRIVING IT
 | Partner | Engagements | CoCo UCs | Deployed | EACV | Tokens | Share of tokens |
 - One row per partner from the PER-PARTNER ROLLUP, sorted by tokens descending. Use TOKEN_SHARE_PCT for the last column.
-- After the table, exactly 2 sentences: which partners are concentrated in a few deep engagements versus spread thin across many, and which have high token consumption but nothing deployed yet. Use the Deployed column to separate delivered work from work still in flight.
-
-## NOTABLE ENGAGEMENTS
-3 bullets, the three highest-token engagements.
-- Format: "**[Partner] at [Account]** — [consultants] consultants, [tokens] tokens across [active days] active days, [CoCo UCs] use case(s) worth [EACV], [workload type]"
-
-## SO WHAT
-2 bullets maximum. Each names a partner or a work type and the specific action to take, justified by a figure from the data.
+- Table only. Write NO narrative sentences after this table.
 
 ## COVERAGE NOTE
-One italic sentence, prefixed with the heading above, stating what share of customer-account tokens could be matched to a CoCo-attached use case, using the figure from PRE-COMPUTED TOTALS. State that the unmatched remainder is excluded because it could not be tied to a CoCo use case owned by the same partner. Do NOT say the limitation is account-name matching — accounts are matched on Salesforce account ID.
+One italic sentence stating what share of customer-account tokens could be matched to a CoCo-attached use case, using the figure from PRE-COMPUTED TOTALS, and that the unmatched remainder is excluded because it could not be tied to a CoCo use case owned by the same partner. Do NOT say the limitation is account-name matching — accounts are matched on Salesforce account ID.
 
 FORMATTING RULES
-- Markdown table only where specified above; everywhere else use bullets
+- HARD LIMIT: the SUMMARY paragraph is at most 4 sentences and at most 130 words. Count them before you answer. Being shorter is better than being complete.
+- Do NOT add any section that is not listed above. No "What the work is", no "Notable engagements", no "So what", no closing remarks.
 - Numbers with commas; tokens may use M suffix; EACV as $XK or $X.XM
-- HARD LIMIT: 350 words for the entire output. Being under is better than being complete — cut adjectives and cut repeated figures before you cut facts.
-- One sentence per bullet. No parentheticals that repeat a number already stated.
 - Direct, declarative, executive tone
 - No greeting, no sign-off, no methodology paragraph"""
 
