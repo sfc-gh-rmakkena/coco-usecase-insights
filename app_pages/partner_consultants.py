@@ -59,7 +59,11 @@ if len(act) == 0:
     st.info("No customer-account consultant activity for the current filters.")
 else:
     v1 = act.merge(sk, on="PARTNER_NAME", how="left")
-    v1 = v1.merge(ucc[["PARTNER_NAME", "COCO_UCS"]], on="PARTNER_NAME", how="left")
+    # UC counts use the use-case partner taxonomy; join case-insensitively.
+    _ucc1 = ucc[["PARTNER_NAME", "COCO_UCS"]].copy()
+    _ucc1["_k"] = _ucc1["PARTNER_NAME"].astype(str).str.upper()
+    v1["_k"] = v1["PARTNER_NAME"].astype(str).str.upper()
+    v1 = v1.merge(_ucc1[["_k", "COCO_UCS"]], on="_k", how="left").drop(columns="_k")
     v1["COCO_UCS"] = v1["COCO_UCS"].fillna(0).astype(int)
     v1 = v1.sort_values("TOKENS", ascending=False)
 
@@ -100,7 +104,10 @@ if len(act2) == 0:
 else:
     v2 = tot.merge(act2, on="PARTNER_NAME", how="left", suffixes=("", "_act"))
     v2 = v2.merge(sk2, on="PARTNER_NAME", how="left")
-    v2 = v2.merge(ucc2[["PARTNER_NAME", "ACTIVE_COCO_UCS"]], on="PARTNER_NAME", how="left")
+    _ucc2 = ucc2[["PARTNER_NAME", "ACTIVE_COCO_UCS"]].copy()
+    _ucc2["_k"] = _ucc2["PARTNER_NAME"].astype(str).str.upper()
+    v2["_k"] = v2["PARTNER_NAME"].astype(str).str.upper()
+    v2 = v2.merge(_ucc2[["_k", "ACTIVE_COCO_UCS"]], on="_k", how="left").drop(columns="_k")
     for c in ["CONSULTANTS", "TOKENS", "PROMPTS", "ACTIVE_COCO_UCS"]:
         v2[c] = v2[c].fillna(0)
     v2["ACTIVE_COCO_UCS"] = v2["ACTIVE_COCO_UCS"].astype(int)
