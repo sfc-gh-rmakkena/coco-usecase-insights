@@ -123,10 +123,11 @@ KEY CONCEPTS:
 - COCO_PCT = COCO_UCS / TOTAL_UCS * 100. OKR target = 75% per partner.
 - GSIs (global scope): Accenture, Capgemini, Cognizant, Deloitte, EY, IBM
 - RSIs (NoAM scope): remaining 14 partners
-- Current period: FY27 Q2 (May 1 – Jul 31, 2026). FY27 Q1 = Feb 1 – Apr 30, 2026.
-- Q2 date filter for use cases:
-    Stages 3-4: DECISION_DATE >= '2026-05-01' AND DECISION_DATE <= '2026-07-31'
-    Stages 5-7: GO_LIVE_DATE  >= '2026-05-01' AND GO_LIVE_DATE  <= '2026-07-31'
+- Current period: FY27 Q3 (Aug 1 – Oct 31, 2026). FY27 Q2 = May 1 – Jul 31, 2026. FY27 Q1 = Feb 1 – Apr 30, 2026.
+- ALWAYS use the ACTIVE FILTER dates shown in SIDEBAR FILTERS for all queries.
+  Example date filter (replace with ACTIVE FILTER dates from SIDEBAR FILTERS):
+    Stages 3-4: DECISION_DATE >= '<start_date>' AND DECISION_DATE <= '<end_date>'
+    Stages 5-7: GO_LIVE_DATE  >= '<start_date>' AND GO_LIVE_DATE  <= '<end_date>'
 - USE_CASE_STAGE values are TEXT strings:
     '3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan',
     '5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed'
@@ -1102,17 +1103,46 @@ def build_uc_pattern_context(detail_df=None) -> str:
     return "\n".join(lines)
 
 
+def ask_ai_agent(question: str, chat_history: list = None) -> dict:
+    """Call COCO_AGENT via Cortex Agent REST API. Returns {answer, sql, sql_result}."""
+    from utils.cortex_helpers import run_cortex_agent
+    # Inject active date range into the question for context
+    start_date = str(st.session_state.get("okr_start_date", "2026-08-01"))
+    end_date   = str(st.session_state.get("okr_end_date",   "2026-10-31"))
+    augmented_question = (
+        f"{question}\n\n"
+        f"[Active date range: {start_date} to {end_date}]"
+    )
+    return run_cortex_agent(augmented_question, chat_history=chat_history)
+
+
 def ask_ai(conn, question: str, page_context: str = "", debug: bool = False, chat_history: list = None):
     filter_block = build_filter_context()
-    context_block = f"{filter_block}\n\nCURRENT PAGE DATA:\n{page_context}\n" if page_context else f"{filter_block}\n"
 
-    # Build prior conversation block for multi-turn context (last 3 exchanges = 6 messages)
+    # Inject active date range explicitly so LLM never falls back to hardcoded example dates
+    start_date = str(st.session_state.get("okr_start_date", "2026-08-01"))
+    end_date   = str(st.session_state.get("okr_end_date",   "2026-10-31"))
+    date_override = (
+        f"\nACTIVE DATE RANGE (use these in ALL SQL queries — override any example dates in SQL patterns above):"
+        f"\n  start_date = '{start_date}'  |  end_date = '{end_date}'"
+        f"\n  Stages 3-4 filter: DECISION_DATE >= '{start_date}' AND DECISION_DATE <= '{end_date}'"
+        f"\n  Stages 5-7 filter: GO_LIVE_DATE  >= '{start_date}' AND GO_LIVE_DATE  <= '{end_date}'"
+    )
+
+    context_block = f"{filter_block}{date_override}\n\nCURRENT PAGE DATA:\n{page_context}\n" if page_context else f"{filter_block}{date_override}\n"
+
+    # Build prior conversation block — include SQL + truncated results for multi-turn accuracy
+    # (lets the LLM understand which partners/accounts were discussed in previous turns)
     _history_block = ""
     if chat_history:
         for msg in chat_history[-6:]:
             role = "User" if msg["role"] == "user" else "Assistant"
             _history_block += f"{role}: {msg['content']}\n"
-    prior_ctx = f"\nPRIOR CONVERSATION:\n{_history_block}\n" if _history_block else ""
+            if msg.get("sql"):
+                _history_block += f"[SQL used in previous turn]:\n{msg['sql'][:600]}\n"
+            if msg.get("sql_result"):
+                _history_block += f"[SQL result (truncated)]:\n{msg['sql_result'][:400]}\n"
+    prior_ctx = f"\nPRIOR CONVERSATION (use this to understand follow-up questions):\n{_history_block}\n" if _history_block else ""
 
     step1_prompt = f"{_SQL_SYSTEM}\n{context_block}{prior_ctx}\nUSER QUESTION: {question}"
     step1 = cortex_complete(conn, "claude-sonnet-4-5", step1_prompt)
@@ -1141,5 +1171,8 @@ def ask_ai(conn, question: str, page_context: str = "", debug: bool = False, cha
             "generated_sql": sql or "(no SQL extracted — answered from context)",
             "sql_result": sql_result or "(no result)",
             "step1_decision": step1[:800],
+            "_sql": sql,
+            "_sql_result": sql_result,
         }
-    return answer
+    # Return answer + SQL metadata so caller can store in history for multi-turn
+    return {"answer": answer, "sql": sql, "sql_result": sql_result}

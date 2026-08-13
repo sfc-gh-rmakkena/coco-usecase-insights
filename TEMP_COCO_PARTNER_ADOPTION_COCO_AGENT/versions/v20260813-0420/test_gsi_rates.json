@@ -1,0 +1,996 @@
+{
+  "content": [
+    {
+      "text": "I'll help with this. Let me load the semantic model and explore how attachment rate is defined for GSIs.",
+      "type": "text"
+    },
+    {
+      "thinking": {
+        "text": "Searching for relevant tools...\nFound 2 relevant tools\n"
+      },
+      "type": "thinking"
+    },
+    {
+      "tool_use": {
+        "client_side_execute": false,
+        "input": {
+          "pruning_question": "Which GSI partner has the highest CoCo attachment rate among managed partners?"
+        },
+        "name": "coco_adoption_uc",
+        "tool_use_id": "toolu_bdrk_011hVAPGQoHTH7m2vsC2eA3F",
+        "type": "system_agentic_semantic_context"
+      },
+      "type": "tool_use"
+    },
+    {
+      "tool_result": {
+        "content": [
+          {
+            "json": {
+              "pruned_note": "**Note**: This semantic model fits within the agent's token budget, so it is shown in full. You do not need to set pruning_question on future calls referencing this same semantic model.",
+              "semantic_model_description": "CoCo (Cortex Code) partner adoption semantic model. Covers partner use cases tracked in the OKR program (stages 3-7) and daily Cortex Code credit/token consumption by customer accounts. Use this to answer questions about CoCo attachment rates, partner performance, theater/region breakdowns, and credit spend. Current active period: Q3 FY27 (2026-08-01 to 2026-10-31).\n",
+              "semantic_model_key": "coco_adoption_uc",
+              "semantic_model_name": "coco_adoption_model",
+              "sql_best_practices": "## SQL Generation Rules and Best Practices\n\n**CRITICAL \u2014 Ambiguity Gate (check BEFORE writing SQL):**\nIf the user's question contains a business term that could map to more than one metric or dimension in the semantic model, STOP and do the following:\n1. Check the [Additional Instructions] section of your system prompt for an ambiguous terms table or clarification rules.\n2. If those instructions say to ask for clarification, you MUST respond with a clarification question to the user. Do NOT generate SQL. Do NOT pick what seems \"most likely.\"\n3. Only generate SQL if the term unambiguously maps to exactly one metric, or if no clarification rules exist in the Additional Instructions.\nViolating this gate by guessing a metric when clarification is required will produce incorrect results for the user.\n\nYou can write SQL against the provided semantic model to retrieve data. When doing so, you are an expert data scientist well-versed in BI concepts and your goal is to write accurate, readable queries to fetch the relevant data. Use the following sections as guidelines for your task.\n\nThe semantic model is explained in section 1. Standard SQL (using logical names from the semantic model, which are postprocessed to physical SQL) is detailed in section 2. General SQL rules are in section 3.\n\n### 1. How to use the Semantic Model\n\nA semantic model is intended to provide additional information about the relevant entities that you may want to query for an analysis.\n\nA semantic model is comprised of a set of logical tables. A logical table maps onto an actual SQL table or view, called a base table. Each logical table is comprised of facts, dimensions, and metrics.\n\n- **Facts** are row-level quantitative values (e.g., sales amount, quantity, cost). They are unaggregated and exist at the granularity of the table.\n- **Dimensions** are categorical attributes used to group, filter, and slice data (e.g., region, product category, date). They provide context to metrics. They are commonly used to GROUP BY.\n- **Metrics** are aggregations over facts using functions like SUM, AVG, COUNT. They represent business KPIs. If no aggregation is specified, use the default indicated in the column comment.\n\nMetrics can also exist at the model-level where they can span multiple logical tables.\n\nA semantic model can include the relationships between logical tables, specifying valid join paths. Only use the supported join paths provided; do not invent joins or switch left/right logical tables.\n\nA semantic model can include verified queries, which are SQL queries that are guaranteed to be correct for the corresponding user question.\n\nA logical table can include named filters, which are reusable WHERE-clause expressions (e.g., `is_active = TRUE`). Use these filters in your SQL when they match the user's intent rather than writing equivalent expressions from scratch.\n\nA semantic model can include admin-specified custom instructions which you should follow closely. The first is SQL generation custom instructions that affect how you write SQL. The next is question categorization custom instructions that indicate when you should or should not respond to a question. Question categorization custom instructions are a legacy field from another system, but try to follow them.\n\nA semantic model can include retrieved literals, which are the set of exact literals that are in some column of the base table; this can be helpful to match terms semantically (e.g. if the user asks about the price of all small cars, and there is a column called `car_types`, you could find `sedan-2door`, `sedan-4d`, `sports-2d` for your query, which are not text-wise related but semantically related).\n\n#### Advanced Features of Semantic Models\n\nA semantic model may define advanced features beyond basic facts, dimensions, and metrics.\n\n**Model-level metrics**: Metrics defined at the model level rather than within a single logical table. These metrics may span multiple tables. You must resolve the metric expression down to non-metric column references (facts and dimensions) and write the necessary joins yourself.\n\n**Asof joins**: A semantic model may contain **asof** relationship keys. Asof joins perform point-in-time lookups: each row from the left table is matched to the row in the right table whose key value is closest to (less than or equal to) the left key value. Use Snowflake's `ASOF JOIN ... MATCH_CONDITION(left.col >= right.col) ON equi_conditions` syntax as shown in the supported join paths.\n\n**Range joins**: A semantic model may contain **range** relationship keys. Range joins match each row from the left table to rows in the right table where the left column falls within a range defined by start/end columns. Use the non-equi join conditions as shown in the supported join paths (e.g., `(start_col IS NULL OR left_col >= start_col) AND (end_col IS NULL OR left_col < end_col)`).\n\n**Semi-additive metrics**: Some metrics in the semantic model may define `non_additive_dimensions`. These indicate the metric is **semi-additive** (e.g., a snapshot metric like account balance that should not be summed across time). Write subqueries with window functions (like `ROW_NUMBER`) to find the latest snapshot value.\n\n### 2. Writing Standard SQL against a Semantic Model\n\nStandard SQL uses the Snowflake SQL dialect with logical names from the semantic model. In this mode, you write queries using the logical table and column names (dimensions, facts, time_dimensions) defined in the semantic model. The SQL will be automatically postprocessed to resolve to physical table and column names before execution.\n\n- **Use Semantic Model Column Names**: ALWAYS use column names from the semantic model (dimensions and facts). The SQL will be automatically postprocessed to resolve to physical column names.\n- **Reference Logical Tables**: Use the logical table names from the semantic model with a `__` prefix. Do NOT use fully qualified physical table names (e.g., use `__orders` not `orders` or `DATABASE.SCHEMA.ORDERS`). This prefix is required for all table references, including in FROM, JOIN, and column qualifiers (e.g., `__orders.order_total`).\n- **Always query logical tables, not the underlying base tables**: The base tables can only be accessed through the logical tables using logical SQL. If you encounter errors running logical SQL, fix the query \u2014 do not fall back to querying base tables directly.\n- **Do not rewrite logical table CTEs**: The postprocessing step creates CTEs in the final SQL like `WITH __logical_table AS (SELECT ... FROM DB.SCH.BASE_TABLE)` to resolve the logical tables. You should NOT write these CTEs again on subsequent turns, as the SQL you write on logical tables in subsequent turns will be postprocessed to get the CTEs back. You can fully ignore those logical table CTEs.\n- **Identify metrics**: Metrics are typically calculations upon facts. If no specific aggregation mentioned, use the default aggregation indicated in the column comment.\n- **Identify dimensions for GROUP BY**: Dimensions provide context to data - they are descriptive attributes used to slice and dice data (e.g., geography, product categories, customer segments).\n- **Identify facts**: Facts are quantitative data that can be aggregated, summed, averaged, or counted. They are typically numeric fields.\n- **Count Correctly**: In single-table queries, use COUNT(DISTINCT column) for dimension columns that may have duplicate values. Use COUNT(column) without DISTINCT only if the column has unique values like a primary key.\n\nNote that you are not allowed to use all of the Snowflake SQL dialect, which is detailed in Section 3.\n\n### 3. Rules for SQL Generation\n\nAcross all queries you write, you should keep in mind these guidelines when they are relevant.\n\n**Current Date: 2026-08-13 (i.e., today is August 13, 2026)** - Use this as reference for relative time filters.\n\n#### Aggregation and Granularity\n- The primary key defines data granularity. When calculating metrics on different granularity, ALWAYS use GROUP BY to ensure correct aggregation.\n- Every column in SELECT must either have an aggregation function OR be included in GROUP BY.\n- Use PARTITION BY for window functions as needed.\n\n#### Time Series Analysis\n\n**IMPORTANT: ALWAYS use CURRENT_DATE (or CURRENT_TIMESTAMP) in SQL for any reference to \"today\", \"now\", or the current date. Do NOT hardcode specific date literals like '2026-03-22'. The current date provided above is for interpreting ambiguous time references only (e.g., inferring the year when not specified).**\n\n##### Current Date Reference\n- If a question asks about a specific month without a year (e.g., \"sales for March\"), assume the current year 2026.\n\n##### Time Frequency Conversion\n- For questions requiring time aggregation at different frequency than provided, use DATE_TRUNC() to convert and aggregate facts properly with GROUP BY.\n- To compare time to a NUMBER column, use DATE_PART() to extract year/month/day from a timestamp.\n- For day of week, use DAYOFWEEK() function.\n\n##### Calendar Time Units (week, month, year)\n- If the user asks about \"last week\", \"this month\", \"last year\", ALWAYS assume they mean the CALENDAR unit:\n  - \"last week\": DATE >= DATE_TRUNC('week', CURRENT_DATE - INTERVAL '1 week') AND DATE < DATE_TRUNC('week', CURRENT_DATE)\n  - \"this month\": DATE >= DATE_TRUNC('month', CURRENT_DATE)\n  - \"last year\": DATE >= DATE_TRUNC('year', CURRENT_DATE - INTERVAL '1 year') AND DATE < DATE_TRUNC('year', CURRENT_DATE)\n\n##### Past N Days\n- If the user asks \"past X days\" or \"last X days\", use: DATE >= DATEADD(day, -X, CURRENT_DATE)\n\n##### References to \"Today\" or \"Now\"\n- If the user mentions \"today\", \"as of today\", \"to today\", \"up to now\", \"until now\", or similar, ALWAYS use CURRENT_DATE in SQL.\n  - Example: \"from June 2025 to today\" \u2192 DATE >= '2025-06-01' AND DATE <= CURRENT_DATE\n  - Example: \"sales up to today\" \u2192 DATE <= CURRENT_DATE\n- Do NOT resolve \"today\" to a hardcoded date literal.\n\n##### Period-over-Period (DoD, MoM, YoY)\n- ALWAYS include current period, previous period, current value, and previous value in output columns.\n- Calculate BOTH absolute change AND percentage change unless specified otherwise.\n- DO NOT use LEAD() or LAG() for previous period values - these assume consecutive time data which may not be true.\n- Use self-joins or CTEs instead:\n```sql\nSELECT\n    curr.date AS curr_date,\n    prev.date AS prev_date,\n    curr.value AS curr_value,\n    prev.value AS prev_value,\n    curr.value - prev.value AS change,\n    (curr.value - prev.value) / NULLIF(prev.value, 0) AS pct_change\nFROM daily_table AS curr\nLEFT JOIN daily_table AS prev ON curr.date = prev.date + INTERVAL '1 day'\nORDER BY curr_date DESC NULLS LAST;\n```\n\n##### Rolling Window Metrics\n- For rolling metrics, ALWAYS: (1) aggregate by day/time granularity first, (2) create CTE to compute rolling metrics, (3) filter to time period last.\n```sql\nWITH daily_sales AS (\n    SELECT date, SUM(sales) AS daily_sales FROM table GROUP BY date\n),\nrolling_avg AS (\n    SELECT date, AVG(daily_sales) OVER (ORDER BY date ROWS BETWEEN 2 PRECEDING AND CURRENT ROW) AS rolling_avg_3d\n    FROM daily_sales\n)\nSELECT * FROM rolling_avg WHERE DATE_PART('YEAR', date) = 2026 ORDER BY date DESC NULLS LAST;\n```\n\n##### Missing Time Period\n- If no time range is specified, assume the ENTIRE available time period in the data.\n- Include MIN(date) as start_date and MAX(date) as end_date in output to show the time range used.\n\n#### Ranking, Sorting, and Top-K\n\n##### Sorting\n- When sorting by highest/lowest metric, ALWAYS include NULLS LAST: ORDER BY ratio DESC NULLS LAST\n- For time series without specific sorting, default to sorting time DESCENDING to show latest information first.\n\n##### Top K Queries\n- For simple top-K without partitions: use ORDER BY ... LIMIT K\n- For top-K within partitions (e.g., \"top 5 per month\"): use RANK() or ROW_NUMBER() OVER (PARTITION BY ... ORDER BY ...)\n```sql\nWITH ranked AS (\n    SELECT *, RANK() OVER (PARTITION BY month ORDER BY sales DESC NULLS LAST) AS rnk\n    FROM monthly_sales\n)\nSELECT * FROM ranked WHERE rnk <= 5 ORDER BY month DESC, rnk NULLS LAST;\n```\n\n#### Joins and Relationships\n\n##### Choosing the JOIN type (LEFT vs INNER)\nThe JOIN type must match the question's granularity:\n\n- **Identify the driving table first** \u2014 the entity in phrases like \"for each X\", \"every X\", \"per X\", or \"show me each X's ...\". Put it in `FROM`; join everything else to it. The driving table MUST be the table named in `FROM`, never one joined onto another via `JOIN` \u2014 the driving table on the wrong side of a `LEFT JOIN` still drops its rows.\n- **`LEFT JOIN`** related tables onto the driving table when the question asks about *every* / *all* / *for each* of the driving entity. This preserves driving-entity rows that have no matching related row. Handle the resulting NULLs explicitly in aggregates (`COALESCE`, or `CASE WHEN COUNT(...) = 0 THEN NULL ELSE ... END`).\n- **`INNER JOIN`** ONLY when the question explicitly restricts to rows *with* related data (\"X **with** Y\", \"X **that have** Y\"), or when a metric formula requires the related row to exist (e.g., a ratio whose denominator comes from the joined table).\n- **Never** use `INNER JOIN` to \"filter out NULLs\" implicitly \u2014 that silently drops rows the user wanted to see. If you need to filter NULLs, do it explicitly with `WHERE x IS NOT NULL`.\n- When in doubt between LEFT and INNER, prefer LEFT \u2014 silently dropping rows is a worse failure mode than including a row with NULL aggregates.\n\n```sql\n-- For \"show me the order count for each customer\":\n-- WRONG: __customers is on the right side of LEFT JOIN, so customers without orders are dropped\nSELECT c.id, COUNT(o.id) FROM __orders o LEFT JOIN __customers c ON o.cust_id = c.id GROUP BY c.id;\n\n-- CORRECT: __customers (the driving entity) is on the left\nSELECT c.id, COUNT(o.id) FROM __customers c LEFT JOIN __orders o ON o.cust_id = c.id GROUP BY c.id;\n```\n\n##### Other join rules\n- Use ONLY the supported join paths provided in the semantic model.\n- When joining multiple tables, assign aliases and ALWAYS qualify columns with table alias in ALL clauses.\n- Avoid joins in subqueries; use CTEs instead.\n- Be aware of data granularity: when joining one-to-many or many-to-many, consider data duplication during aggregations.\n- Extract unique records when necessary to avoid double-counting:\n```sql\n-- WRONG: AVG(income) on joined table counts each customer multiple times\n-- CORRECT: Extract unique customers first, then aggregate\nWITH unique_customers AS (\n    SELECT DISTINCT customer_id, income, region FROM orders o JOIN customers c ON ...\n)\nSELECT region, AVG(income) FROM unique_customers GROUP BY region;\n```\n\n#### Handling Text and Literal Values\n- **Use sample_values for exact matching**: Dimensions include sample_values showing actual data values. Use these to match user-mentioned entities:\n  - If user says \"California\", check sample_values to see if values are \"CA\", \"California\", \"CALIFORNIA\", etc.\n  - If user mentions a product name, find the closest match in sample_values\n- **Case-Insensitive Matching**: Use ILIKE instead of LIKE or = when exact case is uncertain\n- **Pattern Matching**: Use ILIKE '%pattern%' to find partial matches when sample_values don't have an exact match\n- **Escape single quotes**: Use two single quotes ('') to escape literal single quotes in strings\n\n#### Ratios and Percentages\n- DO NOT multiply by 100 for ratio/percentage calculations. Keep numbers as decimals.\n\n#### Error Prevention and Snowflake Syntax\n- When creating table or column aliases, avoid Snowflake SQL keywords (e.g., \"to\", \"date\", \"order\")\n- Handle NULL values with COALESCE(column, default_value)\n- Use NULLIF to prevent division by zero: value / NULLIF(denominator, 0)\n- Use double quotes for case-sensitive identifiers: \"ColumnName\"\n- Use FLATTEN() for semi-structured/array data\n- Use QUALIFY for post-aggregation filtering with window functions\n- Use TRY_CAST or TRY_TO_NUMBER for safe type conversions\n",
+              "tables": [
+                {
+                  "description": "One row per partner use case in the CoCo OKR scope. Stages 3-4 are filtered by DECISION_DATE, stages 5-7 by GO_LIVE_DATE. IS_COCO = TRUE means CoCo is attached (via keyword in SE/partner comments or FEATURE_FLAG). The managed partner list covers ~44 partners across GSI, NOAM RSI, APJ RSI, and EMEA RSI groups.",
+                  "dimensions": [
+                    {
+                      "data_type": "TEXT",
+                      "description": "Unique identifier for the use case (Salesforce opportunity ID)",
+                      "expr": "use_case_id",
+                      "name": "use_case_id",
+                      "synonyms": [
+                        "uc id",
+                        "sfdc id",
+                        "salesforce id",
+                        "opportunity id"
+                      ]
+                    },
+                    {
+                      "data_type": "TEXT",
+                      "description": "Partner company name. Common display aliases: IBM Consulting = IBM, Ernst & Young (EY) = EY, LTI Mindtree = LTM, Kipi.ai = kipi.ai. GSIs: Accenture, Capgemini, Cognizant, Deloitte, EY, IBM.",
+                      "expr": "partner_name",
+                      "name": "partner_name",
+                      "synonyms": [
+                        "partner",
+                        "si",
+                        "system integrator",
+                        "company",
+                        "vendor"
+                      ]
+                    },
+                    {
+                      "data_type": "TEXT",
+                      "description": "Name of the customer account associated with the use case",
+                      "expr": "account_name",
+                      "name": "account_name",
+                      "synonyms": [
+                        "customer",
+                        "customer name",
+                        "account",
+                        "end customer",
+                        "end user"
+                      ]
+                    },
+                    {
+                      "data_type": "TEXT",
+                      "description": "Name of the use case or Salesforce opportunity",
+                      "expr": "use_case_name",
+                      "name": "use_case_name",
+                      "synonyms": [
+                        "uc name",
+                        "opportunity name",
+                        "project name"
+                      ]
+                    },
+                    {
+                      "data_type": "TEXT",
+                      "description": "Current lifecycle stage: '3 - Technical / Business Validation' | '4 - Use Case Won / Migration Plan' | '5 - Implementation In Progress' | '6 - Implementation Complete' | '7 - Deployed'",
+                      "expr": "use_case_stage",
+                      "name": "use_case_stage",
+                      "synonyms": [
+                        "stage",
+                        "pipeline stage",
+                        "lifecycle stage",
+                        "status"
+                      ]
+                    },
+                    {
+                      "data_type": "TEXT",
+                      "description": "Snowflake sales theater. NoAM theaters: AMSExpansion, USMajors, AMSAcquisition, USPubSec. Others: EMEA, APJ.",
+                      "expr": "theater_name",
+                      "name": "theater",
+                      "synonyms": [
+                        "theater name",
+                        "geo",
+                        "geography",
+                        "sales theater",
+                        "region group"
+                      ]
+                    },
+                    {
+                      "data_type": "TEXT",
+                      "description": "Geographic sub-region within the theater (e.g. Japan, Korea, UK, CentralEMEA, ANZ)",
+                      "expr": "region_name",
+                      "name": "region",
+                      "synonyms": [
+                        "region name",
+                        "sub-region",
+                        "country",
+                        "territory"
+                      ]
+                    },
+                    {
+                      "data_type": "TEXT",
+                      "description": "Technical category with prefix: AI: Agents, AI: Cortex AI Functions, Analytics: BI, DE: Ingestion, Platform: Governance, etc.",
+                      "expr": "technical_use_case",
+                      "name": "technical_use_case",
+                      "synonyms": [
+                        "tech uc",
+                        "use case type",
+                        "workload category",
+                        "use case category"
+                      ]
+                    },
+                    {
+                      "data_type": "TEXT",
+                      "description": "Semicolon-separated workload tags: AI, Analytics, Data Engineering, Platform, Applications & Collaboration",
+                      "expr": "workloads",
+                      "name": "workloads",
+                      "synonyms": [
+                        "workload",
+                        "domain",
+                        "workload type"
+                      ]
+                    },
+                    {
+                      "data_type": "TEXT",
+                      "description": "How CoCo was detected: SE_COMMENTS (SE wrote coco/cortex code in Salesforce), PARTNER_COMMENTS (partner wrote #coco), FEATURE_FLAG (AI - Cortex Code in Prioritized Features)",
+                      "expr": "coco_source",
+                      "name": "coco_source",
+                      "synonyms": [
+                        "how coco detected",
+                        "coco detection method",
+                        "coco flag source",
+                        "source"
+                      ]
+                    },
+                    {
+                      "data_type": "TEXT",
+                      "description": "Competing technologies mentioned in the use case (e.g. GitHub Copilot, Cursor, Windsurf)",
+                      "expr": "competitors",
+                      "name": "competitors",
+                      "synonyms": [
+                        "competitor",
+                        "competing tools",
+                        "competitive tools",
+                        "competitive landscape"
+                      ]
+                    },
+                    {
+                      "data_type": "DATE",
+                      "description": "Date the use case entered stage 3 or 4. Use for filtering stages 3-4 use cases to a time period or quarter.",
+                      "expr": "decision_date",
+                      "name": "decision_date",
+                      "synonyms": [
+                        "pipeline date",
+                        "stage 3 date",
+                        "stage 4 date",
+                        "validation date",
+                        "entered pipeline"
+                      ]
+                    },
+                    {
+                      "data_type": "DATE",
+                      "description": "Date the use case entered stage 5, 6, or 7. Use for filtering deployed/implementing use cases to a quarter.",
+                      "expr": "go_live_date",
+                      "name": "go_live_date",
+                      "synonyms": [
+                        "go live",
+                        "deployment date",
+                        "stage 5 date",
+                        "implementation date",
+                        "start date"
+                      ]
+                    },
+                    {
+                      "data_type": "BOOLEAN",
+                      "description": "TRUE when CoCo is explicitly mentioned in SE/partner comments or feature flag is set",
+                      "expr": "is_coco",
+                      "name": "is_coco",
+                      "synonyms": [
+                        "coco attached",
+                        "has coco",
+                        "coco flag",
+                        "coco boolean"
+                      ]
+                    },
+                    {
+                      "data_type": "NUMBER",
+                      "description": "Estimated Annual Contract Value for this use case in USD",
+                      "expr": "use_case_eacv",
+                      "name": "eacv",
+                      "synonyms": [
+                        "acv",
+                        "opportunity value",
+                        "contract value",
+                        "deal value",
+                        "revenue"
+                      ]
+                    }
+                  ],
+                  "filters": [
+                    {
+                      "description": "Only the ~44 partners officially tracked in the CoCo OKR program. Includes GSIs (Accenture, Capgemini, Cognizant, Deloitte, EY, IBM), NOAM RSIs (Slalom, phData, Aimpoint Digital, Squadron Data, BlueCloud, kipi.ai, etc.), APJ RSIs (NTT Data, Altis, Megazone, Infinite Lambda, Prolim), EMEA RSIs (Infomotion, Civica, Kubrick, KPC).",
+                      "expr": "partner_name IN ('Accenture', 'Capgemini Technologies LLC', 'Cognizant Technology Solutions US Corp', 'Deloitte Consulting', 'EY', 'Ernst & Young (EY)', 'IBM', 'IBM Consulting', '7Rivers, Inc', 'Aimpoint Digital', 'BlueCloud Services Inc', 'kipi.ai', 'Kipi.ai', 'evolv Consulting', 'Infostrux Solutions Inc.', 'Infosys', 'KPMG LLP', 'LTM', 'LTI Mindtree', 'phData, Inc.', 'Slalom, LLC.', 'Squadron Data Inc', 'Tredence Inc.', 'Spaulding Ridge', 'TEKsystems Global Services, LLC.', 'Blend360, LLC', 'Tiger Analytics Inc.', 'Atrium', 'Perficient Inc.', 'SDK Tek Services Ltd.', 'Merkle', 'Archetype Consulting', 'Apex Systems', 'Tata Consultancy Services', 'OneSix', 'Icon Analytics', 'Sparq Holdings, Inc.', 'CitiusTech Inc.', 'Hexaware Technologies', 'NTT DATA Group Corporation', 'MegazoneCloud Corporation', 'Infinite Lambda Limited', 'Infinite Lambda Inc', 'INFINITE LAMBDA (SINGAPORE) PTE. LTD.', 'Altis Global Limited', 'Altis Consulting, ANZ', 'PROLIM Global Corporation', 'INFOMOTION GMBH', 'INFOMOTION GMBH, BearingPoint', 'CIVICA SOFTWARE, S.L.', 'Kubrick Group', 'KPC (Key Performance Consulting)', 'KPC')",
+                      "name": "managed_partners",
+                      "synonyms": [
+                        "managed",
+                        "OKR partners",
+                        "tracked partners",
+                        "official partners",
+                        "44 partners"
+                      ]
+                    },
+                    {
+                      "description": "Q3 FY27 period (2026-08-01 to 2026-10-31) using correct stage-based date filters",
+                      "expr": "(use_case_stage IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan') AND decision_date BETWEEN '2026-08-01' AND '2026-10-31') OR (use_case_stage IN ('5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed') AND go_live_date BETWEEN '2026-08-01' AND '2026-10-31')",
+                      "name": "q3_fy27",
+                      "synonyms": [
+                        "q3",
+                        "Q3 FY27",
+                        "current quarter",
+                        "this quarter",
+                        "active period"
+                      ]
+                    },
+                    {
+                      "description": "Use cases where CoCo is explicitly attached (IS_COCO = TRUE via keyword or feature flag)",
+                      "expr": "is_coco = TRUE",
+                      "name": "is_coco",
+                      "synonyms": [
+                        "coco attached",
+                        "cortex code attached",
+                        "has coco",
+                        "coco use cases"
+                      ]
+                    },
+                    {
+                      "description": "Use cases at stage 7 - Deployed",
+                      "expr": "use_case_stage = '7 - Deployed'",
+                      "name": "deployed",
+                      "synonyms": [
+                        "stage 7",
+                        "go-live",
+                        "production",
+                        "live",
+                        "go lives"
+                      ]
+                    },
+                    {
+                      "description": "GSI partners (Accenture, Capgemini, Cognizant, Deloitte, EY, IBM)",
+                      "expr": "partner_name IN ('Accenture', 'Capgemini Technologies LLC', 'Cognizant Technology Solutions US Corp', 'Deloitte Consulting', 'EY', 'Ernst & Young (EY)', 'IBM', 'IBM Consulting')",
+                      "name": "gsi_partners",
+                      "synonyms": [
+                        "global system integrators",
+                        "GSI",
+                        "tier 1",
+                        "big GSIs"
+                      ]
+                    },
+                    {
+                      "description": "NOAM RSI partners tracked in the OKR program",
+                      "expr": "partner_name IN ('7Rivers, Inc', 'Aimpoint Digital', 'BlueCloud Services Inc', 'kipi.ai', 'Kipi.ai', 'evolv Consulting', 'Infostrux Solutions Inc.', 'Infosys', 'KPMG LLP', 'LTM', 'LTI Mindtree', 'phData, Inc.', 'Slalom, LLC.', 'Squadron Data Inc', 'Tredence Inc.', 'Spaulding Ridge', 'TEKsystems Global Services, LLC.', 'Blend360, LLC', 'Tiger Analytics Inc.', 'Atrium', 'Perficient Inc.', 'SDK Tek Services Ltd.', 'Merkle', 'Archetype Consulting', 'Apex Systems', 'Tata Consultancy Services', 'OneSix', 'Icon Analytics', 'Sparq Holdings, Inc.', 'CitiusTech Inc.', 'Hexaware Technologies')",
+                      "name": "noam_rsi_partners",
+                      "synonyms": [
+                        "NOAM RSI",
+                        "north america regional SIs",
+                        "NOAM partners"
+                      ]
+                    },
+                    {
+                      "description": "APJ RSI partners (Japan, Korea, ASEAN, ANZ, India)",
+                      "expr": "partner_name IN ('NTT DATA Group Corporation', 'MegazoneCloud Corporation', 'Infinite Lambda Limited', 'Infinite Lambda Inc', 'INFINITE LAMBDA (SINGAPORE) PTE. LTD.', 'Altis Global Limited', 'Altis Consulting, ANZ', 'PROLIM Global Corporation')",
+                      "name": "apj_rsi_partners",
+                      "synonyms": [
+                        "APJ RSI",
+                        "Asia Pacific Japan partners",
+                        "APJ partners"
+                      ]
+                    },
+                    {
+                      "description": "EMEA RSI partners (Germany, Spain, UK, France)",
+                      "expr": "partner_name IN ('INFOMOTION GMBH', 'INFOMOTION GMBH, BearingPoint', 'CIVICA SOFTWARE, S.L.', 'Kubrick Group', 'KPC (Key Performance Consulting)', 'KPC')",
+                      "name": "emea_rsi_partners",
+                      "synonyms": [
+                        "EMEA RSI",
+                        "Europe Middle East Africa partners",
+                        "EMEA partners"
+                      ]
+                    }
+                  ],
+                  "metrics": [
+                    {
+                      "description": "Total number of partner use cases",
+                      "expr": "COUNT(use_case_id)",
+                      "name": "total_use_cases",
+                      "synonyms": [
+                        "number of use cases",
+                        "count of UCs",
+                        "uc count",
+                        "total UCs",
+                        "use case count"
+                      ]
+                    },
+                    {
+                      "description": "Number of use cases with CoCo attached (IS_COCO = TRUE)",
+                      "expr": "COUNT_IF(is_coco = TRUE)",
+                      "name": "coco_use_cases",
+                      "synonyms": [
+                        "coco uc count",
+                        "number of coco UCs",
+                        "attached UCs",
+                        "coco count"
+                      ]
+                    },
+                    {
+                      "description": "CoCo attachment rate as percentage of total use cases. OKR target: 75% for GSIs and NOAM RSIs, 50% for APJ/EMEA RSIs.",
+                      "expr": "ROUND(COUNT_IF(is_coco = TRUE) * 100.0 / NULLIF(COUNT(use_case_id), 0), 1)",
+                      "name": "coco_pct",
+                      "synonyms": [
+                        "coco rate",
+                        "coco attachment rate",
+                        "coco percentage",
+                        "coco adoption rate",
+                        "coco %"
+                      ]
+                    },
+                    {
+                      "description": "Number of use cases at stage 7 - Deployed",
+                      "expr": "COUNT_IF(use_case_stage = '7 - Deployed')",
+                      "name": "deployed_use_cases",
+                      "synonyms": [
+                        "stage 7 count",
+                        "go-live count",
+                        "deployed UCs",
+                        "go lives",
+                        "productions"
+                      ]
+                    },
+                    {
+                      "description": "Number of deployed (stage 7) use cases with CoCo attached",
+                      "expr": "COUNT_IF(use_case_stage = '7 - Deployed' AND is_coco = TRUE)",
+                      "name": "coco_deployed_use_cases",
+                      "synonyms": [
+                        "coco go-lives",
+                        "deployed coco UCs",
+                        "deployed with coco",
+                        "coco go-live count"
+                      ]
+                    },
+                    {
+                      "description": "Total estimated Annual Contract Value across use cases in USD",
+                      "expr": "SUM(eacv)",
+                      "name": "total_eacv",
+                      "synonyms": [
+                        "total acv",
+                        "total revenue",
+                        "eacv total",
+                        "total opportunity value",
+                        "pipeline value"
+                      ]
+                    },
+                    {
+                      "description": "Total eACV of CoCo-attached use cases in USD",
+                      "expr": "SUM(CASE WHEN is_coco = TRUE THEN eacv ELSE 0 END)",
+                      "name": "coco_eacv",
+                      "synonyms": [
+                        "coco acv",
+                        "coco revenue",
+                        "coco opportunity value",
+                        "coco pipeline value"
+                      ]
+                    },
+                    {
+                      "description": "Number of distinct partner companies",
+                      "expr": "COUNT(DISTINCT partner_name)",
+                      "name": "distinct_partners",
+                      "synonyms": [
+                        "partner count",
+                        "number of partners",
+                        "unique partners"
+                      ]
+                    }
+                  ],
+                  "name": "use_cases"
+                },
+                {
+                  "description": "Daily Cortex Code credit and token consumption per user per Snowflake account. Always filter SNOWFLAKE_ACCOUNT_TYPE = 'Customer' and TOTAL_DAILY_REQUESTS > 0 to exclude partner/internal accounts and zero-activity rows.",
+                  "dimensions": [
+                    {
+                      "data_type": "DATE",
+                      "description": "Date of the Cortex Code usage",
+                      "expr": "ds",
+                      "name": "usage_date",
+                      "synonyms": [
+                        "date",
+                        "day",
+                        "ds",
+                        "consumption date"
+                      ]
+                    },
+                    {
+                      "data_type": "TEXT",
+                      "description": "Snowflake user identifier",
+                      "expr": "user_id",
+                      "name": "user_id",
+                      "synonyms": [
+                        "user",
+                        "snowflake user",
+                        "dev user"
+                      ]
+                    },
+                    {
+                      "data_type": "TEXT",
+                      "description": "Snowflake account identifier",
+                      "expr": "account_id",
+                      "name": "account_id",
+                      "synonyms": [
+                        "snowflake account id",
+                        "account identifier"
+                      ]
+                    },
+                    {
+                      "data_type": "TEXT",
+                      "description": "Salesforce account name for this usage record. Use UPPER(SALESFORCE_ACCOUNT_NAME) = UPPER(use_cases.ACCOUNT_NAME) to join to use cases.",
+                      "expr": "salesforce_account_name",
+                      "name": "sf_account_name",
+                      "synonyms": [
+                        "account name",
+                        "salesforce account",
+                        "customer name",
+                        "company name"
+                      ]
+                    },
+                    {
+                      "data_type": "TEXT",
+                      "description": "Customer or Partner. Always filter to Customer for real usage metrics.",
+                      "expr": "snowflake_account_type",
+                      "name": "account_type",
+                      "synonyms": [
+                        "customer or partner",
+                        "account category",
+                        "account kind"
+                      ]
+                    },
+                    {
+                      "data_type": "TEXT",
+                      "description": "Customer industry vertical",
+                      "expr": "industry",
+                      "name": "industry",
+                      "synonyms": [
+                        "vertical",
+                        "customer industry",
+                        "sector",
+                        "industry group"
+                      ]
+                    }
+                  ],
+                  "filters": [
+                    {
+                      "description": "Filter to real customer accounts only (exclude partner/internal testing)",
+                      "expr": "account_type = 'Customer'",
+                      "name": "customer_accounts_only",
+                      "synonyms": [
+                        "customers only",
+                        "exclude partners",
+                        "production usage",
+                        "real accounts"
+                      ]
+                    },
+                    {
+                      "description": "Only rows where the user made at least one CoCo request",
+                      "expr": "total_daily_requests > 0",
+                      "name": "active_users_only",
+                      "synonyms": [
+                        "active",
+                        "non-zero usage",
+                        "has usage",
+                        "has activity"
+                      ]
+                    },
+                    {
+                      "description": "Q3 FY27 period for token/credit consumption (2026-08-01 to 2026-10-31)",
+                      "expr": "usage_date BETWEEN '2026-08-01' AND '2026-10-31'",
+                      "name": "q3_fy27_usage",
+                      "synonyms": [
+                        "q3",
+                        "Q3 FY27",
+                        "current quarter usage",
+                        "this quarter credits"
+                      ]
+                    }
+                  ],
+                  "metrics": [
+                    {
+                      "description": "Total Cortex Code credit spend (dollar cost) including cache tokens",
+                      "expr": "SUM(total_token_credits)",
+                      "name": "total_credits",
+                      "synonyms": [
+                        "credits",
+                        "credit spend",
+                        "cost",
+                        "token credits",
+                        "spend"
+                      ]
+                    },
+                    {
+                      "description": "Total input + output tokens consumed (excludes cache)",
+                      "expr": "SUM(total_tokens)",
+                      "name": "total_tokens",
+                      "synonyms": [
+                        "tokens",
+                        "token usage",
+                        "token volume",
+                        "token count"
+                      ]
+                    },
+                    {
+                      "description": "Credits from CLI (terminal) surface \u2014 indicates production-like developer usage",
+                      "expr": "SUM(cli_token_credits)",
+                      "name": "cli_credits",
+                      "synonyms": [
+                        "cli spend",
+                        "terminal usage",
+                        "cli cost",
+                        "cli credit"
+                      ]
+                    },
+                    {
+                      "description": "Credits from VS Code Desktop extension usage",
+                      "expr": "SUM(desktop_token_credits)",
+                      "name": "desktop_credits",
+                      "synonyms": [
+                        "vscode credits",
+                        "desktop spend",
+                        "ide cost",
+                        "vscode cost"
+                      ]
+                    },
+                    {
+                      "description": "Credits from Snowsight web UI \u2014 indicates exploratory or demo usage",
+                      "expr": "SUM(ui_token_credits)",
+                      "name": "ui_credits",
+                      "synonyms": [
+                        "snowsight credits",
+                        "ui spend",
+                        "web usage cost",
+                        "ui cost"
+                      ]
+                    },
+                    {
+                      "description": "Number of distinct customer accounts with any CoCo usage",
+                      "expr": "COUNT(DISTINCT sf_account_name)",
+                      "name": "active_accounts",
+                      "synonyms": [
+                        "distinct accounts",
+                        "unique accounts",
+                        "account count",
+                        "accounts with usage"
+                      ]
+                    },
+                    {
+                      "description": "Number of distinct users consuming CoCo",
+                      "expr": "COUNT(DISTINCT user_id)",
+                      "name": "active_users",
+                      "synonyms": [
+                        "user count",
+                        "distinct users",
+                        "unique users",
+                        "devs using coco"
+                      ]
+                    },
+                    {
+                      "description": "Total CoCo API requests",
+                      "expr": "SUM(total_daily_requests)",
+                      "name": "daily_requests",
+                      "synonyms": [
+                        "requests",
+                        "total requests",
+                        "api calls",
+                        "coco requests"
+                      ]
+                    }
+                  ],
+                  "name": "token_usage"
+                }
+              ],
+              "validation_warnings": [
+                "Verified query 'coco_q3_summary' referred to physical tables. The sql query was transformed to use logical table names.",
+                "Verified query 'coco_by_partner' referred to physical tables. The sql query was transformed to use logical table names.",
+                "Verified query 'coco_by_theater' referred to physical tables. The sql query was transformed to use logical table names.",
+                "Verified query 'top_deployed_coco' referred to physical tables. The sql query was transformed to use logical table names.",
+                "Verified query 'credit_spend_q3' referred to physical tables. The sql query was transformed to use logical table names.",
+                "Verified query 'competitor_presence' referred to physical tables. The sql query was transformed to use logical table names.",
+                "Verified query 'gsi_vs_rsi_comparison' referred to physical tables. The sql query was transformed to use logical table names."
+              ],
+              "verified_queries": [
+                {
+                  "question": "What is the overall CoCo adoption summary for managed partners in Q3?",
+                  "sql": "SELECT COUNT(use_case_id) AS total_use_cases, COUNT_IF(is_coco = TRUE) AS coco_use_cases, ROUND(COUNT_IF(is_coco = TRUE) * 100.0 / NULLIF(COUNT(use_case_id), 0), 1) AS coco_pct, COUNT_IF(use_case_stage = '7 - Deployed') AS deployed_uc, COUNT_IF(use_case_stage = '7 - Deployed' AND is_coco = TRUE) AS coco_deployed, COUNT(DISTINCT partner_name) AS distinct_partners FROM __use_cases WHERE partner_name IN ('Accenture', 'Capgemini Technologies LLC', 'Cognizant Technology Solutions US Corp', 'Deloitte Consulting', 'EY', 'Ernst & Young (EY)', 'IBM', 'IBM Consulting', '7Rivers, Inc', 'Aimpoint Digital', 'BlueCloud Services Inc', 'kipi.ai', 'Kipi.ai', 'evolv Consulting', 'Infostrux Solutions Inc.', 'Infosys', 'KPMG LLP', 'LTM', 'LTI Mindtree', 'phData, Inc.', 'Slalom, LLC.', 'Squadron Data Inc', 'Tredence Inc.', 'Spaulding Ridge', 'TEKsystems Global Services, LLC.', 'Blend360, LLC', 'Tiger Analytics Inc.', 'Atrium', 'Perficient Inc.', 'SDK Tek Services Ltd.', 'Merkle', 'Archetype Consulting', 'Apex Systems', 'Tata Consultancy Services', 'OneSix', 'Icon Analytics', 'Sparq Holdings, Inc.', 'CitiusTech Inc.', 'Hexaware Technologies', 'NTT DATA Group Corporation', 'MegazoneCloud Corporation', 'Infinite Lambda Limited', 'Infinite Lambda Inc', 'INFINITE LAMBDA (SINGAPORE) PTE. LTD.', 'Altis Global Limited', 'Altis Consulting, ANZ', 'PROLIM Global Corporation', 'INFOMOTION GMBH', 'INFOMOTION GMBH, BearingPoint', 'CIVICA SOFTWARE, S.L.', 'Kubrick Group', 'KPC (Key Performance Consulting)', 'KPC') AND ((use_case_stage IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan') AND decision_date BETWEEN '2026-08-01' AND '2026-10-31') OR (use_case_stage IN ('5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed') AND go_live_date BETWEEN '2026-08-01' AND '2026-10-31'))"
+                },
+                {
+                  "question": "What is the CoCo attachment rate for each managed partner in Q3?",
+                  "sql": "SELECT partner_name, COUNT(use_case_id) AS total_use_cases, COUNT_IF(is_coco = TRUE) AS coco_use_cases, ROUND(COUNT_IF(is_coco = TRUE) * 100.0 / NULLIF(COUNT(use_case_id), 0), 1) AS coco_pct FROM __use_cases WHERE partner_name IN ('Accenture', 'Capgemini Technologies LLC', 'Cognizant Technology Solutions US Corp', 'Deloitte Consulting', 'EY', 'Ernst & Young (EY)', 'IBM', 'IBM Consulting', '7Rivers, Inc', 'Aimpoint Digital', 'BlueCloud Services Inc', 'kipi.ai', 'Kipi.ai', 'evolv Consulting', 'Infostrux Solutions Inc.', 'Infosys', 'KPMG LLP', 'LTM', 'LTI Mindtree', 'phData, Inc.', 'Slalom, LLC.', 'Squadron Data Inc', 'Tredence Inc.', 'Spaulding Ridge', 'TEKsystems Global Services, LLC.', 'Blend360, LLC', 'Tiger Analytics Inc.', 'Atrium', 'Perficient Inc.', 'SDK Tek Services Ltd.', 'Merkle', 'Archetype Consulting', 'Apex Systems', 'Tata Consultancy Services', 'OneSix', 'Icon Analytics', 'Sparq Holdings, Inc.', 'CitiusTech Inc.', 'Hexaware Technologies', 'NTT DATA Group Corporation', 'MegazoneCloud Corporation', 'Infinite Lambda Limited', 'Infinite Lambda Inc', 'INFINITE LAMBDA (SINGAPORE) PTE. LTD.', 'Altis Global Limited', 'Altis Consulting, ANZ', 'PROLIM Global Corporation', 'INFOMOTION GMBH', 'INFOMOTION GMBH, BearingPoint', 'CIVICA SOFTWARE, S.L.', 'Kubrick Group', 'KPC (Key Performance Consulting)', 'KPC') AND ((use_case_stage IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan') AND decision_date BETWEEN '2026-08-01' AND '2026-10-31') OR (use_case_stage IN ('5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed') AND go_live_date BETWEEN '2026-08-01' AND '2026-10-31')) GROUP BY partner_name ORDER BY coco_pct DESC"
+                },
+                {
+                  "question": "How many CoCo use cases are there in each theater for Q3?",
+                  "sql": "SELECT theater_name, COUNT(use_case_id) AS total_use_cases, COUNT_IF(is_coco = TRUE) AS coco_use_cases, ROUND(COUNT_IF(is_coco = TRUE) * 100.0 / NULLIF(COUNT(use_case_id), 0), 1) AS coco_pct FROM __use_cases WHERE partner_name IN ('Accenture', 'Capgemini Technologies LLC', 'Cognizant Technology Solutions US Corp', 'Deloitte Consulting', 'EY', 'Ernst & Young (EY)', 'IBM', 'IBM Consulting', '7Rivers, Inc', 'Aimpoint Digital', 'BlueCloud Services Inc', 'kipi.ai', 'Kipi.ai', 'evolv Consulting', 'Infostrux Solutions Inc.', 'Infosys', 'KPMG LLP', 'LTM', 'LTI Mindtree', 'phData, Inc.', 'Slalom, LLC.', 'Squadron Data Inc', 'Tredence Inc.', 'Spaulding Ridge', 'TEKsystems Global Services, LLC.', 'Blend360, LLC', 'Tiger Analytics Inc.', 'Atrium', 'Perficient Inc.', 'SDK Tek Services Ltd.', 'Merkle', 'Archetype Consulting', 'Apex Systems', 'Tata Consultancy Services', 'OneSix', 'Icon Analytics', 'Sparq Holdings, Inc.', 'CitiusTech Inc.', 'Hexaware Technologies', 'NTT DATA Group Corporation', 'MegazoneCloud Corporation', 'Infinite Lambda Limited', 'Infinite Lambda Inc', 'INFINITE LAMBDA (SINGAPORE) PTE. LTD.', 'Altis Global Limited', 'Altis Consulting, ANZ', 'PROLIM Global Corporation', 'INFOMOTION GMBH', 'INFOMOTION GMBH, BearingPoint', 'CIVICA SOFTWARE, S.L.', 'Kubrick Group', 'KPC (Key Performance Consulting)', 'KPC') AND ((use_case_stage IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan') AND decision_date BETWEEN '2026-08-01' AND '2026-10-31') OR (use_case_stage IN ('5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed') AND go_live_date BETWEEN '2026-08-01' AND '2026-10-31')) GROUP BY theater_name ORDER BY coco_use_cases DESC"
+                },
+                {
+                  "question": "Which partners have the most deployed CoCo use cases in Q3?",
+                  "sql": "SELECT partner_name, COUNT_IF(use_case_stage = '7 - Deployed') AS deployed_uc, COUNT_IF(use_case_stage = '7 - Deployed' AND is_coco = TRUE) AS coco_deployed, ROUND(COUNT_IF(use_case_stage = '7 - Deployed' AND is_coco = TRUE) * 100.0 / NULLIF(COUNT_IF(use_case_stage = '7 - Deployed'), 0), 1) AS coco_deploy_pct FROM __use_cases WHERE partner_name IN ('Accenture', 'Capgemini Technologies LLC', 'Cognizant Technology Solutions US Corp', 'Deloitte Consulting', 'EY', 'Ernst & Young (EY)', 'IBM', 'IBM Consulting', '7Rivers, Inc', 'Aimpoint Digital', 'BlueCloud Services Inc', 'kipi.ai', 'Kipi.ai', 'evolv Consulting', 'Infostrux Solutions Inc.', 'Infosys', 'KPMG LLP', 'LTM', 'LTI Mindtree', 'phData, Inc.', 'Slalom, LLC.', 'Squadron Data Inc', 'Tredence Inc.', 'Spaulding Ridge', 'TEKsystems Global Services, LLC.', 'Blend360, LLC', 'Tiger Analytics Inc.', 'Atrium', 'Perficient Inc.', 'SDK Tek Services Ltd.', 'Merkle', 'Archetype Consulting', 'Apex Systems', 'Tata Consultancy Services', 'OneSix', 'Icon Analytics', 'Sparq Holdings, Inc.', 'CitiusTech Inc.', 'Hexaware Technologies', 'NTT DATA Group Corporation', 'MegazoneCloud Corporation', 'Infinite Lambda Limited', 'Infinite Lambda Inc', 'INFINITE LAMBDA (SINGAPORE) PTE. LTD.', 'Altis Global Limited', 'Altis Consulting, ANZ', 'PROLIM Global Corporation', 'INFOMOTION GMBH', 'INFOMOTION GMBH, BearingPoint', 'CIVICA SOFTWARE, S.L.', 'Kubrick Group', 'KPC (Key Performance Consulting)', 'KPC') AND use_case_stage = '7 - Deployed' AND go_live_date BETWEEN '2026-08-01' AND '2026-10-31' GROUP BY partner_name ORDER BY coco_deployed DESC LIMIT 10"
+                },
+                {
+                  "question": "How much credit spend did customer accounts generate in Q3?",
+                  "sql": "SELECT ROUND(SUM(total_token_credits), 2) AS total_credits, SUM(total_tokens) AS total_tokens, COUNT(DISTINCT salesforce_account_name) AS active_accounts, COUNT(DISTINCT user_id) AS active_users FROM __token_usage WHERE snowflake_account_type = 'Customer' AND total_daily_requests > 0 AND ds BETWEEN '2026-08-01' AND '2026-10-31'"
+                },
+                {
+                  "question": "Which competitors appear most in CoCo use cases in Q3?",
+                  "sql": "SELECT competitors, COUNT(use_case_id) AS uc_count, COUNT_IF(is_coco = TRUE) AS coco_uc_count FROM __use_cases WHERE partner_name IN ('Accenture', 'Capgemini Technologies LLC', 'Cognizant Technology Solutions US Corp', 'Deloitte Consulting', 'EY', 'Ernst & Young (EY)', 'IBM', 'IBM Consulting', '7Rivers, Inc', 'Aimpoint Digital', 'BlueCloud Services Inc', 'kipi.ai', 'Kipi.ai', 'evolv Consulting', 'Infostrux Solutions Inc.', 'Infosys', 'KPMG LLP', 'LTM', 'LTI Mindtree', 'phData, Inc.', 'Slalom, LLC.', 'Squadron Data Inc', 'Tredence Inc.', 'Spaulding Ridge', 'TEKsystems Global Services, LLC.', 'Blend360, LLC', 'Tiger Analytics Inc.', 'Atrium', 'Perficient Inc.', 'SDK Tek Services Ltd.', 'Merkle', 'Archetype Consulting', 'Apex Systems', 'Tata Consultancy Services', 'OneSix', 'Icon Analytics', 'Sparq Holdings, Inc.', 'CitiusTech Inc.', 'Hexaware Technologies', 'NTT DATA Group Corporation', 'MegazoneCloud Corporation', 'Infinite Lambda Limited', 'Infinite Lambda Inc', 'INFINITE LAMBDA (SINGAPORE) PTE. LTD.', 'Altis Global Limited', 'Altis Consulting, ANZ', 'PROLIM Global Corporation', 'INFOMOTION GMBH', 'INFOMOTION GMBH, BearingPoint', 'CIVICA SOFTWARE, S.L.', 'Kubrick Group', 'KPC (Key Performance Consulting)', 'KPC') AND NOT competitors IS NULL AND competitors <> '' AND ((use_case_stage IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan') AND decision_date BETWEEN '2026-08-01' AND '2026-10-31') OR (use_case_stage IN ('5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed') AND go_live_date BETWEEN '2026-08-01' AND '2026-10-31')) GROUP BY competitors ORDER BY uc_count DESC LIMIT 15"
+                },
+                {
+                  "question": "How do GSIs compare to NOAM RSIs on CoCo adoption in Q3?",
+                  "sql": "SELECT CASE WHEN partner_name IN ('Accenture', 'Capgemini Technologies LLC', 'Cognizant Technology Solutions US Corp', 'Deloitte Consulting', 'EY', 'Ernst & Young (EY)', 'IBM', 'IBM Consulting') THEN 'GSI' ELSE 'NOAM RSI' END AS partner_group, COUNT(use_case_id) AS total_uc, COUNT_IF(is_coco = TRUE) AS coco_uc, ROUND(COUNT_IF(is_coco = TRUE) * 100.0 / NULLIF(COUNT(use_case_id), 0), 1) AS coco_pct FROM __use_cases WHERE partner_name IN ('Accenture', 'Capgemini Technologies LLC', 'Cognizant Technology Solutions US Corp', 'Deloitte Consulting', 'EY', 'Ernst & Young (EY)', 'IBM', 'IBM Consulting', '7Rivers, Inc', 'Aimpoint Digital', 'BlueCloud Services Inc', 'kipi.ai', 'Kipi.ai', 'evolv Consulting', 'Infostrux Solutions Inc.', 'Infosys', 'KPMG LLP', 'LTM', 'LTI Mindtree', 'phData, Inc.', 'Slalom, LLC.', 'Squadron Data Inc', 'Tredence Inc.', 'Spaulding Ridge', 'TEKsystems Global Services, LLC.', 'Blend360, LLC', 'Tiger Analytics Inc.', 'Atrium', 'Perficient Inc.', 'SDK Tek Services Ltd.', 'Merkle', 'Archetype Consulting', 'Apex Systems', 'Tata Consultancy Services', 'OneSix', 'Icon Analytics', 'Sparq Holdings, Inc.', 'CitiusTech Inc.', 'Hexaware Technologies') AND ((use_case_stage IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan') AND decision_date BETWEEN '2026-08-01' AND '2026-10-31') OR (use_case_stage IN ('5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed') AND go_live_date BETWEEN '2026-08-01' AND '2026-10-31')) GROUP BY partner_group"
+                }
+              ]
+            },
+            "type": "json"
+          }
+        ],
+        "name": "coco_adoption_uc",
+        "status": "success",
+        "tool_use_id": "toolu_bdrk_011hVAPGQoHTH7m2vsC2eA3F",
+        "type": "system_agentic_semantic_context"
+      },
+      "type": "tool_result"
+    },
+    {
+      "thinking": {
+        "text": "The question uses \"Q3\" context but doesn't specify a quarter. Given the semantic model's active period is Q3 FY27 (2026-08-01 to 2026-10-31), and my system prompt says Q3 FY26 is 2025-02-01 to 2025-10-31. There's a conflict. The user just asks \"which GSI has the highest CoCo attachment rate\" without a time filter. I'll use the Q3 FY27 active period per the semantic model. Let me query GSI attachment rates.\n\nNote IBM has two aliases (IBM, IBM Consulting) and EY has two (EY, Ernst & Young). I should group these display aliases. Let me use a normalized partner name."
+      },
+      "type": "thinking"
+    },
+    {
+      "tool_use": {
+        "client_side_execute": false,
+        "input": {
+          "semantic_model": "coco_adoption_uc",
+          "sql": "SELECT \n  CASE \n    WHEN partner_name IN ('IBM','IBM Consulting') THEN 'IBM'\n    WHEN partner_name IN ('EY','Ernst & Young (EY)') THEN 'EY'\n    WHEN partner_name = 'Capgemini Technologies LLC' THEN 'Capgemini'\n    WHEN partner_name = 'Cognizant Technology Solutions US Corp' THEN 'Cognizant'\n    WHEN partner_name = 'Deloitte Consulting' THEN 'Deloitte'\n    ELSE partner_name END AS gsi,\n  COUNT(use_case_id) AS total_use_cases,\n  COUNT_IF(is_coco = TRUE) AS coco_use_cases,\n  ROUND(COUNT_IF(is_coco = TRUE) * 100.0 / NULLIF(COUNT(use_case_id), 0), 1) AS coco_pct\nFROM __use_cases\nWHERE partner_name IN ('Accenture', 'Capgemini Technologies LLC', 'Cognizant Technology Solutions US Corp', 'Deloitte Consulting', 'EY', 'Ernst & Young (EY)', 'IBM', 'IBM Consulting')\n  AND ((use_case_stage IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan') AND decision_date BETWEEN '2026-08-01' AND '2026-10-31')\n    OR (use_case_stage IN ('5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed') AND go_live_date BETWEEN '2026-08-01' AND '2026-10-31'))\nGROUP BY gsi\nORDER BY coco_pct DESC NULLS LAST",
+          "verified_query_used": true
+        },
+        "name": "system_execute_sql",
+        "tool_use_id": "toolu_bdrk_01FJFWBW598veZuPjhFP2iXE",
+        "type": "system_execute_sql"
+      },
+      "type": "tool_use"
+    },
+    {
+      "tool_result": {
+        "content": [
+          {
+            "json": {
+              "query_id": "01c65ad2-0918-e8d1-0001-dd89127d7cd7",
+              "result_set": {
+                "data": [
+                  [
+                    "EY",
+                    "47",
+                    "18",
+                    "38.3"
+                  ],
+                  [
+                    "Capgemini",
+                    "17",
+                    "5",
+                    "29.4"
+                  ],
+                  [
+                    "Accenture",
+                    "79",
+                    "15",
+                    "19.0"
+                  ],
+                  [
+                    "IBM",
+                    "38",
+                    "7",
+                    "18.4"
+                  ],
+                  [
+                    "Cognizant",
+                    "23",
+                    "4",
+                    "17.4"
+                  ],
+                  [
+                    "Deloitte",
+                    "75",
+                    "12",
+                    "16.0"
+                  ]
+                ],
+                "resultSetMetaData": {
+                  "format": "jsonv2",
+                  "numRows": 6,
+                  "partition": 0,
+                  "partitionInfo": [
+                    {
+                      "rowCount": 6,
+                      "uncompressedSize": 184
+                    }
+                  ],
+                  "rowType": [
+                    {
+                      "length": 16777216,
+                      "name": "GSI",
+                      "nullable": true,
+                      "precision": 0,
+                      "scale": 0,
+                      "type": "text"
+                    },
+                    {
+                      "length": 0,
+                      "name": "TOTAL_USE_CASES",
+                      "nullable": false,
+                      "precision": 18,
+                      "scale": 0,
+                      "type": "fixed"
+                    },
+                    {
+                      "length": 0,
+                      "name": "COCO_USE_CASES",
+                      "nullable": true,
+                      "precision": 13,
+                      "scale": 0,
+                      "type": "fixed"
+                    },
+                    {
+                      "length": 0,
+                      "name": "COCO_PCT",
+                      "nullable": true,
+                      "precision": 23,
+                      "scale": 1,
+                      "type": "fixed"
+                    }
+                  ]
+                },
+                "statementHandle": "01c65ad2-0918-e8d1-0001-dd89127d7cd7"
+              },
+              "semantic_model_path": "@TEMP.COCO_PARTNER_ADOPTION.COCO_AGENT_STAGE/coco_adoption_model.yaml",
+              "sql": "WITH __use_cases AS (\n  SELECT\n    use_case_id,\n    partner_name,\n    use_case_stage,\n    decision_date,\n    go_live_date,\n    is_coco\n  FROM temp.coco_partner_adoption.dt_okr_use_cases\n)\nSELECT\n  CASE\n    WHEN partner_name IN ('IBM', 'IBM Consulting')\n    THEN 'IBM'\n    WHEN partner_name IN ('EY', 'Ernst & Young (EY)')\n    THEN 'EY'\n    WHEN partner_name = 'Capgemini Technologies LLC'\n    THEN 'Capgemini'\n    WHEN partner_name = 'Cognizant Technology Solutions US Corp'\n    THEN 'Cognizant'\n    WHEN partner_name = 'Deloitte Consulting'\n    THEN 'Deloitte'\n    ELSE partner_name\n  END AS gsi,\n  COUNT(use_case_id) AS total_use_cases,\n  COUNT_IF(is_coco = TRUE) AS coco_use_cases,\n  ROUND(COUNT_IF(is_coco = TRUE) * 100.0 / NULLIF(NULLIF(COUNT(use_case_id), 0), 0), 1) AS coco_pct\nFROM __use_cases\nWHERE\n  partner_name IN (\n    'Accenture',\n    'Capgemini Technologies LLC',\n    'Cognizant Technology Solutions US Corp',\n    'Deloitte Consulting',\n    'EY',\n    'Ernst & Young (EY)',\n    'IBM',\n    'IBM Consulting'\n  )\n  AND (\n    (\n      use_case_stage IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan')\n      AND decision_date BETWEEN '2026-08-01' AND '2026-10-31'\n    )\n    OR (\n      use_case_stage IN ('5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed')\n      AND go_live_date BETWEEN '2026-08-01' AND '2026-10-31'\n    )\n  )\nGROUP BY\n  gsi\nORDER BY\n  coco_pct DESC NULLS LAST /* Generated by Cortex */;",
+              "verified_query_used": true
+            },
+            "type": "json"
+          }
+        ],
+        "name": "system_execute_sql",
+        "status": "success",
+        "tool_use_id": "toolu_bdrk_01FJFWBW598veZuPjhFP2iXE",
+        "type": "system_execute_sql"
+      },
+      "type": "tool_result"
+    },
+    {
+      "thinking": {
+        "text": "EY has the highest at 38.3%. Let me present with a chart."
+      },
+      "type": "thinking"
+    },
+    {
+      "text": "**EY has the highest CoCo attachment rate among GSIs at 38.3%** (18 of 47 use cases) for the current quarter (Q3 FY27). Note this is still well below the 75% OKR target for GSIs.\n\n",
+      "type": "text"
+    },
+    {
+      "table": {
+        "query_id": "01c65ad2-0918-e8d1-0001-dd89127d7cd7",
+        "result_set": {
+          "data": [
+            [
+              "EY",
+              "47",
+              "18",
+              "38.3"
+            ],
+            [
+              "Capgemini",
+              "17",
+              "5",
+              "29.4"
+            ],
+            [
+              "Accenture",
+              "79",
+              "15",
+              "19.0"
+            ],
+            [
+              "IBM",
+              "38",
+              "7",
+              "18.4"
+            ],
+            [
+              "Cognizant",
+              "23",
+              "4",
+              "17.4"
+            ],
+            [
+              "Deloitte",
+              "75",
+              "12",
+              "16.0"
+            ]
+          ],
+          "resultSetMetaData": {
+            "format": "jsonv2",
+            "numRows": 6,
+            "partition": 0,
+            "rowType": [
+              {
+                "length": 16777216,
+                "name": "GSI",
+                "nullable": true,
+                "precision": 0,
+                "scale": 0,
+                "type": "text"
+              },
+              {
+                "length": 0,
+                "name": "TOTAL_USE_CASES",
+                "nullable": false,
+                "precision": 18,
+                "scale": 0,
+                "type": "fixed"
+              },
+              {
+                "length": 0,
+                "name": "COCO_USE_CASES",
+                "nullable": true,
+                "precision": 13,
+                "scale": 0,
+                "type": "fixed"
+              },
+              {
+                "length": 0,
+                "name": "COCO_PCT",
+                "nullable": true,
+                "precision": 23,
+                "scale": 1,
+                "type": "fixed"
+              }
+            ]
+          },
+          "statementHandle": "01c65ad2-0918-e8d1-0001-dd89127d7cd7"
+        },
+        "title": "GSI CoCo Attachment Rate \u2014 Q3 FY27",
+        "tool_use_id": "toolu_bdrk_01FJFWBW598veZuPjhFP2iXE"
+      },
+      "type": "table"
+    },
+    {
+      "tool_use": {
+        "client_side_execute": false,
+        "input": {
+          "skill_name": "chart_instructions"
+        },
+        "name": "server_skill",
+        "tool_use_id": "toolu_bdrk_01LhFHxfAzSLo6Fa5QwuYrAU",
+        "type": "server_skill"
+      },
+      "type": "tool_use"
+    },
+    {
+      "tool_result": {
+        "content": [
+          {
+            "json": {
+              "content": "# Skill: chart_instructions\n\n**Description**: Instructions for generating Vega-Lite chart specifications with unrestricted chart types\n\n## Instructions\n\n\n# WHEN TO GENERATE A CHART\n\n**PHASE 1: DECIDING TO GENERATE A CHART** (happens DURING your reasoning, BEFORE you have a chart tool result)\n\nInspecting results from system_execute_sql, you MUST evaluate in <thinking>:\n\n**Step 1: Should I generate a chart?**\n  - Prefer charts over tables for: comparisons, trends, rankings, distributions, time-series\n  - MUST generate charts when SQL results have 2+ rows with numerical metrics (revenue, sales, counts, growth rates, percentages)\n  - Example of MANDATORY chart scenarios:\n    - Comparisons: revenue by region, sales by product, performance by team\n    - Rankings: top 10 customers, bottom performers, leaderboards\n    - Time series: monthly trends, year-over-year growth, daily metrics\n    - Distributions: category breakdowns, segment analysis\n  - Do NOT chart: singular values (e.g., \"What is total revenue?\" \u2192 just answer \"The total revenue is $X\")\n  - Prefer using the prior SQL result's `tool_use_id` as `tool_result_id` when available\n\n**Step 2: Is the SQL result visualization-ready?**\n  - Check: row count, column names, aggregation level, data shape\n  - Check if the question mentions a specific chart type that should be generated. If it does, check if the SQL result is visualization-ready for the requested chart type.\n  - **IMPORTANT - Check custom instructions**: Review the system prompt for any custom response instructions or chart-related preferences. Custom instructions should take precedence over recommendations in this guide, unless they are breaking the system. For example, if custom instructions say \"always use bar charts for time series\", you MUST use a bar chart even though this guide recommends line charts for time series. Double-check any instructions under \"[Important Case-specific Instructions]\" section in the system prompt, and apply any chart-relevant guidance.\n\n**Step 3: Prepare data and generate a chart**\n  - If data is NOT visualization-ready \u2192 Use a vega-lite transform to reshape the data before calling data_to_chart again. Reuse the prior SQL result's tool_use_id; do NOT run a new SQL query for chart data reshaping unless absolutely necessary and you need different data.\n  - Always provide context text BEFORE the chart block, then show the chart (both inline in your answer text).\n\n**Step 4: Consider generating multiple charts**\n  - You CAN generate multiple charts when a single chart would be insufficient or misleading:\n    - **Different scales**: When metrics have vastly different magnitudes (e.g., revenue in millions vs. growth rate in percentages), a single chart may hide patterns in smaller values. Create separate charts for each scale.\n    - **Different perspectives**: When the user's question benefits from multiple views (e.g., \"analyze sales performance\" could show both a trend over time AND a breakdown by category).\n    - **Comparison clarity**: When comparing items with very different value ranges, separate charts can make each comparison more straightforward.\n  - To generate multiple charts:\n    1. Call data_to_chart multiple times, once for each chart\n    2. Present each chart with a brief label explaining what it shows. Remember to cite each chart separately\n    3. Example: \"Here's the revenue trend:\" followed by chart 1, then \"And here's the growth rate trend:\" followed by chart 2\n  - Do NOT generate multiple charts just to show more visualizations - only when it genuinely improves understanding.\n\n**PHASE 2: PRESENTING THE CHART** (happens AFTER you have a chart tool result in conversation history)\n\nOnce you have called data_to_chart tool and received a tool result:\n  * Find the data_to_chart tool result with the chart in conversation history\n  * Provide the <chart>toolUseId</chart> block inline in your answer text after the thinking block where toolUseId is from the data_to_chart tool result\n  * Valid chart block format: <chart>tooluse_8n3P5qRk7aWzJ1cYxTvEfg</chart>\n  * If you cannot find ANY valid tool results from data_to_chart tool in conversation history, just say \"I couldn't generate a valid visualization.\"\n  * **AVOID REPETITION**: When user did not ask for a chart explicitly, your chart response comes AFTER your initial response in the conversation. Do NOT repeat information already provided in your previous answer before generating the chart:\n    - Do NOT repeat the summary or analysis from your first response\n    - Introduce the chart and optionally add NEW observations visible only in the visualization (e.g., visual patterns, outliers that stand out graphically) or new findings that you were not aware of before.\n  * All chart blocks must be placed inline in your answer text, not before the thinking block.\n  * DO NOT use tool IDs from system_execute_sql tool results to generate a chart block. These will cause rendering errors. ONLY use data_to_chart tool use IDs in chart blocks.\n  * DO NOT reference or describe chart colors (e.g., \"the blue line\", \"red bars\") in your <thinking> sections, unless you explicitly specified them in chart specification.\n  * **Colors**: The chart's Vega-Lite spec may include a `color_mapping` object at `usermeta.snowflake.color_mapping` (e.g. `{\"Health\":{\"hex\":\"#1a6ce7\",\"name\":\"blue\"}}`) where each entry maps a category to its rendered hex and color name. Whenever the user refers to a series by color or asks to recolor one, you MUST consult `color_mapping` to identify the category. Match the user's color word to the closest `name` \u2014 do not require an exact match; map approximate or near human color words to the nearest name (e.g. \"sky\"/\"sky blue\"/\"navy\"/\"azure\"/\"cobalt\" \u2192 \"blue\", \"crimson\"/\"maroon\"/\"scarlet\" \u2192 \"red\", \"lime\"/\"emerald\"/\"olive\" \u2192 \"green\", \"gold\"/\"amber\" \u2192 \"orange\"). Use the matched category whether they ask about a color (e.g. \"what does the red line show?\") or ask to recolor it (e.g. \"change the sky-blue bar to yellow\"); for recolor, change only that category's color and preserve all other encodings.\n\n# HOW TO USE\n\n## Step 1: Call data_to_chart\n\nProvide:\n\n1. **`chart`**: a complete Vega-Lite JSON specification (see format below)\n2. **`tool_result_id`**: the `tool_use_id` of a previous system_execute_sql result whose data should be used. Refreshable.\n\n## Step 2: Cite the chart\n\nUse the data_to_chart `tool_use_id` when citing the chart inline in your answer text:\n```\n<chart>tool_use_id</chart>\n```\n\n# CHART SPEC FORMAT\n\nThe `chart` parameter must be a valid Vega-Lite JSON object.\n\n## Single-view constraint\nThe rendering backend only supports **single-view** specs. Do NOT use `vconcat`, `hconcat`, `facet`, or `repeat`.\n\nTo combine multiple chart types (e.g., bar + line), use `layer` within a single-view spec.\nIf the user asks for side-by-side panels, generate **separate charts** by calling data_to_chart multiple times.\n\n## Data handling\n- **Do NOT include a top-level `\"data\"` field.** The referenced SQL result is injected automatically and **overwrites** any `data` you provide. Because of this override, your `encoding.field` names MUST match the **SQL result column names exactly** \u2014 Snowflake returns them UPPERCASE by default (e.g. `INCIDENT_MONTH`, `INCIDENT_COUNT`) \u2014 NOT any friendlier alias you might invent.\n  - **This is the #1 cause of blank charts:** writing inline data like `{\"month\": ..., \"count\": ...}` and then encoding `\"field\": \"month\"`. The pipeline replaces your data with columns `INCIDENT_MONTH`/`INCIDENT_COUNT`, so `month`/`count` no longer exist and no marks are drawn. Always take field names from the actual SQL result columns in the conversation, not from your prose or example data.\n- **Do NOT include `\"width\"` or `\"height\"`.** These are set in post-processing.\n- **The ONLY place a `\"data\"` field is allowed is inside an annotation layer** \u2014 a `rule`/`text` reference-line or label layer where you supply your own constant positions/labels (see Tip 8). That per-layer `data.values` is NOT overwritten. Never put `data` at the top level, and never put it on a primary data-bearing layer.\n- For `layer` specs, omit top-level `\"data\"`; the injected SQL result is shared across all data-bearing layers.\n\n## Single-layer example\n```json\n{\n  \"title\": \"Monthly Revenue\",\n  \"mark\": {\"type\": \"area\", \"opacity\": 0.7},\n  \"encoding\": {\n    \"x\": {\"field\": \"MONTH\", \"type\": \"temporal\"},\n    \"y\": {\"field\": \"REVENUE\", \"type\": \"quantitative\"},\n    \"color\": {\"field\": \"REGION\", \"type\": \"nominal\"}\n  }\n}\n```\n\n## Multi-layer example (dual-axis)\n```json\n{\n  \"title\": \"Revenue vs Orders\",\n  \"layer\": [\n    {\n      \"mark\": \"bar\",\n      \"encoding\": {\n        \"x\": {\"field\": \"MONTH\", \"type\": \"ordinal\"},\n        \"y\": {\"field\": \"REVENUE\", \"type\": \"quantitative\", \"axis\": {\"title\": \"Revenue ($)\"}}\n      }\n    },\n    {\n      \"mark\": {\"type\": \"line\", \"color\": \"red\", \"strokeWidth\": 2},\n      \"encoding\": {\n        \"x\": {\"field\": \"MONTH\", \"type\": \"ordinal\"},\n        \"y\": {\"field\": \"ORDERS\", \"type\": \"quantitative\", \"axis\": {\"title\": \"Orders\"}}\n      }\n    }\n  ],\n  \"resolve\": {\"scale\": {\"y\": \"independent\"}}\n}\n```\n\n# FIELD TYPES\n\n- `\"quantitative\"` \u2014 numeric values\n- `\"nominal\"` \u2014 categorical without order\n- `\"ordinal\"` \u2014 categorical with order\n- `\"temporal\"` \u2014 date/time values\n\n# TIPS\n\n\n1. **Dual-axis**: Use `layer` with `resolve: {scale: {y: \"independent\"}}`. **Use at most 2 layers.** More than 2 layers causes overlapping Y-axis labels. If you need to show 3+ metrics on different scales, generate **separate charts** by calling data_to_chart multiple times instead.\n2. **Heatmaps**: Use `mark: \"rect\"` with `color` on quantitative, `x`/`y` on nominal\n3. **Boxplots**: Use `mark: \"boxplot\"`\n4. **Waterfall**: Use `calculate` transforms for running totals, then `bar` with `y`/`y2`\n5. **Technical/helper columns**: If you create a transform output that is only used for styling, positioning, or other internal chart mechanics, its field name MUST start with `_`. Examples: `_color`, `_label_x`, `_x`, `_y`, `_label`. These internal helper fields are not user-facing and should not be intended for tooltips or legends unless you explicitly mean to expose them.\n6. **Custom colors**: When the user (or chart customization soft instructions) requests specific colors per series or wants to highlight specific marks, read [references/colors.md](references/colors.md) for the two `_color` patterns (multi-series via `scale.range.field` vs highlight via `scale: null`) and the rules that keep them mutually exclusive.\n7. **Global styling**: Use the `config` object for background, fonts, default mark color, etc. (e.g., `\"config\": {\"background\": \"lightgray\"}`)\n8. **Annotations, reference lines, and bar text labels**: Add annotation layers ONLY when the user (or chart customization soft instructions) explicitly asks for reference lines, event markers, value labels on bars, or text callouts.\n\n   Use `rule` or `text` layers with **per-layer `data`** and `field`-based encoding. Do **NOT** use `datum` \u2014 it is not supported by the renderer and will render at position 0. Give each annotation layer its own `\"data\": {\"values\": [...]}` with the position values, then reference them via `field`.\n\n   Example \u2014 vertical reference line + label on a temporal x-axis:\n   ```json\n   {\n     \"layer\": [\n       {\n         \"mark\": {\"type\": \"rule\", \"color\": \"#FF6B6B\", \"strokeDash\": [4, 4]},\n         \"data\": {\"values\": [{\"_X\": \"2025-04-18\"}]},\n         \"encoding\": {\"x\": {\"field\": \"_X\", \"type\": \"temporal\"}}\n       },\n       {\n         \"mark\": {\"type\": \"text\", \"align\": \"left\", \"dx\": 5, \"dy\": -5, \"color\": \"#FF6B6B\", \"fontSize\": 11},\n         \"data\": {\"values\": [{\"_X\": \"2025-04-18\", \"_Y\": 190, \"_LABEL\": \"Event date\"}]},\n         \"encoding\": {\n           \"x\": {\"field\": \"_X\", \"type\": \"temporal\"},\n           \"y\": {\"field\": \"_Y\", \"type\": \"quantitative\"},\n           \"text\": {\"field\": \"_LABEL\", \"type\": \"nominal\"}\n         }\n       }\n     ]\n   }\n   ```\n   For horizontal reference lines use `\"y\"` instead of `\"x\"` with the same per-layer data pattern.\n\n   **CRITICAL \u2014 ordinal axis with explicit `sort` array**: When the main axis is `ordinal` with an explicit `sort` array (e.g. `[1,2,...,12]` or month names), the annotation layer's `data.values` key AND `encoding.field` MUST match the main layer's field name **exactly** (same casing). Renaming it (`MONTH` \u2192 `_MONTH`) silently breaks the shared scale's sort and falls back to alphabetical order. Pick ONE field name and reuse it in every layer.\n\n   Example \u2014 annotation on an ordinal axis with `sort`:\n   ```json\n   {\n     \"layer\": [\n       {\n         \"mark\": \"bar\",\n         \"encoding\": {\n           \"x\": {\"field\": \"MONTH\", \"type\": \"ordinal\", \"sort\": [1,2,3,4,5,6,7,8,9,10,11,12]},\n           \"y\": {\"field\": \"REVENUE\", \"type\": \"quantitative\"}\n         }\n       },\n       {\n         \"data\": {\"values\": [{\"MONTH\": 12, \"_LABEL\": \"Year-end\"}]},\n         \"mark\": {\"type\": \"text\", \"align\": \"right\", \"dx\": -4, \"dy\": -10, \"fontWeight\": \"bold\"},\n         \"encoding\": {\n           \"x\": {\"field\": \"MONTH\", \"type\": \"ordinal\", \"sort\": [1,2,3,4,5,6,7,8,9,10,11,12]},\n           \"y\": {\"value\": 10},\n           \"text\": {\"field\": \"_LABEL\", \"type\": \"nominal\"}\n         }\n       }\n     ]\n   }\n   ```\n\n   **Bar text labels**: Center labels at the midpoint of each bar via a `calculate` transform (e.g. `datum.SALES / 2`). Use a contrasting color (e.g. white text on dark bars).\n   ```json\n   {\n     \"layer\": [\n       {\"mark\": \"bar\", \"encoding\": {\"x\": {\"field\": \"SALES\", \"type\": \"quantitative\"}, \"y\": {\"field\": \"REGION\", \"type\": \"nominal\"}}},\n       {\n         \"transform\": [{\"calculate\": \"datum.SALES / 2\", \"as\": \"_label_x\"}],\n         \"mark\": {\"type\": \"text\", \"color\": \"white\"},\n         \"encoding\": {\n           \"x\": {\"field\": \"_label_x\", \"type\": \"quantitative\"},\n           \"y\": {\"field\": \"REGION\", \"type\": \"nominal\"},\n           \"text\": {\"field\": \"SALES\", \"type\": \"quantitative\"}\n         }\n       }\n     ]\n   }\n   ```\n9. **Multiple panels**: Call data_to_chart multiple times instead of using `hconcat`/`vconcat`\n\n# DATA QUALITY RULES\n\nFollow these rules to ensure charts render correctly. These prevent the most common failures.\n\n## 1. Bar charts: no duplicate categories\n\nFor bar charts without an aggregate, each (categorical_field, color_field) tuple must be unique. Duplicate categories cause stacked/overlapping bars that misrepresent the data. Avoid that, unless specifically requested by user.\n\n**Fix \u2014 aggregate transform** (preferred):\n```json\n{\n  \"transform\": [\n    {\"aggregate\": [{\"op\": \"sum\", \"field\": \"SALES\", \"as\": \"SALES\"}], \"groupby\": [\"REGION\", \"CATEGORY\"]}\n  ],\n  \"mark\": \"bar\",\n  \"encoding\": {\n    \"x\": {\"field\": \"SALES\", \"type\": \"quantitative\"},\n    \"y\": {\"field\": \"REGION\", \"type\": \"nominal\"},\n    \"color\": {\"field\": \"CATEGORY\", \"type\": \"nominal\"}\n  }\n}\n```\n\n**Fix \u2014 grouped bar chart** (when you want to show per-item bars side by side instead of stacking):\nUse `xOffset` (vertical bars) or `yOffset` (horizontal bars) to place bars next to each other. This is the **default** for multi-color bar charts.\n```json\n{\n  \"title\": \"Revenue by Region and Category\",\n  \"mark\": \"bar\",\n  \"encoding\": {\n    \"x\": {\"field\": \"SALES\", \"type\": \"quantitative\"},\n    \"y\": {\"field\": \"REGION\", \"type\": \"nominal\"},\n    \"yOffset\": {\"field\": \"CATEGORY\", \"type\": \"nominal\"},\n    \"color\": {\"field\": \"CATEGORY\", \"type\": \"nominal\", \"title\": \"Category\"}\n  }\n}\n```\n\n**Fix \u2014 stacked bar chart** (ONLY when the user explicitly asks for a \"stacked bar chart\"):\nAdd `\"stack\": \"zero\"` to the **quantitative** axis encoding and do NOT include `xOffset`/`yOffset`. Use `\"stack\": \"normalize\"` only when the user explicitly asks for normalized/percentage stacked bars.\nNEVER use `\"stack\": false`, `\"stack\": null`, or `\"stack\": \"center\"` \u2014 these cause broken or overlapping bars.\n```json\n{\n  \"title\": \"Sales by Region and Category (Stacked)\",\n  \"mark\": \"bar\",\n  \"encoding\": {\n    \"x\": {\"field\": \"SALES\", \"type\": \"quantitative\", \"stack\": \"zero\"},\n    \"y\": {\"field\": \"REGION\", \"type\": \"nominal\"},\n    \"color\": {\"field\": \"CATEGORY\", \"type\": \"nominal\", \"title\": \"Category\"}\n  }\n}\n```\nWhen combining with fold (wide-format data with multiple metric columns):\n```json\n{\n  \"transform\": [\n    {\"fold\": [\"CAPACITY\", \"UTILIZATION\"]},\n    {\"calculate\": \"({'CAPACITY': 'Capacity', 'UTILIZATION': 'Utilization'})[datum.key]\", \"as\": \"key\"}\n  ],\n  \"mark\": \"bar\",\n  \"encoding\": {\n    \"x\": {\"field\": \"value\", \"type\": \"quantitative\"},\n    \"y\": {\"field\": \"ACCOUNT\", \"type\": \"nominal\"},\n    \"yOffset\": {\"field\": \"key\", \"type\": \"nominal\"},\n    \"color\": {\"field\": \"key\", \"type\": \"nominal\", \"title\": \"Metric\"}\n  }\n}\n```\n**Rule**: The `xOffset`/`yOffset` field MUST be different from `x` and `y` fields. Never use the same field in multiple encodings.\n\n## 2. Line charts: unique x-values per series\n\nEach color series in a line chart must have unique x-values. Duplicate x-values within the same series create ambiguous zigzag lines.\n\n**Fix \u2014 wide-format data** (multiple value columns \u2192 fold):\n```json\n{\n  \"transform\": [{\"fold\": [\"REVENUE\", \"ORDERS\"]}],\n  \"mark\": \"line\",\n  \"encoding\": {\n    \"x\": {\"field\": \"MONTH\", \"type\": \"temporal\"},\n    \"y\": {\"field\": \"value\", \"type\": \"quantitative\"},\n    \"color\": {\"field\": \"key\", \"type\": \"nominal\"}\n  }\n}\n```\n\n**Fix \u2014 duplicate rows** (aggregate transform):\n```json\n{\n  \"transform\": [\n    {\"aggregate\": [{\"op\": \"sum\", \"field\": \"SALES\", \"as\": \"SALES\"}], \"groupby\": [\"DATE\", \"REGION\"]}\n  ],\n  \"mark\": \"line\",\n  \"encoding\": {\n    \"x\": {\"field\": \"DATE\", \"type\": \"temporal\"},\n    \"y\": {\"field\": \"SALES\", \"type\": \"quantitative\"},\n    \"color\": {\"field\": \"REGION\", \"type\": \"nominal\"}\n  }\n}\n```\n\n**Fix \u2014 missing color encoding**: If data has a category column causing duplicates, add `color` encoding so each series gets its own line with unique x-values.\n\n## 3. Bar charts: custom x-axis domains cause bars extending off-screen\n\nBar marks always start from 0 on the quantitative axis. If you set a custom `scale.domain` that excludes 0 (e.g., `[0.95, 1.1]` for values near 1.0), bars will stretch from 0 (off-screen) to their value, appearing as extremely long bars extending to the left (horizontal) or bottom (vertical).\n\n**Fix \u2014 use `x2`/`y2` to anchor the bar baseline at the domain start:**\n```json\n{\n  \"mark\": \"bar\",\n  \"encoding\": {\n    \"x\": {\"field\": \"METRIC\", \"type\": \"quantitative\", \"scale\": {\"domain\": [0.95, 1.1]}},\n    \"x2\": {\"datum\": 0.95},\n    \"y\": {\"field\": \"CATEGORY\", \"type\": \"nominal\"}\n  }\n}\n```\n\n**Alternative \u2014 use tick or point marks** which don't have a baseline:\n```json\n{\n  \"mark\": {\"type\": \"tick\", \"thickness\": 3},\n  \"encoding\": {\n    \"x\": {\"field\": \"METRIC\", \"type\": \"quantitative\", \"scale\": {\"domain\": [0.95, 1.1]}},\n    \"y\": {\"field\": \"CATEGORY\", \"type\": \"nominal\"}\n  }\n}\n```\n\n**Rule**: Whenever you use a bar chart with a custom `scale.domain` that does not include 0, you MUST either set `x2`/`y2` to the domain start value, or use a non-bar mark type (tick, point, circle).\n\n## 4. Temporal line charts: regular spacing\n\nFor temporal line charts, avoid data with very irregular time gaps (e.g., daily data with multi-month gaps). Vega-Lite draws straight lines between points, making large gaps misleading.\n\n**Fix options**:\n- If the user explicitly asks for a line chart with irregular data, use `\"point\": true` to show where real observations exist: `\"mark\": {\"type\": \"line\", \"point\": true}`\n- Otherwise, prefer a Vega-Lite `filter`/`aggregate` transform to produce data with regular time intervals (e.g., fill gaps with zeros or nulls, or aggregate to a coarser granularity like monthly/quarterly). Only run a new SQL query when absolutely necessary \u2014 i.e., the required transformation cannot be expressed as a vega-lite transform\n- Provide separate charts for each interval\n\n\n## 5. Field name casing must match SQL column names exactly \u2014 and must match across layers\n\nVega-Lite field matching is **case-sensitive**. Snowflake SQL returns column names in UPPERCASE by default. Always use the exact casing from the SQL result set.\n\n**Correct:** `{\"field\": \"REVENUE\", ...}` (matches Snowflake column `REVENUE`)\n**Wrong:** `{\"field\": \"revenue\", ...}` or `{\"field\": \"Revenue\", ...}`\n\nThis applies everywhere: encoding fields, `calculate` expressions (`datum.REVENUE`), `fold` field lists, `sort` field references, and `aggregate` groupby fields.\n\n**Cross-layer rule (layered specs):** Once a `field` name is used on a shared scale (e.g. `x` is `field: \"MONTH\"` in the bar layer), every other layer that draws on that same scale **and** every key in those layers' inline `data.values` must use the *exact* same string. Do NOT rename a column to make it look \"internal\" by adding/removing an underscore (`MONTH` \u2192 `_MONTH`) or changing case (`_month_name` \u2192 `_MONTH_NAME`) in an annotation layer \u2014 the rename silently breaks shared-scale features (sort fall-through, color-scale fall-through, axis-domain mismatch). When in doubt, reuse the *same* field name everywhere.\n\n# COMMON MISTAKES\n\n- Do NOT include a top-level `\"data\"`, `\"width\"`, `\"height\"`, or `\"$schema\"` \u2014 they are handled automatically (top-level `data` is overwritten by the injected SQL result). The only allowed `data` is per-layer `data.values` in a `rule`/`text` annotation layer (Tip 8)\n- Field names must match the injected SQL result column names EXACTLY (case-sensitive) \u2014 never the aliases you use in prose or inline example data\n- When using `layer`, all layers share compatible encodings unless using `resolve`\n- When using `fold` transform, the new fields default to `\"key\"` and `\"value\"`\n- **NEVER** use `vconcat`, `hconcat`, `facet`, or `repeat` \u2014 renderer only supports single-view\n- **DO NOT CREATE** `maps` - reading map json is blocked and will not render properly\n- **NEVER** use `datum` in `rule` or `text` annotation layers \u2014 always use per-layer `\"data\": {\"values\": [...]}` with `field`-based encoding (see Tip 8)\n\n\n\n## Skill Directory Contents\n\nThe following files are available in this skill. Use the `read` tool to explore them if needed.\n\n| File Path | Size |\n|-----------|------|\n| `/app/skills/chart_instructions/references/` | (dir) |\n| `/app/skills/chart_instructions/references/colors.md` | 2.3 KB |\n\n**To read a file**, use the `read` tool with `file_path` set to the full path shown above.\nExample: `{\"file_path\": \"/app/skills/chart_instructions/example.md\", \"offset\": 0, \"limit\": 100}`\n",
+              "skill_name": "chart_instructions"
+            },
+            "type": "json"
+          }
+        ],
+        "name": "server_skill",
+        "status": "success",
+        "tool_use_id": "toolu_bdrk_01LhFHxfAzSLo6Fa5QwuYrAU",
+        "type": "server_skill"
+      },
+      "type": "tool_result"
+    },
+    {
+      "tool_use": {
+        "client_side_execute": false,
+        "input": {
+          "chart": "{\n  \"title\": \"GSI CoCo Attachment Rate \u2014 Q3 FY27\",\n  \"mark\": \"bar\",\n  \"encoding\": {\n    \"y\": {\"field\": \"GSI\", \"type\": \"nominal\", \"sort\": \"-x\", \"title\": \"GSI\"},\n    \"x\": {\"field\": \"COCO_PCT\", \"type\": \"quantitative\", \"title\": \"CoCo Attachment Rate (%)\"}\n  }\n}",
+          "question": "THIS FIELD WILL BE DEPRECATED SOON. Please stop using it and use the 'chart' field instead.",
+          "tool_result_id": "toolu_bdrk_01FJFWBW598veZuPjhFP2iXE"
+        },
+        "name": "data_to_chart",
+        "tool_use_id": "toolu_bdrk_01XiqYSvjC7efWNw9UmX92c5",
+        "type": "data_to_chart"
+      },
+      "type": "tool_use"
+    },
+    {
+      "tool_result": {
+        "content": [
+          {
+            "json": {
+              "charts": [
+                "{\"$schema\":\"https://vega.github.io/schema/vega-lite/v5.json\",\"config\":{\"bar\":{\"minBandSize\":5}},\"data\":{\"values\":[{\"COCO_PCT\":38.3,\"GSI\":\"EY\"},{\"COCO_PCT\":29.4,\"GSI\":\"Capgemini\"},{\"COCO_PCT\":19,\"GSI\":\"Accenture\"},{\"COCO_PCT\":18.4,\"GSI\":\"IBM\"},{\"COCO_PCT\":17.4,\"GSI\":\"Cognizant\"},{\"COCO_PCT\":16,\"GSI\":\"Deloitte\"}]},\"encoding\":{\"tooltip\":[{\"field\":\"COCO_PCT\",\"format\":\",.6~f\",\"title\":\"CoCo Attachment Rate (%)\",\"type\":\"quantitative\"},{\"field\":\"GSI\",\"title\":\"GSI\",\"type\":\"nominal\"}],\"x\":{\"field\":\"COCO_PCT\",\"sort\":null,\"title\":\"CoCo Attachment Rate (%)\",\"type\":\"quantitative\"},\"y\":{\"field\":\"GSI\",\"sort\":\"-x\",\"title\":\"GSI\",\"type\":\"nominal\"}},\"mark\":\"bar\",\"title\":\"GSI CoCo Attachment Rate \u2014 Q3 FY27\",\"usermeta\":{\"snowflake\":{\"color_mapping\":{\"bar\":{\"hex\":\"#4c78a8\",\"name\":\"blue\"}},\"columnRoles\":{\"COCO_PCT\":\"measure\",\"COCO_USE_CASES\":\"measure\",\"TOTAL_USE_CASES\":\"measure\"},\"columnTypes\":[{\"length\":16777216,\"name\":\"GSI\",\"nullable\":true,\"precision\":0,\"scale\":0,\"type\":\"text\"},{\"length\":0,\"name\":\"TOTAL_USE_CASES\",\"nullable\":true,\"precision\":18,\"scale\":0,\"type\":\"fixed\"},{\"length\":0,\"name\":\"COCO_USE_CASES\",\"nullable\":true,\"precision\":13,\"scale\":0,\"type\":\"fixed\"},{\"length\":0,\"name\":\"COCO_PCT\",\"nullable\":true,\"precision\":23,\"scale\":1,\"type\":\"fixed\"}],\"refreshSQL\":\"WITH __cortex_chart_orig AS (WITH __use_cases AS (\\n  SELECT\\n    use_case_id,\\n    partner_name,\\n    use_case_stage,\\n    decision_date,\\n    go_live_date,\\n    is_coco\\n  FROM temp.coco_partner_adoption.dt_okr_use_cases\\n)\\nSELECT\\n  CASE\\n    WHEN partner_name IN ('IBM', 'IBM Consulting')\\n    THEN 'IBM'\\n    WHEN partner_name IN ('EY', 'Ernst \\u0026 Young (EY)')\\n    THEN 'EY'\\n    WHEN partner_name = 'Capgemini Technologies LLC'\\n    THEN 'Capgemini'\\n    WHEN partner_name = 'Cognizant Technology Solutions US Corp'\\n    THEN 'Cognizant'\\n    WHEN partner_name = 'Deloitte Consulting'\\n    THEN 'Deloitte'\\n    ELSE partner_name\\n  END AS gsi,\\n  COUNT(use_case_id) AS total_use_cases,\\n  COUNT_IF(is_coco = TRUE) AS coco_use_cases,\\n  ROUND(COUNT_IF(is_coco = TRUE) * 100.0 / NULLIF(NULLIF(COUNT(use_case_id), 0), 0), 1) AS coco_pct\\nFROM __use_cases\\nWHERE\\n  partner_name IN (\\n    'Accenture',\\n    'Capgemini Technologies LLC',\\n    'Cognizant Technology Solutions US Corp',\\n    'Deloitte Consulting',\\n    'EY',\\n    'Ernst \\u0026 Young (EY)',\\n    'IBM',\\n    'IBM Consulting'\\n  )\\n  AND (\\n    (\\n      use_case_stage IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan')\\n      AND decision_date BETWEEN '2026-08-01' AND '2026-10-31'\\n    )\\n    OR (\\n      use_case_stage IN ('5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed')\\n      AND go_live_date BETWEEN '2026-08-01' AND '2026-10-31'\\n    )\\n  )\\nGROUP BY\\n  gsi\\nORDER BY\\n  coco_pct DESC NULLS LAST /* Generated by Cortex */) SELECT \\\"GSI\\\", \\\"TOTAL_USE_CASES\\\", \\\"COCO_USE_CASES\\\", \\\"COCO_PCT\\\" FROM __cortex_chart_orig\",\"sanitizedSQLQueryID\":\"01c65ad2-0918-e8d0-0001-dd8912826763\"}}}"
+              ]
+            },
+            "type": "json"
+          }
+        ],
+        "name": "data_to_chart",
+        "status": "success",
+        "tool_use_id": "toolu_bdrk_01XiqYSvjC7efWNw9UmX92c5",
+        "type": "data_to_chart"
+      },
+      "type": "tool_result"
+    },
+    {
+      "text": "Here's the ranking across all six GSIs \u2014 EY leads by a clear margin, while the other five cluster between 16% and 29%. All remain below the 75% GSI OKR target.\n\n",
+      "type": "text"
+    },
+    {
+      "chart": {
+        "chart_spec": "{\"$schema\":\"https://vega.github.io/schema/vega-lite/v5.json\",\"config\":{\"bar\":{\"minBandSize\":5}},\"data\":{\"values\":[{\"COCO_PCT\":38.3,\"GSI\":\"EY\"},{\"COCO_PCT\":29.4,\"GSI\":\"Capgemini\"},{\"COCO_PCT\":19,\"GSI\":\"Accenture\"},{\"COCO_PCT\":18.4,\"GSI\":\"IBM\"},{\"COCO_PCT\":17.4,\"GSI\":\"Cognizant\"},{\"COCO_PCT\":16,\"GSI\":\"Deloitte\"}]},\"encoding\":{\"tooltip\":[{\"field\":\"COCO_PCT\",\"format\":\",.6~f\",\"title\":\"CoCo Attachment Rate (%)\",\"type\":\"quantitative\"},{\"field\":\"GSI\",\"title\":\"GSI\",\"type\":\"nominal\"}],\"x\":{\"field\":\"COCO_PCT\",\"sort\":null,\"title\":\"CoCo Attachment Rate (%)\",\"type\":\"quantitative\"},\"y\":{\"field\":\"GSI\",\"sort\":\"-x\",\"title\":\"GSI\",\"type\":\"nominal\"}},\"mark\":\"bar\",\"title\":\"GSI CoCo Attachment Rate \u2014 Q3 FY27\",\"usermeta\":{\"snowflake\":{\"color_mapping\":{\"bar\":{\"hex\":\"#4c78a8\",\"name\":\"blue\"}},\"columnRoles\":{\"COCO_PCT\":\"measure\",\"COCO_USE_CASES\":\"measure\",\"TOTAL_USE_CASES\":\"measure\"},\"columnTypes\":[{\"length\":16777216,\"name\":\"GSI\",\"nullable\":true,\"precision\":0,\"scale\":0,\"type\":\"text\"},{\"length\":0,\"name\":\"TOTAL_USE_CASES\",\"nullable\":true,\"precision\":18,\"scale\":0,\"type\":\"fixed\"},{\"length\":0,\"name\":\"COCO_USE_CASES\",\"nullable\":true,\"precision\":13,\"scale\":0,\"type\":\"fixed\"},{\"length\":0,\"name\":\"COCO_PCT\",\"nullable\":true,\"precision\":23,\"scale\":1,\"type\":\"fixed\"}],\"refreshSQL\":\"WITH __cortex_chart_orig AS (WITH __use_cases AS (\\n  SELECT\\n    use_case_id,\\n    partner_name,\\n    use_case_stage,\\n    decision_date,\\n    go_live_date,\\n    is_coco\\n  FROM temp.coco_partner_adoption.dt_okr_use_cases\\n)\\nSELECT\\n  CASE\\n    WHEN partner_name IN ('IBM', 'IBM Consulting')\\n    THEN 'IBM'\\n    WHEN partner_name IN ('EY', 'Ernst \\u0026 Young (EY)')\\n    THEN 'EY'\\n    WHEN partner_name = 'Capgemini Technologies LLC'\\n    THEN 'Capgemini'\\n    WHEN partner_name = 'Cognizant Technology Solutions US Corp'\\n    THEN 'Cognizant'\\n    WHEN partner_name = 'Deloitte Consulting'\\n    THEN 'Deloitte'\\n    ELSE partner_name\\n  END AS gsi,\\n  COUNT(use_case_id) AS total_use_cases,\\n  COUNT_IF(is_coco = TRUE) AS coco_use_cases,\\n  ROUND(COUNT_IF(is_coco = TRUE) * 100.0 / NULLIF(NULLIF(COUNT(use_case_id), 0), 0), 1) AS coco_pct\\nFROM __use_cases\\nWHERE\\n  partner_name IN (\\n    'Accenture',\\n    'Capgemini Technologies LLC',\\n    'Cognizant Technology Solutions US Corp',\\n    'Deloitte Consulting',\\n    'EY',\\n    'Ernst \\u0026 Young (EY)',\\n    'IBM',\\n    'IBM Consulting'\\n  )\\n  AND (\\n    (\\n      use_case_stage IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan')\\n      AND decision_date BETWEEN '2026-08-01' AND '2026-10-31'\\n    )\\n    OR (\\n      use_case_stage IN ('5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed')\\n      AND go_live_date BETWEEN '2026-08-01' AND '2026-10-31'\\n    )\\n  )\\nGROUP BY\\n  gsi\\nORDER BY\\n  coco_pct DESC NULLS LAST /* Generated by Cortex */) SELECT \\\"GSI\\\", \\\"TOTAL_USE_CASES\\\", \\\"COCO_USE_CASES\\\", \\\"COCO_PCT\\\" FROM __cortex_chart_orig\",\"sanitizedSQLQueryID\":\"01c65ad2-0918-e8d0-0001-dd8912826763\"}}}",
+        "tool_use_id": "toolu_bdrk_01XiqYSvjC7efWNw9UmX92c5"
+      },
+      "type": "chart"
+    },
+    {
+      "suggested_queries": [
+        {
+          "query": "How do the GSIs compare to NOAM RSIs on CoCo attachment rate this quarter?"
+        },
+        {
+          "query": "Which GSI has the most deployed (stage 7) CoCo use cases in Q3 FY27?"
+        },
+        {
+          "query": "How does EY's CoCo attachment rate break down by theater?"
+        }
+      ],
+      "type": "suggested_queries"
+    }
+  ],
+  "metadata": {
+    "usage": {
+      "tokens_consumed": [
+        {
+          "context_window": 1000000,
+          "input_tokens": {
+            "cache_read": 150701,
+            "cache_write": 37693,
+            "total": 188406,
+            "uncached": 12
+          },
+          "model_name": "claude-opus-4-8",
+          "output_tokens": {
+            "total": 1878
+          }
+        }
+      ]
+    }
+  },
+  "role": "assistant",
+  "schema_version": "v2",
+  "sequence_number": 146,
+  "status": "completed"
+}
