@@ -447,6 +447,12 @@ _managed_bc = _bc_managed if len(bulk_conf) > 0 and 'IS_COCO_FINAL' in bulk_conf
 with st.expander(":material/table: Breakdown by Theatre", expanded=True):
     st.caption("Partner CoCo UCs = IS_COCO_FINAL | Scoped to managed partners: GSI · NOAM RSI · APJ RSI · EMEA RSI")
     _theatre_mdm = get_all_uc_counts_by_theatre(conn, start_date, end_date)
+    # Housekeeping theatres, not real go-to-market territories. Filtered here rather
+    # than at render time so the TOTAL row excludes them too.
+    if len(_theatre_mdm) > 0:
+        _theatre_mdm = _theatre_mdm[
+            ~_theatre_mdm["THEATER_NAME"].str.strip().str.upper()
+            .isin({"ACCTSTODELETE", "AMSPARTNER"})]
     # Derive partner side from managed bulk_conf (IS_COCO_FINAL) when available; SQL fallback otherwise
     if len(_managed_bc) > 0 and 'IS_COCO_FINAL' in _managed_bc.columns:
         _theatre_partner = _build_partner_theatre_from_bulk(_managed_bc)
