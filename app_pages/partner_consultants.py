@@ -42,10 +42,39 @@ def _wow_bg(val):
 
 
 def _norm_partner(df):
-    if len(df) and "PARTNER_NAME" in df.columns:
-        df = df.copy()
-        df["PARTNER_NAME"] = df["PARTNER_NAME"].replace(PARTNER_RENAME_MAP)
-    return df
+    """Canonicalise PARTNER_NAME, then collapse rows that just became duplicates.
+
+    PARTNER_COCO_USE_CASES carries both 'EY' and 'Ernst & Young (EY)' (and both 'IBM'
+    and 'IBM Consulting'). Renaming after aggregation left two rows with the same
+    PARTNER_NAME, which fanned out on merge: EY appeared twice in the tables and its
+    consultants and tokens were counted twice in the metric cards (393 vs 343
+    consultants, 109.1M vs 101.4M tokens). Collapsing here keeps every caller correct.
+    """
+    if len(df) == 0 or "PARTNER_NAME" not in df.columns:
+        return df
+    df = df.copy()
+    df["PARTNER_NAME"] = df["PARTNER_NAME"].replace(PARTNER_RENAME_MAP)
+    if not df["PARTNER_NAME"].duplicated().any():
+        return df
+
+    # WOW_PCT is a ratio — summing it is meaningless, so recompute it from the
+    # summed 7-day windows after the collapse.
+    agg = {}
+    for c in df.columns:
+        if c == "PARTNER_NAME":
+            continue
+        if c == "WOW_PCT":
+            agg[c] = "first"
+        elif pd.api.types.is_numeric_dtype(df[c]):
+            agg[c] = "sum"
+        else:
+            agg[c] = "first"
+    out = df.groupby("PARTNER_NAME", as_index=False).agg(agg)
+
+    if {"LAST7_TOKENS", "PRIOR7_TOKENS"}.issubset(out.columns):
+        out["WOW_PCT"] = ((out["LAST7_TOKENS"] - out["PRIOR7_TOKENS"]) /
+                          out["PRIOR7_TOKENS"].replace(0, float("nan")) * 100).round(1)
+    return out
 
 
 # =============================== View 1 ====================================
