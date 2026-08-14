@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 from utils.queries import get_partner_coco_coverage, get_okr_stage_breakdown, get_partner_credit_consumption, get_bulk_confidence_scores, get_coco_final_wow
+from utils import apply_coco_final
 from utils.cortex_helpers import cortex_complete
 from utils.ask_ai import build_filter_context, build_credit_wow_context, build_uc_pattern_context
 from utils import resolve_partner_filter, resolve_region_theaters, PARTNER_RENAME_MAP, filter_out_partner_own_accounts
@@ -57,10 +58,7 @@ if include_account_coco and len(coverage) > 0:
         if _sel_stages and 'USE_CASE_STAGE' in bulk_conf.columns:
             bulk_conf = bulk_conf[bulk_conf['USE_CASE_STAGE'].isin(_sel_stages)]
         bands = confidence_filter if confidence_filter else ['High', 'Medium', 'Low']
-        bulk_conf['IS_COCO_FINAL'] = (
-            (bulk_conf['IS_COCO'] == True) |
-            (bulk_conf['CONFIDENCE_BAND'].isin(bands))
-        )
+        bulk_conf['IS_COCO_FINAL'] = apply_coco_final(bulk_conf, bands)
         coco_eacv = bulk_conf[bulk_conf['IS_COCO_FINAL']].groupby('PARTNER_NAME')['USE_CASE_EACV'].sum().reset_index()
         coco_eacv.columns = ['PARTNER_NAME', 'COCO_EACV']
         conf_summary = bulk_conf.groupby('PARTNER_NAME').agg(

@@ -2,7 +2,7 @@ import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
 from utils.queries import get_adoption_overview, get_adoption_by_partner, get_adoption_by_stage, get_adoption_by_region, get_by_technical_type, get_by_account_gvp, get_bulk_confidence_scores, get_partner_coco_coverage, get_all_uc_counts, get_all_uc_counts_by_theatre, get_partner_metrics_by_theatre, get_all_uc_counts_by_region, get_partner_metrics_by_region, get_apj_rsi_adoption, get_emea_rsi_adoption, get_gsi_adoption, get_noam_rsi_adoption
-from utils import resolve_partner_filter, resolve_region_theaters, filter_out_partner_own_accounts
+from utils import resolve_partner_filter, resolve_region_theaters, filter_out_partner_own_accounts, apply_coco_final
 from utils import APJ_RSI_REGION_MAP, EMEA_RSI_REGION_MAP
 from utils import PARTNER_ALIASES as _PA_EARLY
 
@@ -169,7 +169,7 @@ if include_account_coco and selected_partners:
             if _theaters is not None:
                 bulk_conf = bulk_conf[bulk_conf['THEATER_NAME'].isin(_theaters)]
         bands = confidence_filter if confidence_filter else ['High', 'Medium', 'Low']
-        bulk_conf['IS_COCO_FINAL'] = (bulk_conf['IS_COCO'] == True) | (bulk_conf['CONFIDENCE_BAND'].isin(bands))
+        bulk_conf['IS_COCO_FINAL'] = apply_coco_final(bulk_conf, bands)
         coco_count = int(bulk_conf['IS_COCO_FINAL'].sum())
         total_count = len(bulk_conf)
         coco_pct = round(coco_count * 100.0 / total_count, 1) if total_count > 0 else 0
@@ -189,7 +189,7 @@ elif include_account_coco:
             if _theaters is not None:
                 bulk_conf = bulk_conf[bulk_conf['THEATER_NAME'].isin(_theaters)]
         bands = confidence_filter if confidence_filter else ['High', 'Medium', 'Low']
-        bulk_conf['IS_COCO_FINAL'] = (bulk_conf['IS_COCO'] == True) | (bulk_conf['CONFIDENCE_BAND'].isin(bands))
+        bulk_conf['IS_COCO_FINAL'] = apply_coco_final(bulk_conf, bands)
         coco_count = int(bulk_conf['IS_COCO_FINAL'].sum())
         total_count = len(bulk_conf)
         coco_pct = round(coco_count * 100.0 / total_count, 1) if total_count > 0 else 0

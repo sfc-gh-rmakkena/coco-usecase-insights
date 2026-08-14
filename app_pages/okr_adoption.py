@@ -4,7 +4,7 @@ import plotly.graph_objects as go
 from datetime import datetime, date
 from utils.queries import get_okr_partner_summary, get_okr_stage_breakdown, get_okr_coco_adoption, get_partner_credit_consumption, get_usecase_confidence_scores, get_bulk_confidence_scores, get_coco_final_wow, get_coco_final_trend_4w, get_partner_coco_trend_4w, get_partner_weekly_credits_4w, get_partner_surface_trend_4w
 from utils.ask_ai import build_filter_context, build_credit_wow_context, build_uc_pattern_context
-from utils import resolve_partner_filter, resolve_region_theaters, PARTNER_RENAME_MAP, filter_out_partner_own_accounts
+from utils import resolve_partner_filter, resolve_region_theaters, PARTNER_RENAME_MAP, filter_out_partner_own_accounts, apply_coco_final
 from utils import APJ_RSI_REGION_MAP, EMEA_RSI_REGION_MAP, PARTNER_ALIASES as _PA_OKR
 
 # Managed partner universe — same as Adoption Metrics default scope
@@ -101,10 +101,7 @@ if include_account_coco:
         if _sel_stages and 'USE_CASE_STAGE' in bulk_conf.columns:
             bulk_conf = bulk_conf[bulk_conf['USE_CASE_STAGE'].isin(_sel_stages)]
         bands = confidence_filter if confidence_filter else ['High', 'Medium', 'Low']
-        bulk_conf['IS_COCO_FINAL'] = (
-            (bulk_conf['IS_COCO'] == True) |
-            (bulk_conf['CONFIDENCE_BAND'].isin(bands))
-        )
+        bulk_conf['IS_COCO_FINAL'] = apply_coco_final(bulk_conf, bands)
 
         # Recompute per-partner summary
         coco_eacv = bulk_conf[bulk_conf['IS_COCO_FINAL']].groupby('PARTNER_NAME')['USE_CASE_EACV'].sum().reset_index()

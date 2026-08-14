@@ -16,7 +16,7 @@ from utils.queries import (
     get_partner_velocity_data, get_account_coco_credits,
 )
 from utils.cortex_helpers import cortex_complete
-from utils import APJ_RSI_REGION_MAP, EMEA_RSI_REGION_MAP, PARTNER_ALIASES as _PA_EMAIL
+from utils import APJ_RSI_REGION_MAP, EMEA_RSI_REGION_MAP, PARTNER_ALIASES as _PA_EMAIL, apply_coco_final
 
 _NOAM_RSI_NAMES_EMAIL = frozenset(
     p for p in _PA_EMAIL.get('--- NOAM RSIs ---', []) if not p.startswith('---')
@@ -793,10 +793,7 @@ with st.spinner("Loading data..."):
                 'Deloitte Consulting','EY','Ernst & Young (EY)','IBM','IBM Consulting']
     gsi_bulk_conf = get_bulk_confidence_scores(conn, GSI_LIST, Q3_START, Q3_END)
     if len(gsi_bulk_conf) > 0:
-        gsi_bulk_conf['IS_COCO_FINAL'] = (
-            (gsi_bulk_conf['IS_COCO'] == True) |
-            (gsi_bulk_conf['CONFIDENCE_BAND'].isin(['High']))
-        )
+        gsi_bulk_conf['IS_COCO_FINAL'] = apply_coco_final(gsi_bulk_conf, ['High'])
         gsi_bulk_conf['REGION'] = gsi_bulk_conf['THEATER_NAME'].map(
             lambda t: 'NoAM' if t in ('AMSExpansion','USMajors','AMSAcquisition','USPubSec')
                       else ('EMEA' if t == 'EMEA' else ('APJ' if t == 'APJ' else 'Other'))
@@ -872,10 +869,7 @@ with st.spinner("Loading data..."):
         managed_bulk_conf = pd.concat([_gsi_rows, _noam_rsi_rows, _apj_rsi_rows, _emea_rsi_rows], ignore_index=True)
 
     if len(managed_bulk_conf) > 0:
-        managed_bulk_conf['IS_COCO_FINAL'] = (
-            (managed_bulk_conf['IS_COCO'] == True) |
-            (managed_bulk_conf['CONFIDENCE_BAND'].isin(_EMAIL_BANDS))
-        )
+        managed_bulk_conf['IS_COCO_FINAL'] = apply_coco_final(managed_bulk_conf, _EMAIL_BANDS)
         managed_bulk_conf['REGION'] = managed_bulk_conf['THEATER_NAME'].map(
             lambda t: 'NoAM' if t in ('AMSExpansion', 'USMajors', 'AMSAcquisition', 'USPubSec')
                       else 'EMEA' if t == 'EMEA' else 'APJ' if t == 'APJ' else 'Other'

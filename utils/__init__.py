@@ -253,3 +253,34 @@ def resolve_partner_filter(partner_names):
     for name in list(resolved):
         resolved.extend(PARTNER_PIPELINE_CROSSWALK.get(name, []))
     return list(set(resolved))
+
+
+def apply_coco_final(df, bands=("High",)):
+    """Compute IS_COCO_FINAL on a confidence-scored frame.
+
+    Base rule: IS_COCO (keyword or feature flag) OR the confidence band qualifies.
+
+    Exception: a use case tagged only because a partner wrote "#coco" in
+    PARTNER_COMMENTS must ALSO show measured CoCo tokens in that customer account.
+    A free-text hashtag is an assertion, not evidence - without consumption it was
+    admitting cases whose comments said things like "will update #coco details once
+    partner starts work" or "Deloitte has been cortex code #coco enabled" (partner
+    enablement, not customer usage). SE_COMMENTS and FEATURE_FLAG are unchanged.
+    """
+    import pandas as pd
+
+    base = (df["IS_COCO"] == True)  # noqa: E712 - pandas needs ==, not `is`
+    if "CONFIDENCE_BAND" in df.columns:
+        base = base | df["CONFIDENCE_BAND"].isin(list(bands))
+
+    if "COCO_SOURCE" not in df.columns or "Q2_TOKENS" not in df.columns:
+        return base  # cannot validate; leave the base rule untouched
+
+    partner_only = (df["COCO_SOURCE"] == "PARTNER_COMMENTS")
+    has_tokens = pd.to_numeric(df["Q2_TOKENS"], errors="coerce").fillna(0) > 0
+    # A qualifying confidence band is independent evidence, so it still stands
+    # on its own even when the partner comment cannot be corroborated.
+    band_ok = (df["CONFIDENCE_BAND"].isin(list(bands))
+               if "CONFIDENCE_BAND" in df.columns else False)
+
+    return base & ~(partner_only & ~has_tokens & ~band_ok)
