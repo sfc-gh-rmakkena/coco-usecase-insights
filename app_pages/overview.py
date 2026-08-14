@@ -533,11 +533,18 @@ with st.expander(":material/table: Breakdown by Theatre", expanded=True):
 with st.expander(":material/public: Breakdown by Region", expanded=True):
     st.caption("Partner CoCo UCs = IS_COCO_FINAL | Scoped to managed partners: GSI · NOAM RSI · APJ RSI · EMEA RSI")
     _region_mdm = get_all_uc_counts_by_region(conn, start_date, end_date)
+    # 'Other' is the ELSE bucket holding non-territory theatres (AMSPartner,
+    # APJPartner, EMEAPartner, AcctsToDelete). Dropped here rather than at render
+    # time so the TOTAL row excludes them too.
+    if len(_region_mdm) > 0:
+        _region_mdm = _region_mdm[_region_mdm["REGION"].str.strip() != "Other"]
     # Derive partner side from managed bulk_conf (IS_COCO_FINAL) when available; SQL fallback otherwise
     if len(_managed_bc) > 0 and 'IS_COCO_FINAL' in _managed_bc.columns:
         _region_partner = _build_partner_region_from_bulk(_managed_bc)
     else:
         _region_partner = get_partner_metrics_by_region(conn, start_date, end_date)
+    if len(_region_partner) > 0 and "REGION" in _region_partner.columns:
+        _region_partner = _region_partner[_region_partner["REGION"].str.strip() != "Other"]
     if len(_region_mdm) > 0:
         _r = _region_mdm.set_index("REGION")[["ALL_USE_CASES", "ALL_GO_LIVES"]]
         if len(_region_partner) > 0:
