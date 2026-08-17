@@ -1093,6 +1093,8 @@ def _build_group_ctx(group_df, group_label, credit_lkp, wow_lkp):
     ctx = f"\n=== {group_label} ===\n"
     if len(group_df) == 0:
         return ctx + "  (no data)\n"
+    # State the row count so the model cannot quietly drop partners from the table.
+    ctx += f"  EXPECTED ROWS: {len(group_df)} - the table MUST contain all {len(group_df)} partners listed below.\n"
     for _, p in group_df.iterrows():
         eacv = p.get('TOTAL_EACV', 0) or 0
         cr = credit_lkp.get(p['PARTNER_NAME'], {})
@@ -1122,12 +1124,53 @@ if len(adoption_wow_data) > 0:
 # Build group-level partner DataFrames from managed_q2_partners + _GROUP tag
 _has_group = '_GROUP' in managed_bulk_conf.columns if len(managed_bulk_conf) > 0 else False
 
+
+def _primary_names(region_map):
+    """One representative raw name per display partner, keeping raw form so the
+    credit and WoW lookups (which are keyed on raw PARTNER_NAME) still resolve."""
+    out, seen = [], set()
+    for raw, (display, _region) in region_map.items():
+        if display not in seen:
+            seen.add(display)
+            out.append(raw)
+    return out
+
+
+# The full roster each scorecard must account for, so a member with no use cases
+# in the quarter is shown at zero instead of disappearing.
+# Names are post-alias-merge (see the replace() calls above) so they match the
+# grouped rows, and are de-duplicated: the NOAM list carries 31 alias entries that
+# collapse to 29 partners (Kipi.ai/kipi.ai and LTI Mindtree/LTM are the same firms).
+def _dedupe_roster(names, rename):
+    out, seen = [], set()
+    for raw in sorted(names):
+        disp = rename.get(raw, raw)
+        if disp not in seen:
+            seen.add(disp)
+            out.append(disp)
+    return out
+
+
+_EXPECTED_GROUP_PARTNERS = {
+    'GSI': _dedupe_roster(_GSI_NAMES, {'Ernst & Young (EY)': 'EY', 'IBM Consulting': 'IBM'}),
+    'NOAM RSI': _dedupe_roster(_NOAM_RSI_NAMES_EMAIL, {'Kipi.ai': 'kipi.ai', 'LTI Mindtree': 'LTM'}),
+    'APJ RSI': _primary_names(APJ_RSI_REGION_MAP),
+    'EMEA RSI': _primary_names(EMEA_RSI_REGION_MAP),
+}
+
+
 def _group_partners(group_tag):
     if not _has_group or len(managed_bulk_conf) == 0:
         return pd.DataFrame()
     _g = managed_bulk_conf[managed_bulk_conf['_GROUP'] == group_tag]
     if len(_g) == 0:
-        return pd.DataFrame()
+        _expected = _EXPECTED_GROUP_PARTNERS.get(group_tag, [])
+        if not _expected:
+            return pd.DataFrame()
+        return pd.DataFrame([{
+            'PARTNER_NAME': p, 'TOTAL_UCS': 0, 'COCO_UCS': 0, 'TOTAL_EACV': 0,
+            'AI': 0, 'DE': 0, 'ANALYTICS': 0, 'COCO_EACV': 0, 'COCO_PCT': 0,
+        } for p in _expected])
     _coco_eacv = _g[_g['IS_COCO_FINAL']].groupby('PARTNER_NAME')['USE_CASE_EACV'].sum().reset_index()
     _coco_eacv.columns = ['PARTNER_NAME', 'COCO_EACV']
     _agg = _g.groupby('PARTNER_NAME').agg(
@@ -1140,6 +1183,18 @@ def _group_partners(group_tag):
     ).reset_index()
     _agg = _agg.merge(_coco_eacv, on='PARTNER_NAME', how='left').fillna({'COCO_EACV': 0})
     _agg['COCO_PCT'] = (_agg['COCO_UCS'] * 100.0 / _agg['TOTAL_UCS'].replace(0, float('nan'))).round(0).fillna(0)
+
+    # A group member with no use cases dated inside the quarter never reaches this
+    # frame, so it used to vanish from the scorecard entirely - APJ RSI showed 3 of
+    # its 5 partners because Megazone and Prolim had no Q3-dated UCs. Seed the
+    # roster so every member is always accounted for, explicitly at zero.
+    _expected = _EXPECTED_GROUP_PARTNERS.get(group_tag, [])
+    _missing = [p for p in _expected if p not in set(_agg['PARTNER_NAME'])]
+    if _missing:
+        _agg = pd.concat([_agg, pd.DataFrame([{
+            'PARTNER_NAME': p, 'TOTAL_UCS': 0, 'COCO_UCS': 0, 'TOTAL_EACV': 0,
+            'AI': 0, 'DE': 0, 'ANALYTICS': 0, 'COCO_EACV': 0, 'COCO_PCT': 0,
+        } for p in _missing])], ignore_index=True)
     return _agg.sort_values('TOTAL_EACV', ascending=False)
 
 _gsi_partners_df  = _group_partners('GSI')
@@ -1690,6 +1745,7 @@ Follow this EXACT structure with 9 sections:
 ## PARTNER SCORECARD — GSI (Global, all regions, target 75%)
 | Partner | Total UCs | CoCo UCs | CoCo% | WoW Δ% | WoW Δ UCs | EACV | AI | DE | Analytics | Q3 Tokens | Q3 Credits | Last 7d Credits | 7D Credits WoW% |
 - Show ALL GSI partners. Sort by EACV descending. UCs are GLOBAL (all regions).
+- The number of rows MUST equal the EXPECTED ROWS value stated for this group in the context. Include every partner listed, including any with 0 UCs. Do not omit, merge or summarise rows.
 - WoW Δ% and WoW Δ UCs from adoption WoW data — show "-" if N/A
 - After table: one sentence . Give one senetence which GSI's are leading and  are lagging by region, based on last 4 weeks trend what GSI's are doing - type of engagements
 
@@ -1697,16 +1753,19 @@ Follow this EXACT structure with 9 sections:
 ## PARTNER SCORECARD — NOAM RSI (NoAM only, target 75%)
 | Partner | Total UCs | CoCo UCs | CoCo% | WoW Δ% | WoW Δ UCs | EACV | AI | DE | Analytics | Q3 Tokens | Q3 Credits | Last 7d Credits | 7D Credits WoW% |
 - Show ALL NOAM RSI partners. Sort by EACV descending. UCs are NoAM scope only.
+- The number of rows MUST equal the EXPECTED ROWS value stated for this group in the context. Include every partner listed, including any with 0 UCs. Do not omit, merge or summarise rows.
 - After table: one sentence . Give one senetence which RSI's are leading and  are lagging by theatre, based on last 4 weeks trend what RSI's are doing - type of engagements
 
 ## PARTNER SCORECARD — APJ RSI (APJ geo-restricted, target 50%)
 | Partner | Total UCs | CoCo UCs | CoCo% | WoW Δ% | WoW Δ UCs | EACV | AI | DE | Analytics | Q3 Tokens | Q3 Credits | Last 7d Credits | 7D Credits WoW% |
 - Show ALL APJ RSI partners. Sort by EACV descending. UCs are each partner's respective APJ region.
+- The number of rows MUST equal the EXPECTED ROWS value stated for this group in the context. Include every partner listed, including any with 0 UCs. Do not omit, merge or summarise rows.
 - After table: one sentence . Give one senetence which RSI's are leading and  are lagging by theatre, based on last 4 weeks trend what RSI's are doing - type of engagements
 
 ## PARTNER SCORECARD — EMEA RSI (EMEA geo-restricted, target 50%)
 | Partner | Total UCs | CoCo UCs | CoCo% | WoW Δ% | WoW Δ UCs | EACV | AI | DE | Analytics | Q3 Tokens | Q3 Credits | Last 7d Credits | 7D Credits WoW% |
 - Show ALL EMEA RSI partners. Sort by EACV descending. UCs are each partner's respective EMEA region.
+- The number of rows MUST equal the EXPECTED ROWS value stated for this group in the context. Include every partner listed, including any with 0 UCs. Do not omit, merge or summarise rows.
 - After table: one sentence . Give one senetence which RSI's are leading and  are lagging by theatre, based on last 4 weeks trend what RSI's are doing - type of engagements
 
 ## NOTABLE WINS (managed partners only)
@@ -1720,6 +1779,8 @@ Follow this EXACT structure with 9 sections:
 "**Disclaimer:** Use case data sourced from SE comments (coco/cortex code mentions), #coco in Partner Comments, and AI-Cortex Code feature flag. Pipeline figures are being confirmed by the PDM team and are subject to change. Detailed stats: http://go/cocopse"
 
 FORMATTING RULES:
+- NEVER invent a value to fill a cell. If a figure is absent from the context, or the context shows it as n/a, blank or zero, write "-" (or $0 for currency). This applies especially to WoW Δ%, WoW Δ UCs and the credit and token columns. A fabricated percentage is worse than an empty cell.
+- Partners seeded at 0 UCs have no trend to report: leave their WoW and credit cells as "-" and do not describe them in the narrative sentences.
 - Markdown tables for ALL data — no narrative paragraphs for numbers
 - Executive summary: exactly 2-3 sentences + 6 bullets, nothing more
 - Section headings: ## format, no numbering

@@ -2,9 +2,26 @@ import json
 import streamlit as st
 
 
-def cortex_complete(conn, model, prompt):
+def cortex_complete(conn, model, prompt, max_tokens=16384):
+    """Run Cortex COMPLETE and return the response text.
+
+    The 2-argument form of COMPLETE takes the model's default output ceiling, which
+    silently truncated the executive email mid-table once the partner scorecards
+    grew to ~44 rows. The options form lifts that ceiling; it returns a JSON object
+    rather than a bare string, so the message is extracted in SQL.
+
+    ttl=0 because SnowflakeConnection.query caches by default, which made a second
+    Generate press return the previous answer instead of regenerating.
+    """
     escaped = prompt.replace("\\", "\\\\").replace("'", "\\'")
-    result = conn.query(f"SELECT SNOWFLAKE.CORTEX.COMPLETE('{model}', '{escaped}') AS RESPONSE")
+    result = conn.query(
+        f"""SELECT SNOWFLAKE.CORTEX.COMPLETE(
+                     '{model}',
+                     [{{'role':'user','content':'{escaped}'}}],
+                     {{'max_tokens': {int(max_tokens)}}}
+                   ):choices[0].messages::string AS RESPONSE""",
+        ttl=0,
+    )
     return result.iloc[0]['RESPONSE'] if len(result) > 0 else ""
 
 
