@@ -3,6 +3,8 @@ import streamlit as st
 from utils.cortex_helpers import cortex_complete
 from utils.config import get_schema
 from utils import resolve_region_theaters, resolve_partner_filter
+from utils.intent_classifier import detect_intent
+from utils.verified_metrics import get_verified_answer
 
 SCHEMA = get_schema()
 
@@ -1104,8 +1106,22 @@ def build_uc_pattern_context(detail_df=None) -> str:
 
 
 def ask_ai_agent(question: str, chat_history: list = None) -> dict:
-    """Call COCO_AGENT via Cortex Agent REST API. Returns {answer, sql, sql_result}."""
+    """Call COCO_AGENT via Cortex Agent REST API. Returns {answer, sql, sql_result}.
+    Tries programmatic verified answer first; falls through to Cortex Agent if no match."""
     from utils.cortex_helpers import run_cortex_agent
+
+    # ── Programmatic layer: deterministic exact-number answers ──────────────
+    intent = detect_intent(question, chat_history)
+    if intent["confidence"] == "high":
+        try:
+            conn = st.connection("snowflake")
+            result = get_verified_answer(conn, question, intent)
+            if result:
+                return result
+        except Exception:
+            pass  # fall through to agent on any error
+    # ────────────────────────────────────────────────────────────────────────
+
     # Inject active date range into the question for context
     start_date = str(st.session_state.get("okr_start_date", "2026-08-01"))
     end_date   = str(st.session_state.get("okr_end_date",   "2026-10-31"))
@@ -1117,6 +1133,18 @@ def ask_ai_agent(question: str, chat_history: list = None) -> dict:
 
 
 def ask_ai(conn, question: str, page_context: str = "", debug: bool = False, chat_history: list = None):
+    # ── Programmatic layer: deterministic exact-number answers ──────────────
+    if not debug:
+        intent = detect_intent(question, chat_history)
+        if intent["confidence"] == "high":
+            try:
+                result = get_verified_answer(conn, question, intent)
+                if result:
+                    return result
+            except Exception:
+                pass  # fall through to LLM on any error
+    # ────────────────────────────────────────────────────────────────────────
+
     filter_block = build_filter_context()
 
     # Inject active date range explicitly so LLM never falls back to hardcoded example dates
