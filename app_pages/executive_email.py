@@ -18,6 +18,16 @@ from utils.queries import (
 from utils.cortex_helpers import cortex_complete
 from utils import APJ_RSI_REGION_MAP, EMEA_RSI_REGION_MAP, PARTNER_ALIASES as _PA_EMAIL, apply_coco_final
 
+# Restricted page. streamlit_app.py hides the nav entry for anyone not on the list;
+# this second check stops a direct page URL from rendering the report anyway. Note
+# this is UI-level only and is not a substitute for RBAC on the underlying views.
+if not st.session_state.get("exec_email_allowed", False):
+    st.title("Executive Email")
+    st.warning(
+        "This page is restricted. Contact Rithesh Makkena if you need access."
+    )
+    st.stop()
+
 _NOAM_RSI_NAMES_EMAIL = frozenset(
     p for p in _PA_EMAIL.get('--- NOAM RSIs ---', []) if not p.startswith('---')
 ) | {'LTI Mindtree', 'Kipi.ai'}

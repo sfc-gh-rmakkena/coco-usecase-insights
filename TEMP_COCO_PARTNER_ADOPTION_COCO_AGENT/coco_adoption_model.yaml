@@ -126,8 +126,8 @@ tables:
         expr: THEATER_NAME
         data_type: TEXT
       - name: region
-        synonyms: [region name, sub-region, country]
-        description: Sub-region (Japan, Korea, ASEAN, ANZ, India, CentralEMEA, SouthEMEA, UK)
+        synonyms: [region name, sub-region, country, industry, vertical, sub category, subcategory, additional breakdown, theatre breakdown, theater breakdown, breakdown within theatre, next level breakdown]
+        description: "Next level of the sales hierarchy BELOW theater - the theater breakdown / sub-category. Its meaning depends on the theater: USMajors=INDUSTRY (HCLS, FSI, FSIGlobal, TMT, MFG, RCG); USPubSec=government tier (Federal, SLED); APJ=country (ANZ, India, ASEAN, Japan, Korea, China); EMEA=sub-geography (CentralEMEA, SouthEMEA, NorthEMEA, UK, META, EMEACommercial); AMSExpansion=US/Canada geography (CentralExp, NortheastExp, SoutheastExp, SouthwestExp, NorthwestExp, USGrowthExp, CanadaExp, Commercial); AMSAcquisition=segment x geography (EntAcq/CommAcq East|West|Central, MajorsAcq, LATAM). ALWAYS use this to break a single theater down further - e.g. 'US Majors breakdown' means GROUP BY region WHERE theater='USMajors'. Do NOT group by theater to break down one theater."
         expr: REGION_NAME
         data_type: TEXT
       - name: is_coco_final
@@ -302,6 +302,11 @@ tables:
         description: USMajors=S Majors. AMSExpansion, AMSAcquisition, USPubSec=NoAM.
         expr: THEATER_NAME
         data_type: TEXT
+      - name: region
+        synonyms: [region name, sub-region, country, industry, vertical, sub category, subcategory, additional breakdown, theatre breakdown, theater breakdown, breakdown within theatre, next level breakdown]
+        description: "Next level of the sales hierarchy BELOW theater - the theater breakdown / sub-category. Its meaning depends on the theater: USMajors=INDUSTRY (HCLS, FSI, FSIGlobal, TMT, MFG, RCG); USPubSec=government tier (Federal, SLED); APJ=country (ANZ, India, ASEAN, Japan, Korea, China); EMEA=sub-geography (CentralEMEA, SouthEMEA, NorthEMEA, UK, META, EMEACommercial); AMSExpansion=US/Canada geography (CentralExp, NortheastExp, SoutheastExp, SouthwestExp, NorthwestExp, USGrowthExp, CanadaExp, Commercial); AMSAcquisition=segment x geography (EntAcq/CommAcq East|West|Central, MajorsAcq, LATAM). ALWAYS use this to break a single theater down further - e.g. 'US Majors breakdown' means GROUP BY region WHERE theater='USMajors'. Do NOT group by theater to break down one theater."
+        expr: REGION_NAME
+        data_type: TEXT
       - name: is_coco_final
         synonyms: [IS_COCO_FINAL, coco final, coco qualified]
         description: TRUE = CoCo attributed. Always filter = TRUE for CoCo counts.
@@ -422,6 +427,11 @@ tables:
         description: Sales theater
         expr: THEATER_NAME
         data_type: TEXT
+      - name: region
+        synonyms: [region name, sub-region, country, industry, vertical, sub category, subcategory, additional breakdown, theatre breakdown, theater breakdown, breakdown within theatre, next level breakdown]
+        description: "Next level of the sales hierarchy BELOW theater - the theater breakdown / sub-category. Its meaning depends on the theater: USMajors=INDUSTRY (HCLS, FSI, FSIGlobal, TMT, MFG, RCG); USPubSec=government tier (Federal, SLED); APJ=country (ANZ, India, ASEAN, Japan, Korea, China); EMEA=sub-geography (CentralEMEA, SouthEMEA, NorthEMEA, UK, META, EMEACommercial); AMSExpansion=US/Canada geography (CentralExp, NortheastExp, SoutheastExp, SouthwestExp, NorthwestExp, USGrowthExp, CanadaExp, Commercial); AMSAcquisition=segment x geography (EntAcq/CommAcq East|West|Central, MajorsAcq, LATAM). ALWAYS use this to break a single theater down further - e.g. 'US Majors breakdown' means GROUP BY region WHERE theater='USMajors'. Do NOT group by theater to break down one theater."
+        expr: REGION_NAME
+        data_type: TEXT
       - name: is_coco_final
         synonyms: [IS_COCO_FINAL, coco final]
         description: TRUE = CoCo attributed
@@ -525,6 +535,11 @@ tables:
         synonyms: [theater name, geo]
         description: Sales theater
         expr: THEATER_NAME
+        data_type: TEXT
+      - name: region
+        synonyms: [region name, sub-region, country, industry, vertical, sub category, subcategory, additional breakdown, theatre breakdown, theater breakdown, breakdown within theatre, next level breakdown]
+        description: "Next level of the sales hierarchy BELOW theater - the theater breakdown / sub-category. Its meaning depends on the theater: USMajors=INDUSTRY (HCLS, FSI, FSIGlobal, TMT, MFG, RCG); USPubSec=government tier (Federal, SLED); APJ=country (ANZ, India, ASEAN, Japan, Korea, China); EMEA=sub-geography (CentralEMEA, SouthEMEA, NorthEMEA, UK, META, EMEACommercial); AMSExpansion=US/Canada geography (CentralExp, NortheastExp, SoutheastExp, SouthwestExp, NorthwestExp, USGrowthExp, CanadaExp, Commercial); AMSAcquisition=segment x geography (EntAcq/CommAcq East|West|Central, MajorsAcq, LATAM). ALWAYS use this to break a single theater down further - e.g. 'US Majors breakdown' means GROUP BY region WHERE theater='USMajors'. Do NOT group by theater to break down one theater."
+        expr: REGION_NAME
         data_type: TEXT
       - name: decision_date
         synonyms: [pipeline date, stage 3-4 date]

@@ -2,7 +2,7 @@ import streamlit as st
 from utils.queries import get_distinct_partners
 from utils import PARTNER_GROUPS
 from utils.ask_ai import ask_ai, ask_ai_agent
-from datetime import date
+from datetime import date, timedelta
 
 st.set_page_config(
     page_title="CoCo Use Case Intelligence",
@@ -169,6 +169,33 @@ with st.sidebar:
             st.session_state.ask_ai_history = []
             st.rerun()
 
+# Executive Email is restricted to a named list. This hides the nav entry; it is a
+# UI convenience, NOT a security control - the page is also guarded on entry, but
+# anyone with access to this app can still query the underlying views directly.
+EXEC_EMAIL_USERS = {"RMAKKENA", "NIRASHAH", "SDOGRA", "PLAKHANPAL"}
+
+
+@st.cache_data(ttl=timedelta(minutes=30))
+def _current_snowflake_user(_conn) -> str:
+    """Snowflake login of the viewer. Empty string if it cannot be determined."""
+    try:
+        df = _conn.query("SELECT CURRENT_USER() AS U", ttl=0)
+        return str(df.iloc[0]["U"]).strip().upper() if len(df) else ""
+    except Exception:
+        return ""
+
+
+_viewer = _current_snowflake_user(st.session_state.conn)
+st.session_state.exec_email_allowed = _viewer in EXEC_EMAIL_USERS
+
+_okr_pages = [
+    st.Page("app_pages/okr_adoption.py", title="OKR: CoCo Adoption", icon=":material/check_circle:"),
+]
+if st.session_state.exec_email_allowed:
+    _okr_pages.append(
+        st.Page("app_pages/executive_email.py", title="Executive Email", icon=":material/mail:")
+    )
+
 page = st.navigation({
     "Overview": [
         st.Page("app_pages/overview.py", title="Adoption Metrics", icon=":material/monitoring:"),
@@ -180,10 +207,7 @@ page = st.navigation({
         st.Page("app_pages/trends.py", title="Trends & Aging", icon=":material/trending_up:"),
         st.Page("app_pages/partner_consultants.py", title="Partner Consultants", icon=":material/groups:"),
     ],
-    "OKR & Reports": [
-        st.Page("app_pages/okr_adoption.py",    title="OKR: CoCo Adoption",      icon=":material/check_circle:"),
-        st.Page("app_pages/executive_email.py", title="Executive Email",          icon=":material/mail:"),
-    ],
+    "OKR & Reports": _okr_pages,
 })
 
 page.run()
