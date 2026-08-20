@@ -1729,7 +1729,7 @@ SCOPE: 4 partner groups — GSIs report GLOBAL numbers; NOAM RSIs report NoAM on
 
 Follow this EXACT structure with 9 sections:
 
-## **Note: Mixed scope — GSIs global (all regions) | NOAM RSIs: NoAM only | APJ RSIs: APJ geo | EMEA RSIs: EMEA geo.**
+## **Note: Q3 OKR — 6 GSIs global (all regions) | 32 NOAM RSIs: NoAM only | 5 APJ RSIs: APJ geo | 4 EMEA RSIs: EMEA geo.**
 
 ## EXECUTIVE SUMMARY
 2-3 sentences maximum, then exactly 6 bullets.
