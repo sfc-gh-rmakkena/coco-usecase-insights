@@ -496,7 +496,7 @@ _NOAM_RSI_PARTNERS_SQL = (
     "'LTM','LTI Mindtree','phData, Inc.','Slalom, LLC.','Squadron Data Inc','Tredence Inc.',"
     "'Spaulding Ridge','TEKsystems Global Services, LLC.','Blend360, LLC',"
     "'Tiger Analytics Inc.','Atrium','Perficient Inc.','SDK Tek Services Ltd.',"
-    "'Merkle','Archetype Consulting','Apex Systems','Tata Consultancy Services',"
+    "'Merkle','Archetype Consulting','Everforth Apex Systems','Tata Consultancy Services',"
     "'OneSix','Icon Analytics','Sparq Holdings, Inc.','CitiusTech Inc.','Hexaware Technologies'"
 )
 
@@ -1440,7 +1440,7 @@ def get_segment_by_impl_start(_conn):
             'phData, Inc.','Slalom, LLC.','Squadron Data Inc','Tredence Inc.',
             'Spaulding Ridge','TEKsystems Global Services, LLC.','Blend360, LLC',
             'Tiger Analytics Inc.','Atrium','Perficient Inc.','SDK Tek Services Ltd.',
-            'Merkle','Archetype Consulting','Apex Systems','Tata Consultancy Services',
+            'Merkle','Archetype Consulting','Everforth Apex Systems','Tata Consultancy Services',
             'OneSix','Icon Analytics','Sparq Holdings, Inc.','CitiusTech Inc.',
             'Hexaware Technologies'
         )))
@@ -1518,7 +1518,7 @@ def get_segment_velocity(_conn):
             'phData, Inc.','Slalom, LLC.','Squadron Data Inc','Tredence Inc.',
             'Spaulding Ridge','TEKsystems Global Services, LLC.','Blend360, LLC',
             'Tiger Analytics Inc.','Atrium','Perficient Inc.','SDK Tek Services Ltd.',
-            'Merkle','Archetype Consulting','Apex Systems','Tata Consultancy Services',
+            'Merkle','Archetype Consulting','Everforth Apex Systems','Tata Consultancy Services',
             'OneSix','Icon Analytics','Sparq Holdings, Inc.','CitiusTech Inc.',
             'Hexaware Technologies'
         )))

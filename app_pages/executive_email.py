@@ -72,7 +72,7 @@ _HEATMAP_NOAM = [
     ('Blend360',    'Blend360, LLC'),      ('Tiger',     'Tiger Analytics Inc.'),
     ('Atrium',      'Atrium'),             ('Perficient','Perficient Inc.'),
     ('SDK Tek',     'SDK Tek Services Ltd.'), ('Merkle',  'Merkle'),
-    ('Archetype',   'Archetype Consulting'), ('Apex',    'Apex Systems'),
+    ('Archetype',   'Archetype Consulting'), ('Apex',    'Everforth Apex Systems'),
     ('TCS',         'Tata Consultancy Services'), ('OneSix', 'OneSix'),
     ('Icon',        'Icon Analytics'),    ('Sparq',     'Sparq Holdings, Inc.'),
     ('CitiusTech',  'CitiusTech Inc.'),   ('Hexaware',  'Hexaware Technologies'),
@@ -578,16 +578,10 @@ def generate_partners_target_chart_html(trend_data: list, total_partners: int = 
 
 
 def inject_heatmap(html_email: str, heatmap_html: str) -> str:
-    """Insert heat map after the Executive Summary bullet list."""
-    import re
-    match = re.compile(r'(EXECUTIVE SUMMARY.*?</ul>)', re.DOTALL | re.IGNORECASE).search(html_email)
-    if match:
-        pos = match.end()
-        return html_email[:pos] + heatmap_html + html_email[pos:]
-    okr_match = re.search(r'(<h[23][^>]*>[^<]*OKR PROGRESS[^<]*</h[23]>)', html_email, re.IGNORECASE)
-    if okr_match:
-        return html_email[:okr_match.start()] + heatmap_html + html_email[okr_match.start():]
-    return html_email.replace('<body>', '<body>' + heatmap_html, 1)
+    """Insert heat map at the bottom of the email, before the closing body tag."""
+    if '</body>' in html_email:
+        return html_email.replace('</body>', heatmap_html + '</body>', 1)
+    return html_email + heatmap_html
 
 
 def inject_after_okr_table(html_email: str, chart_html: str) -> str:
@@ -1415,26 +1409,29 @@ else:
 # 4-row OKR breakdown: GSI (global), NOAM RSI, APJ RSI, EMEA RSI — all from _GROUP-tagged managed_bulk_conf
 regional_okr_ctx = ""
 
-def _okr_row(grp_df, label, target_pct):
+def _okr_row(grp_df, label, target_pct, group_tag=None):
+    in_scope = len(_EXPECTED_GROUP_PARTNERS.get(group_tag, [])) if group_tag else None
     if len(grp_df) == 0:
-        return f"  {label}: no data\n"
+        scope_str = f"{in_scope} partners in scope" if in_scope else "no data"
+        return f"  {label}: {scope_str}, no use cases this period\n"
     total = len(grp_df)
     coco  = int(grp_df['IS_COCO_FINAL'].sum())
     pct   = round(coco * 100.0 / total, 1)
     _pm   = grp_df.groupby('PARTNER_NAME').agg(T=('USE_CASE_ID','count'), C=('IS_COCO_FINAL','sum')).reset_index()
     _pm['PCT'] = _pm['C'] / _pm['T'].replace(0, float('nan'))
     meeting = int((_pm['PCT'] >= target_pct / 100.0).sum())
+    total_partners = in_scope if in_scope else len(_pm)
     return (
-        f"  {label}: {total} total UCs, {coco} CoCo UCs, {pct}% CoCo adoption, "
-        f"{meeting}/{len(_pm)} partners meeting goal ({target_pct}%), "
+        f"  {label}: {total_partners} total partners in scope, {total} total UCs, {coco} CoCo UCs, {pct}% CoCo adoption, "
+        f"{meeting}/{total_partners} partners meeting goal ({target_pct}%), "
         f"{total - coco} non-CoCo UCs still open as convertible pipeline\n"
     )
 
 if len(managed_bulk_conf) > 0 and '_GROUP' in managed_bulk_conf.columns:
-    regional_okr_ctx += _okr_row(managed_bulk_conf[managed_bulk_conf['_GROUP'] == 'GSI'],      'GSI (Global, all regions)', 75)
-    regional_okr_ctx += _okr_row(managed_bulk_conf[managed_bulk_conf['_GROUP'] == 'NOAM RSI'], 'NOAM RSI (NoAM only)',       75)
-    regional_okr_ctx += _okr_row(managed_bulk_conf[managed_bulk_conf['_GROUP'] == 'APJ RSI'],  'APJ RSI (APJ geo)',          50)
-    regional_okr_ctx += _okr_row(managed_bulk_conf[managed_bulk_conf['_GROUP'] == 'EMEA RSI'], 'EMEA RSI (EMEA geo)',        50)
+    regional_okr_ctx += _okr_row(managed_bulk_conf[managed_bulk_conf['_GROUP'] == 'GSI'],      'GSI (Global, all regions)', 75, 'GSI')
+    regional_okr_ctx += _okr_row(managed_bulk_conf[managed_bulk_conf['_GROUP'] == 'NOAM RSI'], 'NOAM RSI (NoAM only)',       75, 'NOAM RSI')
+    regional_okr_ctx += _okr_row(managed_bulk_conf[managed_bulk_conf['_GROUP'] == 'APJ RSI'],  'APJ RSI (APJ geo)',          50, 'APJ RSI')
+    regional_okr_ctx += _okr_row(managed_bulk_conf[managed_bulk_conf['_GROUP'] == 'EMEA RSI'], 'EMEA RSI (EMEA geo)',        50, 'EMEA RSI')
 
 # Quarter-progress trend — is the number of CoCo use cases still climbing, and how much
 # runway is left? Deliberately expressed as weeks remaining rather than calendar dates.
@@ -1537,13 +1534,18 @@ else:
 # Picks the best UC: Deployed first, then highest EACV. Partners restricted to managed lists.
 notable_wins_by_region_ctx = ""
 if len(managed_bulk_conf) > 0 and 'IS_COCO_FINAL' in managed_bulk_conf.columns and '_GROUP' in managed_bulk_conf.columns:
+    # Only Deployed (Stage 7), Implementation Complete (Stage 6), or Won (Stage 4) qualify as notable wins
+    _WIN_STAGES = {'7 - Deployed', '6 - Implementation Complete', '4 - Use Case Won / Migration Plan'}
     _stage_pri_map = {
-        '7 - Deployed': 1, '6 - Implementation Complete': 2,
-        '5 - Implementation In Progress': 3, '4 - Use Case Won / Migration Plan': 4,
-        '3 - Technical / Business Validation': 5,
+        '7 - Deployed': 1,
+        '6 - Implementation Complete': 2,
+        '4 - Use Case Won / Migration Plan': 3,
     }
-    _cf = managed_bulk_conf[managed_bulk_conf['IS_COCO_FINAL']].copy()
-    _cf['_spri'] = _cf['USE_CASE_STAGE'].map(_stage_pri_map).fillna(6)
+    _cf = managed_bulk_conf[
+        managed_bulk_conf['IS_COCO_FINAL'] &
+        managed_bulk_conf['USE_CASE_STAGE'].isin(_WIN_STAGES)
+    ].copy()
+    _cf['_spri'] = _cf['USE_CASE_STAGE'].map(_stage_pri_map).fillna(3)
     _cf['_eacv'] = pd.to_numeric(_cf['USE_CASE_EACV'], errors='coerce').fillna(0)
     _cf = _cf.sort_values(['_GROUP', '_spri', '_eacv'], ascending=[True, True, False])
     _best = _cf.drop_duplicates(subset=['_GROUP'], keep='first')
@@ -1562,7 +1564,7 @@ if len(managed_bulk_conf) > 0 and 'IS_COCO_FINAL' in managed_bulk_conf.columns a
     for _grp in ['GSI', 'NOAM RSI', 'APJ RSI', 'EMEA RSI']:
         _row = _best[_best['_GROUP'] == _grp]
         if len(_row) == 0:
-            notable_wins_by_region_ctx += f"  [{_grp}] No IS_COCO_FINAL use case found.\n"
+            notable_wins_by_region_ctx += f"  [{_grp}] No deployed, implementation complete, or won IS_COCO_FINAL use case found.\n"
             continue
         r = _row.iloc[0]
         eacv = float(r.get('_eacv', 0) or 0)
@@ -1731,7 +1733,7 @@ Follow this EXACT structure with 9 sections:
 
 ## EXECUTIVE SUMMARY
 2-3 sentences maximum, then exactly 6 bullets.
-- Open with: "[X] CoCo use cases across managed partners **(GSIs global + NOAM/APJ/EMEA RSIs geo-scoped)** representing $[Z]M in CoCo EACV, with [W] deployed in production."
+- Open with: "[X] CoCo use cases across 44 managed partners **(GSIs global + NOAM/APJ/EMEA RSIs geo-scoped)** representing $[Z]M in CoCo EACV, with [W] deployed in production."
 - Second sentence: one crisp insight on the dominant pattern.
 - Bullet 1: "**Leading use case types:** [top 3 by count]"
 - Bullet 2: "**CoCo Adoption:** [X]% overall — GSIs: [GSI%] | NOAM RSIs: [NOAM%] | APJ RSIs: [APJ%] | EMEA RSIs: [EMEA%]"
@@ -1741,10 +1743,19 @@ Follow this EXACT structure with 9 sections:
 - Bullet 6: "**Top Skills used:** [top 3 Skills]"
 - Bullet 7: "**[Detailed Partner CoCo usecase dashboard](https://app.snowflake.com/sfcogsops/snowhouse_aws_us_west_2/#/streamlit-apps/TEMP.COCO_PARTNER_ADOPTION.COCO_USECASE_INSIGHTS)**"
 
+## NOTABLE WINS (managed partners only)
+4 bullets — exactly one per region group. Use data from "NOTABLE WINS BY REGION" in context.
+- Format each as: "**[Group] Partner** deployed/won CoCo at Account — Stage 7 Deployed, Stage 6 Implementation Complete, OR Stage 4 Won, $EACVK EACV[, displacing Competitor if present]"
+- ONLY include Stage 7 (Deployed), Stage 6 (Implementation Complete), or Stage 4 (Use Case Won / Migration Plan) use cases. Do NOT mention any other stage.
+- Groups in order: GSI, NOAM RSI, APJ RSI, EMEA RSI
+- If a group has no deployed or won IS_COCO_FINAL UC, write "**[Group]** No notable win this period"
+- Do NOT use RECENT ACTIVITY data or COMMENT HIGHLIGHTS for this section
+
 ## OKR PROGRESS — REGIONAL BREAKDOWN
-| Group | Scope | Total UCs | CoCo UCs | CoCo % | Partners Meeting Goal% |
+| Group | Scope | Total Partners | Total UCs | CoCo UCs | CoCo % | Partners Meeting Goal% |
 - Show 4 rows: GSI (Global), NOAM RSI, APJ RSI, EMEA RSI
-- Use "OKR PROGRESS — REGIONAL BREAKDOWN" data from context (each row has group name, total UCs, CoCo UCs, CoCo %, partners meeting goal)
+- Use "OKR PROGRESS — REGIONAL BREAKDOWN" data from context (each row has group name, total partners in scope, total UCs, CoCo UCs, CoCo %, partners meeting goal)
+- Total Partners = total partners in scope for that group (irrelevant of CoCo adoption)
 - Goal% is 75% for GSI and NOAM RSI, 50% for APJ RSI and EMEA RSI — reflect the correct target per row
 - After table: 4 sentences on whether we are trending in the right direction. Sentence 1: state the weeks remaining in the quarter and whether the 3-week average count of CoCo use cases is increasing, declining or flat, giving the percentage change and the direction. Describe momentum only — do NOT quote the two 3-week average numbers themselves, because they come from a different basis than this table and would not reconcile with it. Sentence 2: state the convertible pipeline still open (the non-CoCo UC counts per group) and which group has the most room to convert. Sentence 3: from WHERE ADOPTION IS CONCENTRATED, name which use case type or types show the highest CoCo adoption by NUMBER of use cases and which theatre is strongest versus weakest — quote the counts, not just percentages. Sentence 4: from GSI GEO SPLIT you MUST name four things for GSI partners — the leading region, the lagging region, the leading theatre and the lagging theatre — each with its CoCo count. Do not report theatres only; the regions are in the data and must be named too. Write in normal sentence case — do not copy capitalisation from these instructions or from the data labels. Do NOT mention calendar months or quarter start/end dates. Do NOT compute your own averages or percentages, and if a split says "not available" then say nothing about it rather than estimating.
 
@@ -1777,13 +1788,6 @@ Follow this EXACT structure with 9 sections:
 - Show ALL EMEA RSI partners. Sort by EACV descending. UCs are each partner's respective EMEA region.
 - The number of rows MUST equal the EXPECTED ROWS value stated for this group in the context. Include every partner listed, including any with 0 UCs. Do not omit, merge or summarise rows.
 - After table: one sentence . Give one senetence which RSI's are leading and  are lagging by theatre, based on last 4 weeks trend what RSI's are doing - type of engagements
-
-## NOTABLE WINS (managed partners only)
-4 bullets — exactly one per region group. Use data from "NOTABLE WINS BY REGION" in context.
-- Format each as: "**[Group] Partner** deployed/won CoCo at Account — Stage, $EACVK EACV[, displacing Competitor if present]"
-- Groups in order: GSI, NOAM RSI, APJ RSI, EMEA RSI
-- If a group has no IS_COCO_FINAL UC, write “**[Group]** No notable win this period”
-- Do NOT use RECENT ACTIVITY data or COMMENT HIGHLIGHTS for this section
 
 ## DISCLAIMER
 "**Disclaimer:** Use case data sourced from SE comments (coco/cortex code mentions), #coco in Partner Comments, and AI-Cortex Code feature flag. Pipeline figures are being confirmed by the PDM team and are subject to change. Detailed stats: http://go/cocopse"
@@ -1834,17 +1838,49 @@ Write the executive briefing:"""
         heatmap_html = generate_heatmap_html(adoption_wow_data, managed_q2_partners)
         html_email = inject_heatmap(html_email, heatmap_html)
 
-    # Inject partners-meeting-50% trend chart after OKR Progress table
-    if trend_data:
-        trend_chart_html = generate_partners_target_chart_html(trend_data, total_partners=44)
-        html_email = inject_after_okr_table(html_email, trend_chart_html)
-
     to_lines = [l.strip() for l in recipients_input.strip().splitlines() if l.strip()] if recipients_input.strip() else []
     to_emails = [name_to_email(n) for n in to_lines]
     to_str = ','.join(to_emails)
     subject_text = f"Cortex Code Q3 FY27 Partner Intelligence - {datetime.now().strftime('%B %d, %Y')}"
     subject = urllib.parse.quote(subject_text)
     gmail_url = f"https://mail.google.com/mail/?view=cm&fs=1&to={to_str}&su={subject}"
+
+    # ── Inline eval ──────────────────────────────────────────────────────────
+    import sys as _sys
+    from pathlib import Path as _Path
+    _sys.path.insert(0, str(_Path(__file__).resolve().parent.parent))
+    try:
+        from scripts.eval_exec_email import (
+            check_structure, check_arithmetic, check_grounding,
+            check_section_order, check_completeness, check_cross_table,
+            check_notable_wins, score as _eval_score,
+        )
+        _eval_results = (
+            check_structure(full_response)
+            + check_arithmetic(full_response)
+            + check_grounding(conn, full_response)
+            + check_section_order(full_response)
+            + check_completeness(full_response)
+            + check_cross_table(full_response)
+            + check_notable_wins(full_response)
+        )
+        _passes  = sum(1 for _, _, ok, _ in _eval_results if ok)
+        _total   = len(_eval_results)
+        _fails   = [r for r in _eval_results if not r[2]]
+        _score   = int(100 * _passes / _total) if _total else 0
+        _badge   = "🟢" if _score == 100 else ("🟡" if _score >= 80 else "🔴")
+        with st.expander(f"{_badge} Email Quality Score: {_score}% ({_passes}/{_total} checks passed)", expanded=_score < 100):
+            if _fails:
+                st.error(f"**{len(_fails)} check(s) failed:**")
+                for _cat, _name, _, _detail in _fails:
+                    st.markdown(f"- **[{_cat}]** {_name}" + (f" — {_detail}" if _detail else ""))
+            else:
+                st.success("All checks passed.")
+            with st.expander("Full eval report", expanded=False):
+                st.markdown(_eval_score(_eval_results))
+    except Exception as _e:
+        st.warning(f"Eval skipped: {_e}")
+    # ─────────────────────────────────────────────────────────────────────────
 
     st.info("**How to send:** Click **Copy Rich Text** below, then **Open in Gmail**, and paste (Ctrl+V / Cmd+V) into the email body. Tables will render with full formatting.")
 

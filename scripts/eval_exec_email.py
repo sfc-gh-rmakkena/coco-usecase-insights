@@ -36,11 +36,34 @@ MONTHS = ("january", "february", "march", "april", "may", "june", "july",
           "august", "september", "october", "november", "december",
           "jan ", "feb ", "mar ", "apr ", "jun ", "jul ", "aug", "sep", "oct", "nov", "dec")
 REQUIRED_SECTIONS = [
-    "EXECUTIVE SUMMARY", "OKR PROGRESS", "MANAGED PARTNER PIPELINE OVERVIEW",
+    "EXECUTIVE SUMMARY", "NOTABLE WINS", "OKR PROGRESS", "MANAGED PARTNER PIPELINE OVERVIEW",
     "PARTNER SCORECARD — GSI", "PARTNER SCORECARD — NOAM RSI",
     "PARTNER SCORECARD — APJ RSI", "PARTNER SCORECARD — EMEA RSI",
-    "NOTABLE WINS", "DISCLAIMER",
+    "DISCLAIMER",
 ]
+
+# Expected section order (index = required position)
+SECTION_ORDER = [
+    "EXECUTIVE SUMMARY",
+    "NOTABLE WINS",
+    "OKR PROGRESS",
+    "MANAGED PARTNER PIPELINE OVERVIEW",
+    "PARTNER SCORECARD — GSI",
+    "PARTNER SCORECARD — NOAM RSI",
+    "PARTNER SCORECARD — APJ RSI",
+    "PARTNER SCORECARD — EMEA RSI",
+    "DISCLAIMER",
+]
+
+# Expected partner counts per scorecard group (canonical, deduplicated)
+EXPECTED_PARTNER_COUNTS = {
+    "GSI":      6,
+    "NOAM RSI": 29,
+    "APJ RSI":  5,
+    "EMEA RSI": 4,
+}
+
+NOTABLE_WINS_GROUPS = ["GSI", "NOAM RSI", "APJ RSI", "EMEA RSI"]
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -179,6 +202,10 @@ def check_grounding(conn, text):
         """)["N"].tolist()
         accounts = conn.query("""
             SELECT DISTINCT UPPER(ACCOUNT_NAME) AS N
+            FROM TEMP.COCO_PARTNER_ADOPTION.DT_OKR_USE_CASES
+            WHERE ACCOUNT_NAME IS NOT NULL
+            UNION
+            SELECT DISTINCT UPPER(ACCOUNT_NAME)
             FROM TEMP.COCO_PARTNER_ADOPTION.PARTNER_COCO_USE_CASES
             WHERE ACCOUNT_NAME IS NOT NULL
         """)["N"].tolist()
@@ -206,6 +233,178 @@ def check_grounding(conn, text):
             a = acct.strip()
             out.append(("GROUNDING", f"account exists in Snowflake: {a}",
                         a.upper() in accounts, "not found in PARTNER_COCO_USE_CASES"))
+    return out
+
+
+def check_section_order(text):
+    """Sections must appear in the prescribed sequence."""
+    out = []
+    positions = {}
+    for sec in SECTION_ORDER:
+        pos = text.upper().find(sec.upper())
+        positions[sec] = pos  # -1 if absent
+
+    for i in range(len(SECTION_ORDER) - 1):
+        a, b = SECTION_ORDER[i], SECTION_ORDER[i + 1]
+        pa, pb = positions[a], positions[b]
+        if pa == -1 or pb == -1:
+            continue  # section-present check is handled in check_structure
+        out.append(("SECTION_ORDER", f"'{a}' before '{b}'",
+                    pa < pb, f"positions: {a}={pa}, {b}={pb}"))
+    return out
+
+
+def _scorecard_rows(text, group_label):
+    """Return data rows from the scorecard table for a given group label.
+
+    Two-step: find the heading line that mentions both PARTNER SCORECARD and
+    group_label (case-insensitive), then collect table rows until the next ##
+    heading or end of string.  Avoids brittle single-regex matching of the
+    em-dash and parenthetical suffix the LLM adds to the heading.
+    """
+    lines = text.splitlines()
+    section_start = None
+    label_lower = group_label.lower()
+
+    for i, line in enumerate(lines):
+        s = line.strip()
+        if (s.startswith("##")
+                and "partner scorecard" in s.lower()
+                and label_lower in s.lower()):
+            section_start = i + 1
+            break
+
+    if section_start is None:
+        return []
+
+    rows = []
+    header = None
+    for line in lines[section_start:]:
+        s = line.strip()
+        # Stop at next heading
+        if s.startswith("##"):
+            break
+        if not (s.startswith("|") and s.endswith("|")):
+            if header:
+                break  # table ended, trailing narrative
+            continue
+        cells = [c.strip() for c in s.strip("|").split("|")]
+        if set("".join(cells)) <= set("-: "):
+            continue  # separator row
+        if header is None:
+            header = cells
+        else:
+            rows.append(cells)
+    return rows
+
+
+def check_completeness(text):
+    """Every scorecard must have the exact expected number of partner rows."""
+    out = []
+    for group, expected in EXPECTED_PARTNER_COUNTS.items():
+        rows = _scorecard_rows(text, group)
+        # Filter out any non-data rows (e.g. summary/total rows)
+        data_rows = [r for r in rows if r and r[0].strip() not in ("", "Partner", "Group")]
+        actual = len(data_rows)
+        out.append(("COMPLETENESS", f"{group} scorecard: {expected} partner rows",
+                    actual == expected,
+                    f"found {actual}, expected {expected}"))
+    return out
+
+
+def check_cross_table(text):
+    """Sum of all scorecard partner rows must match the OKR regional breakdown table."""
+    out = []
+
+    # Extract OKR regional breakdown (the first table with Total UCs + CoCo UCs columns)
+    okr_table = None
+    for header, rows in parse_tables(text):
+        h = [c.lower() for c in header]
+        if any("total uc" in c for c in h) and any("coco uc" in c for c in h):
+            okr_table = (header, rows)
+            break
+
+    if not okr_table:
+        out.append(("CROSS_TABLE", "OKR regional breakdown table found", False, "table not found"))
+        return out
+
+    h = [c.lower() for c in okr_table[0]]
+    i_total = next((i for i, c in enumerate(h) if "total uc" in c), None)
+    i_coco  = next((i for i, c in enumerate(h) if "coco uc" in c), None)
+    if i_total is None or i_coco is None:
+        out.append(("CROSS_TABLE", "OKR table has Total UCs + CoCo UCs columns", False, "columns missing"))
+        return out
+
+    okr_total = sum(_num(r[i_total]) or 0 for r in okr_table[1] if len(r) > max(i_total, i_coco))
+    okr_coco  = sum(_num(r[i_coco])  or 0 for r in okr_table[1] if len(r) > max(i_total, i_coco))
+
+    # Sum partner rows across all four scorecards
+    sc_total = sc_coco = 0
+    for group in EXPECTED_PARTNER_COUNTS:
+        for row in _scorecard_rows(text, group):
+            if len(row) < 3:
+                continue
+            # Total UCs = col 1, CoCo UCs = col 2 (standard scorecard layout)
+            sc_total += _num(row[1]) or 0
+            sc_coco  += _num(row[2]) or 0
+
+    if okr_total > 0:
+        out.append(("CROSS_TABLE", "scorecard Total UCs sum ≈ OKR table Total UCs",
+                    abs(sc_total - okr_total) <= 5,
+                    f"scorecard sum={sc_total:.0f}, OKR table={okr_total:.0f}"))
+    if okr_coco > 0:
+        out.append(("CROSS_TABLE", "scorecard CoCo UCs sum ≈ OKR table CoCo UCs",
+                    abs(sc_coco - okr_coco) <= 5,
+                    f"scorecard sum={sc_coco:.0f}, OKR table={okr_coco:.0f}"))
+    return out
+
+
+def check_notable_wins(text):
+    """Notable Wins section: exactly 4 bullets, one per group, correct format,
+    and ONLY Stage 7 Deployed or Stage 4 Won use cases mentioned."""
+    out = []
+    m = re.search(r"##\s*NOTABLE WINS(.*?)(?=\n##\s|$)", text, re.DOTALL | re.IGNORECASE)
+    if not m:
+        out.append(("NOTABLE_WINS", "NOTABLE WINS section present", False, "section not found"))
+        return out
+
+    section = m.group(1)
+    bullets  = [l.strip() for l in section.splitlines() if l.strip().startswith("-")]
+
+    out.append(("NOTABLE_WINS", "exactly 4 win bullets (one per group)",
+                len(bullets) == 4, f"found {len(bullets)} bullets"))
+
+    for group in NOTABLE_WINS_GROUPS:
+        hit = any(group.lower() in b.lower() for b in bullets)
+        out.append(("NOTABLE_WINS", f"bullet present for {group}", hit, "group missing from bullets"))
+
+    # Format check: each bullet should have a partner name in bold + "CoCo at" or "No notable win"
+    for b in bullets:
+        has_bold   = bool(re.search(r"\*\*.+\*\*", b))
+        has_anchor = bool(re.search(r"coco\s+at|no\s+notable\s+win", b, re.IGNORECASE))
+        out.append(("NOTABLE_WINS", f"bullet format valid: {b[:60]}",
+                    has_bold and has_anchor,
+                    "expected '**Partner**... CoCo at Account' or 'No notable win'"))
+
+    # Stage check: only Stage 7 Deployed or Stage 4 Won may appear — no other stages
+    _FORBIDDEN_STAGES = re.compile(
+        r"stage\s*[35]\b|implementation\s+in\s+progress"
+        r"|tech(?:nical)?[/ ]+biz|validation|in\s+progress",
+        re.IGNORECASE,
+    )
+    _ALLOWED_STAGES = re.compile(
+        r"stage\s*7|deployed|stage\s*6|implementation\s+complete|stage\s*4|won|migration\s+plan|no\s+notable\s+win",
+        re.IGNORECASE,
+    )
+    for b in bullets:
+        if re.search(r"no\s+notable\s+win", b, re.IGNORECASE):
+            continue  # placeholder bullet — no stage to check
+        has_forbidden = bool(_FORBIDDEN_STAGES.search(b))
+        has_allowed   = bool(_ALLOWED_STAGES.search(b))
+        out.append(("NOTABLE_WINS", f"only Deployed/Won stage in bullet: {b[:60]}",
+                    has_allowed and not has_forbidden,
+                    "bullet references a non-Deployed/Won stage (only Stage 7 or Stage 4 allowed)"))
+
     return out
 
 
@@ -238,13 +437,15 @@ def score(results):
 
 # ── run ──────────────────────────────────────────────────────────────────────
 st.set_page_config(page_title="Exec email eval", layout="wide")
-st.title("Executive Email — deterministic eval")
+st.subheader("Executive Email — deterministic eval")
 
 if os.environ.get("EVAL_SELFTEST") == "1":
     from scripts.eval_exec_email_fixtures import FIXTURES
     report = []
     for label, body, expect_fail in FIXTURES:
-        res = check_structure(body) + check_arithmetic(body)
+        res = (check_structure(body) + check_arithmetic(body)
+               + check_section_order(body) + check_completeness(body)
+               + check_cross_table(body) + check_notable_wins(body))
         got = {n for _, n, ok, _ in res if not ok}
         hit = any(any(k in n for k in expect_fail) for n in got) if expect_fail else not got
         report.append(f"{'OK ' if hit else 'BAD'} fixture '{label}': "
@@ -254,18 +455,26 @@ if os.environ.get("EVAL_SELFTEST") == "1":
     st.code(out)
     st.stop()
 
-email_file = os.environ.get("EMAIL_FILE")
-if not email_file or not Path(email_file).exists():
-    st.error("Set EMAIL_FILE to a file containing the generated email body.")
+    out = "\n".join(report)
+    print(out, flush=True)
+    st.code(out)
     st.stop()
 
-body = Path(email_file).read_text()
-if "conn" not in st.session_state:
-    st.session_state.conn = st.connection("snowflake")
+if __name__ == "__main__" or os.environ.get("EMAIL_FILE"):
+    email_file = os.environ.get("EMAIL_FILE")
+    if not email_file or not Path(email_file).exists():
+        st.error("Set EMAIL_FILE to a file containing the generated email body.")
+        st.stop()
 
-results = check_structure(body) + check_arithmetic(body) + check_grounding(st.session_state.conn, body)
-report = score(results)
-out_path = Path(os.environ.get("EVAL_OUT", "/tmp/exec_email_eval.md"))
-out_path.write_text(report)
-print(report, flush=True)
-st.markdown(report)
+    body = Path(email_file).read_text()
+    if "conn" not in st.session_state:
+        st.session_state.conn = st.connection("snowflake")
+
+    results = (check_structure(body) + check_arithmetic(body) + check_grounding(st.session_state.conn, body)
+               + check_section_order(body) + check_completeness(body)
+               + check_cross_table(body) + check_notable_wins(body))
+    report = score(results)
+    out_path = Path(os.environ.get("EVAL_OUT", "/tmp/exec_email_eval.md"))
+    out_path.write_text(report)
+    print(report, flush=True)
+    st.markdown(report)

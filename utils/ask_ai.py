@@ -42,6 +42,12 @@ SNOWFLAKE SCHEMA (all tables in {SCHEMA}):
 - PARTNER_HIERARCHY: PARTNER_NAME, PARENT_PARTNER_NAME
 
 EXTERNAL SCHEMA — CoCo credit/token consumption (SNOWSCIENCE.LLM):
+CRITICAL: CORTEX_CODE_USER_DAY_FACT has NO PARTNER_NAME column. Credits/tokens are stored
+at the customer-account level. To get credits FOR A PARTNER (e.g. Spaulding Ridge), you MUST
+join through DT_OKR_USE_CASES: get the partner's IS_COCO_FINAL customer account names, then
+look up those accounts in CORTEX_CODE_USER_DAY_FACT with SNOWFLAKE_ACCOUNT_TYPE='Customer'.
+NEVER search for a partner name (e.g. 'Spaulding Ridge') directly in SALESFORCE_ACCOUNT_NAME —
+partners are SI firms, not customer accounts.
 - CORTEX_CODE_USER_DAY_FACT columns:
     DS (date), USER_ID, ACCOUNT_ID, SNOWFLAKE_ACCOUNT_NAME, SALESFORCE_ACCOUNT_NAME,
     SNOWFLAKE_ACCOUNT_TYPE ('Customer' or 'Partner'),
@@ -84,7 +90,7 @@ RSIs → NOAM RSIs (all NoAM scope — Regional SIs + PSE Managed Partners merge
 PSE Managed Partners (now merged into NOAM RSIs above — NoAM scope):
   'Spaulding Ridge', 'TEKsystems Global Services, LLC.', 'Blend360, LLC',
   'Tiger Analytics Inc.', 'Atrium', 'Perficient Inc.', 'SDK Tek Services Ltd.',
-  'Merkle', 'Archetype Consulting', 'Apex Systems', 'Tata Consultancy Services',
+  'Merkle', 'Archetype Consulting', 'Everforth Apex Systems',  'Tata Consultancy Services',
   'OneSix', 'Icon Analytics', 'Sparq Holdings, Inc.', 'CitiusTech Inc.',
   'Hexaware Technologies'
 
@@ -97,7 +103,7 @@ ALL MANAGED (use for "all partners" questions — combine GSI + NOAM RSIs):
   'Squadron Data Inc','Tredence Inc.',
   'Spaulding Ridge','TEKsystems Global Services, LLC.','Blend360, LLC',
   'Tiger Analytics Inc.','Atrium','Perficient Inc.','SDK Tek Services Ltd.',
-  'Merkle','Archetype Consulting','Apex Systems','Tata Consultancy Services',
+  'Merkle','Archetype Consulting','Everforth Apex Systems','Tata Consultancy Services',
   'OneSix','Icon Analytics','Sparq Holdings, Inc.','CitiusTech Inc.','Hexaware Technologies'
 
 KEY CONCEPTS:
@@ -248,7 +254,7 @@ WITH all_partner_ucs AS (
         'Squadron Data Inc','Tredence Inc.',
         'Spaulding Ridge','TEKsystems Global Services, LLC.','Blend360, LLC',
         'Tiger Analytics Inc.','Atrium','Perficient Inc.','SDK Tek Services Ltd.',
-        'Merkle','Archetype Consulting','Apex Systems','Tata Consultancy Services',
+        'Merkle','Archetype Consulting','Everforth Apex Systems','Tata Consultancy Services',
         'OneSix','Icon Analytics','Sparq Holdings, Inc.','CitiusTech Inc.','Hexaware Technologies'
     )
     AND ((USE_CASE_STAGE IN ('3 - Technical / Business Validation','4 - Use Case Won / Migration Plan')
@@ -849,7 +855,7 @@ _NOAM_RSI_PARTNERS = frozenset({
     # Former PSE Managed Partners
     'Spaulding Ridge','TEKsystems Global Services, LLC.','Blend360, LLC',
     'Tiger Analytics Inc.','Atrium','Perficient Inc.','SDK Tek Services Ltd.',
-    'Merkle','Archetype Consulting','Apex Systems','Tata Consultancy Services',
+    'Merkle','Archetype Consulting','Everforth Apex Systems','Tata Consultancy Services',
     'OneSix','Icon Analytics','Sparq Holdings, Inc.','CitiusTech Inc.',
     'Hexaware Technologies',
 })

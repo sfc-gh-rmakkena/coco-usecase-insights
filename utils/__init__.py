@@ -99,7 +99,7 @@ PARTNER_ALIASES = {
     'Atrium':                 ['Atrium'],
     'SDK Tek Services Ltd.':  ['SDK Tek Services Ltd.'],
     'Archetype Consulting':   ['Archetype Consulting'],
-    'Apex Systems':           ['Apex Systems'],
+    'Everforth Apex Systems': ['Everforth Apex Systems'],
     'OneSix':                 ['OneSix'],
     'Icon Analytics':         ['Icon Analytics'],
     'Sparq Holdings, Inc.':   ['Sparq Holdings, Inc.'],
@@ -118,7 +118,7 @@ PARTNER_ALIASES = {
         # Former PSE Managed Partners
         'Spaulding Ridge', 'TEKsystems Global Services, LLC.', 'Blend360, LLC',
         'Tiger Analytics Inc.', 'Atrium', 'Perficient Inc.', 'SDK Tek Services Ltd.',
-        'Merkle', 'Archetype Consulting', 'Apex Systems', 'Tata Consultancy Services',
+        'Merkle', 'Archetype Consulting', 'Everforth Apex Systems',  'Tata Consultancy Services',
         'OneSix', 'Icon Analytics', 'Sparq Holdings, Inc.', 'CitiusTech Inc.',
         'Hexaware Technologies',
     ],
@@ -128,8 +128,7 @@ PARTNER_ALIASES = {
         'Infinite Lambda Limited',           # ASEAN
         'Infinite Lambda Inc',               # ASEAN (alias)
         'INFINITE LAMBDA (SINGAPORE) PTE. LTD.',  # ASEAN (alias)
-        'Altis Global Limited',              # ANZ
-        'Altis Consulting, ANZ',             # ANZ (alias)
+        'Altis Consulting, ANZ',             # ANZ
         'PROLIM Global Corporation',         # India
     ],
     '--- EMEA RSIs ---': [
@@ -153,7 +152,6 @@ APJ_RSI_REGION_MAP = {
     'Infinite Lambda Limited':                  ('Infinite Lambda',   'ASEAN'),
     'Infinite Lambda Inc':                      ('Infinite Lambda',   'ASEAN'),
     'INFINITE LAMBDA (SINGAPORE) PTE. LTD.':   ('Infinite Lambda',   'ASEAN'),
-    'Altis Global Limited':                     ('Altis',             'ANZ'),
     'Altis Consulting, ANZ':                    ('Altis',             'ANZ'),
     'PROLIM Global Corporation':                ('Prolim',            'India'),
 }
@@ -207,7 +205,7 @@ def canonical_partner(name):
 # Only unambiguous single-candidate matches are listed. Deliberately NOT mapped:
 #   Tata Consultancy Services -> the pipeline has 'Tata Group of Companies' and
 #     'Tata Elxsi', which are different legal entities from TCS.
-#   Apex Systems, Blend360, Hexaware Technologies, KPC, kipi.ai, LTM/LTI Mindtree,
+#   Everforth Apex Systems, Blend360, Hexaware Technologies, KPC, kipi.ai, LTM/LTI Mindtree,
 #     Merkle, SDK Tek Services, Squadron Data Inc, TEKsystems -> no pipeline entry at
 #     all, so they have genuinely no resolved consultants rather than a naming gap.
 PARTNER_PIPELINE_CROSSWALK = {

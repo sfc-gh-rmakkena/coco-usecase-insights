@@ -61,7 +61,7 @@ tables:
             'LTM','LTI Mindtree','phData, Inc.','Slalom, LLC.','Squadron Data Inc','Tredence Inc.',
             'Spaulding Ridge','TEKsystems Global Services, LLC.','Blend360, LLC',
             'Tiger Analytics Inc.','Atrium','Perficient Inc.','SDK Tek Services Ltd.','Merkle',
-            'Archetype Consulting','Apex Systems','Tata Consultancy Services',
+            'Archetype Consulting','Everforth Apex Systems','Tata Consultancy Services',
             'OneSix','Icon Analytics','Sparq Holdings, Inc.','CitiusTech Inc.','Hexaware Technologies',
             'NTT DATA Group Corporation','MegazoneCloud Corporation',
             'Infinite Lambda Limited','Infinite Lambda Inc','INFINITE LAMBDA (SINGAPORE) PTE. LTD.',
@@ -93,7 +93,7 @@ tables:
             'LTM','LTI Mindtree','phData, Inc.','Slalom, LLC.','Squadron Data Inc','Tredence Inc.',
             'Spaulding Ridge','TEKsystems Global Services, LLC.','Blend360, LLC',
             'Tiger Analytics Inc.','Atrium','Perficient Inc.','SDK Tek Services Ltd.','Merkle',
-            'Archetype Consulting','Apex Systems','Tata Consultancy Services',
+            'Archetype Consulting','Everforth Apex Systems','Tata Consultancy Services',
             'OneSix','Icon Analytics','Sparq Holdings, Inc.','CitiusTech Inc.','Hexaware Technologies')
       - name: usmajors_theater
         synonyms: [USMajors, US Majors, S Majors, Majors]
@@ -178,7 +178,7 @@ tables:
               'LTM','LTI Mindtree','phData, Inc.','Slalom, LLC.','Squadron Data Inc','Tredence Inc.',
               'Spaulding Ridge','TEKsystems Global Services, LLC.','Blend360, LLC','Tiger Analytics Inc.',
               'Atrium','Perficient Inc.','SDK Tek Services Ltd.','Merkle','Archetype Consulting',
-              'Apex Systems','Tata Consultancy Services','OneSix','Icon Analytics',
+              'Everforth Apex Systems','Tata Consultancy Services','OneSix','Icon Analytics',
               'Sparq Holdings, Inc.','CitiusTech Inc.','Hexaware Technologies') THEN 'NOAM RSI'
             WHEN PARTNER_NAME IN ('NTT DATA Group Corporation','MegazoneCloud Corporation',
               'Infinite Lambda Limited','Infinite Lambda Inc','INFINITE LAMBDA (SINGAPORE) PTE. LTD.',
@@ -260,7 +260,7 @@ tables:
             'LTM','LTI Mindtree','phData, Inc.','Slalom, LLC.','Squadron Data Inc','Tredence Inc.',
             'Spaulding Ridge','TEKsystems Global Services, LLC.','Blend360, LLC',
             'Tiger Analytics Inc.','Atrium','Perficient Inc.','SDK Tek Services Ltd.','Merkle',
-            'Archetype Consulting','Apex Systems','Tata Consultancy Services',
+            'Archetype Consulting','Everforth Apex Systems','Tata Consultancy Services',
             'OneSix','Icon Analytics','Sparq Holdings, Inc.','CitiusTech Inc.','Hexaware Technologies',
             'NTT DATA Group Corporation','MegazoneCloud Corporation',
             'Infinite Lambda Limited','Infinite Lambda Inc','INFINITE LAMBDA (SINGAPORE) PTE. LTD.',
@@ -330,7 +330,7 @@ tables:
               'LTM','LTI Mindtree','phData, Inc.','Slalom, LLC.','Squadron Data Inc','Tredence Inc.',
               'Spaulding Ridge','TEKsystems Global Services, LLC.','Blend360, LLC','Tiger Analytics Inc.',
               'Atrium','Perficient Inc.','SDK Tek Services Ltd.','Merkle','Archetype Consulting',
-              'Apex Systems','Tata Consultancy Services','OneSix','Icon Analytics',
+              'Everforth Apex Systems','Tata Consultancy Services','OneSix','Icon Analytics',
               'Sparq Holdings, Inc.','CitiusTech Inc.','Hexaware Technologies') THEN 'NOAM RSI'
             WHEN PARTNER_NAME IN ('NTT DATA Group Corporation','MegazoneCloud Corporation',
               'Infinite Lambda Limited','Infinite Lambda Inc','INFINITE LAMBDA (SINGAPORE) PTE. LTD.',
@@ -394,7 +394,7 @@ tables:
             'LTM','LTI Mindtree','phData, Inc.','Slalom, LLC.','Squadron Data Inc','Tredence Inc.',
             'Spaulding Ridge','TEKsystems Global Services, LLC.','Blend360, LLC',
             'Tiger Analytics Inc.','Atrium','Perficient Inc.','SDK Tek Services Ltd.','Merkle',
-            'Archetype Consulting','Apex Systems','Tata Consultancy Services',
+            'Archetype Consulting','Everforth Apex Systems','Tata Consultancy Services',
             'OneSix','Icon Analytics','Sparq Holdings, Inc.','CitiusTech Inc.','Hexaware Technologies',
             'NTT DATA Group Corporation','MegazoneCloud Corporation',
             'Infinite Lambda Limited','Infinite Lambda Inc','INFINITE LAMBDA (SINGAPORE) PTE. LTD.',
@@ -450,7 +450,7 @@ tables:
               'LTM','LTI Mindtree','phData, Inc.','Slalom, LLC.','Squadron Data Inc','Tredence Inc.',
               'Spaulding Ridge','TEKsystems Global Services, LLC.','Blend360, LLC','Tiger Analytics Inc.',
               'Atrium','Perficient Inc.','SDK Tek Services Ltd.','Merkle','Archetype Consulting',
-              'Apex Systems','Tata Consultancy Services','OneSix','Icon Analytics',
+              'Everforth Apex Systems','Tata Consultancy Services','OneSix','Icon Analytics',
               'Sparq Holdings, Inc.','CitiusTech Inc.','Hexaware Technologies') THEN 'NOAM RSI'
             WHEN PARTNER_NAME IN ('NTT DATA Group Corporation','MegazoneCloud Corporation',
               'Infinite Lambda Limited','Infinite Lambda Inc','INFINITE LAMBDA (SINGAPORE) PTE. LTD.',
@@ -503,7 +503,7 @@ tables:
             'LTM','LTI Mindtree','phData, Inc.','Slalom, LLC.','Squadron Data Inc','Tredence Inc.',
             'Spaulding Ridge','TEKsystems Global Services, LLC.','Blend360, LLC',
             'Tiger Analytics Inc.','Atrium','Perficient Inc.','SDK Tek Services Ltd.','Merkle',
-            'Archetype Consulting','Apex Systems','Tata Consultancy Services',
+            'Archetype Consulting','Everforth Apex Systems','Tata Consultancy Services',
             'OneSix','Icon Analytics','Sparq Holdings, Inc.','CitiusTech Inc.','Hexaware Technologies',
             'NTT DATA Group Corporation','MegazoneCloud Corporation',
             'Infinite Lambda Limited','Infinite Lambda Inc','INFINITE LAMBDA (SINGAPORE) PTE. LTD.',
@@ -569,7 +569,7 @@ tables:
               'LTM','LTI Mindtree','phData, Inc.','Slalom, LLC.','Squadron Data Inc','Tredence Inc.',
               'Spaulding Ridge','TEKsystems Global Services, LLC.','Blend360, LLC','Tiger Analytics Inc.',
               'Atrium','Perficient Inc.','SDK Tek Services Ltd.','Merkle','Archetype Consulting',
-              'Apex Systems','Tata Consultancy Services','OneSix','Icon Analytics',
+              'Everforth Apex Systems','Tata Consultancy Services','OneSix','Icon Analytics',
               'Sparq Holdings, Inc.','CitiusTech Inc.','Hexaware Technologies') THEN 'NOAM RSI'
             WHEN PARTNER_NAME IN ('NTT DATA Group Corporation','MegazoneCloud Corporation',
               'Infinite Lambda Limited','Infinite Lambda Inc','INFINITE LAMBDA (SINGAPORE) PTE. LTD.',
@@ -733,7 +733,7 @@ verified_queries:
             'LTM','LTI Mindtree','phData, Inc.','Slalom, LLC.','Squadron Data Inc','Tredence Inc.',
             'Spaulding Ridge','TEKsystems Global Services, LLC.','Blend360, LLC','Tiger Analytics Inc.',
             'Atrium','Perficient Inc.','SDK Tek Services Ltd.','Merkle','Archetype Consulting',
-            'Apex Systems','Tata Consultancy Services','OneSix','Icon Analytics',
+            'Everforth Apex Systems','Tata Consultancy Services','OneSix','Icon Analytics',
             'Sparq Holdings, Inc.','CitiusTech Inc.','Hexaware Technologies') THEN 'NOAM RSI'
           WHEN PARTNER_NAME IN ('NTT DATA Group Corporation','MegazoneCloud Corporation',
             'Infinite Lambda Limited','Infinite Lambda Inc','INFINITE LAMBDA (SINGAPORE) PTE. LTD.',
@@ -753,7 +753,7 @@ verified_queries:
           'LTM','LTI Mindtree','phData, Inc.','Slalom, LLC.','Squadron Data Inc','Tredence Inc.',
           'Spaulding Ridge','TEKsystems Global Services, LLC.','Blend360, LLC',
           'Tiger Analytics Inc.','Atrium','Perficient Inc.','SDK Tek Services Ltd.','Merkle',
-          'Archetype Consulting','Apex Systems','Tata Consultancy Services',
+          'Archetype Consulting','Everforth Apex Systems','Tata Consultancy Services',
           'OneSix','Icon Analytics','Sparq Holdings, Inc.','CitiusTech Inc.','Hexaware Technologies',
           'NTT DATA Group Corporation','MegazoneCloud Corporation',
           'Infinite Lambda Limited','Infinite Lambda Inc','INFINITE LAMBDA (SINGAPORE) PTE. LTD.',

@@ -84,10 +84,24 @@ def _apply_managed_geo_filter(bc):
 if include_account_coco:
     bulk_conf = get_bulk_confidence_scores(conn, base_summary['PARTNER_NAME'].tolist(), q_start, q_end)
     if len(bulk_conf) > 0:
-        # Apply geo restrictions when using default managed partner scope
-        # (same logic as Adoption Metrics _managed_bc — ensures numbers match)
+        # Always apply APJ/EMEA geo restrictions — country-scoped per partner agreement.
+        # For GSI/NOAM the geo filter only applies in the default managed scope
+        # (a user who explicitly picks a single NOAM partner doesn't need theater filtering).
         if _using_default_managed:
             bulk_conf = _apply_managed_geo_filter(bulk_conf)
+        else:
+            # Even in a custom partner selection, APJ/EMEA must stay country-scoped
+            _apj_names  = set(APJ_RSI_REGION_MAP.keys())
+            _emea_names = set(EMEA_RSI_REGION_MAP.keys())
+            if 'REGION_NAME' in bulk_conf.columns:
+                _non_rsi = bulk_conf[~bulk_conf['PARTNER_NAME'].isin(_apj_names | _emea_names)]
+                _apj  = bulk_conf[bulk_conf['PARTNER_NAME'].isin(_apj_names)].copy()
+                _apj['_c']  = _apj['PARTNER_NAME'].map({k: v[1] for k, v in APJ_RSI_REGION_MAP.items()})
+                _apj  = _apj[_apj['REGION_NAME'] == _apj['_c']].drop(columns=['_c'])
+                _emea = bulk_conf[bulk_conf['PARTNER_NAME'].isin(_emea_names)].copy()
+                _emea['_c'] = _emea['PARTNER_NAME'].map({k: v[1] for k, v in EMEA_RSI_REGION_MAP.items()})
+                _emea = _emea[_emea['REGION_NAME'] == _emea['_c']].drop(columns=['_c'])
+                bulk_conf = pd.concat([p for p in [_non_rsi, _apj, _emea] if len(p) > 0], ignore_index=True)
         # Apply sidebar region filter
         if region and region != 'Global':
             _theaters = resolve_region_theaters(region)
@@ -487,6 +501,19 @@ if selected_partner:
     detail = detail.copy()
     detail['PARTNER_NAME'] = detail['PARTNER_NAME'].replace(PARTNER_RENAME_MAP)
     partner_detail = detail[detail['PARTNER_NAME'] == selected_partner]
+
+    # Apply APJ/EMEA country-level geo scoping in the deep dive —
+    # NTT DATA → Japan only, Megazone → Korea only, etc.
+    if len(partner_detail) > 0 and 'REGION_NAME' in partner_detail.columns:
+        _raw_partner = next((k for k, v in PARTNER_RENAME_MAP.items() if v == selected_partner), selected_partner)
+        if _raw_partner in APJ_RSI_REGION_MAP or selected_partner in APJ_RSI_REGION_MAP:
+            _country = APJ_RSI_REGION_MAP.get(_raw_partner, APJ_RSI_REGION_MAP.get(selected_partner, (None, None)))[1]
+            if _country:
+                partner_detail = partner_detail[partner_detail['REGION_NAME'] == _country]
+        elif _raw_partner in EMEA_RSI_REGION_MAP or selected_partner in EMEA_RSI_REGION_MAP:
+            _country = EMEA_RSI_REGION_MAP.get(_raw_partner, EMEA_RSI_REGION_MAP.get(selected_partner, (None, None)))[1]
+            if _country:
+                partner_detail = partner_detail[partner_detail['REGION_NAME'] == _country]
 
     if len(partner_detail) > 0:
         # Override IS_COCO_ATTACHED using full confidence scoring (same as summary metrics)

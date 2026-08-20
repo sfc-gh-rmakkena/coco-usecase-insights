@@ -53,6 +53,25 @@ _REGION_RE      = re.compile(r'\bregion\b|\bnoam\b|\bapj\b|\bemea\b|\bamericas\b
 _TARGET_RE      = re.compile(r'\btarget\b|\bgoal\b|\b50%\b|\b75%\b|\bmeet(ing)?\b|\bgap\b|\bneed\s+to\s+hit\b|\bpartners\s+meeting\b|\bpartners\s+above\b|\bpartners\s+below\b|\babove\s+target\b|\bbelow\s+target\b|\bhitting\s+target\b|\bat\s+target\b', re.I)
 _COCO_COUNT_RE  = re.compile(r'\bcoco\s+uc\b|\bcoco\s+use\s+case\b|\bcoco\s+count\b|\bhow\s+many\s+coco\b|\bis_coco_final\b|\bcoco\s+attach(ed)?\b|\bcoco\s+adoption\b|\badoption\s+rate\b|\badoption\s*%|\bcoco\s*%|\bcoco\s+percentage\b|\bhow\s+many\s+use\s+case\b|\btotal\s+uc\b|\btotal\s+use\s+case\b', re.I)
 
+# ── Use-case analysis — partner-scoped deep-dive with account/credit context ──
+# Intercepts "why" + partner + metric, "which use case is driving", "analyse the UCs"
+# These require the full partner UC list + per-account credit linkage.
+_UC_ANALYSIS_RE = re.compile(
+    r'\bwhy\b.*\b(credit|token|coco|decline|drop|change|decrease|increase)\b'
+    r'|\b(decline|drop|decrease|increase)\b.*\b(credit|token|coco)\b'
+    r'|\bwhich\s+use\s+case.*driv\w*\b|\bdri\w+.*\buse\s+case\b'
+    r'|\buse\s+case.*analy\w+|\banalys[ei]\w*.*use\s+case'
+    r'|\buse\s+case.*breakdown\b|\bbreakdown.*use\s+case'
+    r'|\buse\s+case.*driver\b|\bdriver.*use\s+case'
+    r'|\bwhat.*causing\b|\broot\s+cause\b'
+    r'|\buse\s+case.*in\s+scope\b|\bin\s+scope.*use\s+case'
+    r'|\buse\s+case.*for\s+partner\b|\bpartner.*use\s+case\s+list\b'
+    r'|\bshow\s+(me\s+)?the\s+use\s+cases?\s+(for|of)\b'
+    r'|\blist\s+(the\s+)?use\s+cases?\s+(for|of)\b'
+    r'|\buse\s+cases?\s+for\s+\w',
+    re.I,
+)
+
 # ── Row-level questions — always fall through to Cortex Agent ─────────────────
 # These ask for specific items (which UC, list, top N) not aggregate counts.
 # Intercept would return an aggregate, which doesn't answer the question.
@@ -127,6 +146,10 @@ def _detect_group(text: str) -> str | None:
 
 def _detect_metric(text: str) -> str | None:
     # Order: specific → general. Credits before tokens (both are "token" adjacent).
+    # UC analysis must be checked FIRST — it covers WHY/driver questions that
+    # would otherwise fall into credits/tokens/coco_count and lose the deep context.
+    if _UC_ANALYSIS_RE.search(text):
+        return "uc_analysis"
     if _CREDIT_RE.search(text):
         return "credits"
     if _TOKEN_RE.search(text):
@@ -191,9 +214,9 @@ def detect_intent(question: str, chat_history: list = None) -> dict:
     has_entity = bool(partner or group or global_)
     has_metric = bool(metric)
 
-    # Row-level questions always fall through — the programmatic layer only
-    # returns aggregates, which cannot answer "which UC / list / top N" questions.
-    if _ROW_LEVEL_RE.search(q):
+    # Row-level questions always fall through — EXCEPT uc_analysis which has its
+    # own programmatic path that handles per-UC and per-account detail.
+    if _ROW_LEVEL_RE.search(q) and metric != "uc_analysis":
         return {
             "metric": metric, "quarter": quarter or "q3",
             "partner": partner, "group": group, "global_": global_,
@@ -206,6 +229,8 @@ def detect_intent(question: str, chat_history: list = None) -> dict:
     _DIMENSION_METRICS = {"theatre", "region", "stage", "attribution", "confidence"}
     if metric in ("tokens", "credits") and not (partner or group):
         confidence = "low"
+    elif metric == "uc_analysis" and not (partner or group):
+        confidence = "low"  # need a specific partner to do UC analysis
     elif has_metric and (has_entity or quarter or metric in _DIMENSION_METRICS):
         confidence = "high"
     elif quarter == "both" and has_entity:

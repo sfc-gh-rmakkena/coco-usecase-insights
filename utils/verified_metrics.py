@@ -502,7 +502,122 @@ def resolve_wow(conn, df: pd.DataFrame, partner=None, group=None) -> dict:
     return {"text": " | ".join(parts) if parts else "WoW data not available."}
 
 
-def resolve_stalled(conn, partner=None, group=None, quarter="q3") -> dict:
+def resolve_uc_analysis(df: pd.DataFrame, partner=None, group=None) -> dict:
+    """
+    Full partner UC context: use case list + per-account credit/token data.
+
+    Workflow mirrors the OKR Partner Deep Dive:
+      1. Filter bulk_conf to the partner's in-scope UCs (quarter + geo already applied)
+      2. Split into CoCo-final and non-CoCo
+      3. For IS_COCO_FINAL UCs, resolve per-account credit/token metrics
+      4. Identify the account with the biggest WoW credit/token change (the 'driver')
+    """
+    sub = _filter_entity(df, partner, group)
+    entity = partner or (f"{group} partners" if group else "all managed partners")
+
+    if len(sub) == 0:
+        return {"text": f"No in-scope use cases found for {entity} in this period."}
+
+    total_ucs = len(sub)
+    coco_ucs  = int(sub["IS_COCO_FINAL"].sum())
+    coco_pct  = round(coco_ucs * 100.0 / total_ucs, 1) if total_ucs else 0.0
+
+    # ── Use case table ────────────────────────────────────────────────────────
+    uc_lines = []
+    for _, row in sub.sort_values("IS_COCO_FINAL", ascending=False).iterrows():
+        name    = str(row.get("USE_CASE_NAME",  "N/A"))[:50]
+        acct    = str(row.get("ACCOUNT_NAME",   "N/A"))[:40]
+        stage   = str(row.get("USE_CASE_STAGE", "N/A")).split(" - ", 1)[-1]
+        eacv    = float(row.get("USE_CASE_EACV", 0) or 0)
+        is_coco = bool(row.get("IS_COCO_FINAL", False))
+        src     = str(row.get("COCO_SOURCE", "")) or "Account-Level"
+        coco_tag = f"[CoCo✓ via {src}]" if is_coco else "[Non-CoCo]"
+        uc_lines.append(
+            f"  {coco_tag} {name} | Account: {acct} | {stage} | {_fmt_money(eacv)}"
+        )
+
+    uc_section = f"In-scope use cases ({total_ucs} total, {coco_ucs} CoCo = {coco_pct:.1f}%):\n"
+    uc_section += "\n".join(uc_lines[:30])
+    if len(uc_lines) > 30:
+        uc_section += f"\n  ... ({len(uc_lines) - 30} more)"
+
+    # ── Per-account credit/token analysis (IS_COCO_FINAL only) ───────────────
+    acct_section = ""
+    driver_acct  = None
+
+    coco_sub = sub[sub["IS_COCO_FINAL"]].copy()
+    if len(coco_sub) > 0 and "Q2_CREDITS" in coco_sub.columns and "ACCOUNT_NAME_UPPER" in coco_sub.columns:
+        coco_sub = filter_out_partner_own_accounts(coco_sub)
+        dedup    = coco_sub.drop_duplicates(subset=["ACCOUNT_NAME_UPPER"])
+
+        for c in ["Q2_CREDITS", "LAST7_CREDITS", "PRIOR7_CREDITS", "Q2_TOKENS", "LAST7_TOKENS", "PRIOR7_TOKENS"]:
+            if c in dedup.columns:
+                dedup = dedup.copy()
+                dedup[c] = pd.to_numeric(dedup[c], errors="coerce").fillna(0)
+
+        acct_rows = []
+        for _, ar in dedup.iterrows():
+            acct_name = str(ar.get("ACCOUNT_NAME", ar.get("ACCOUNT_NAME_UPPER", "Unknown")))
+            l7c  = float(ar.get("LAST7_CREDITS",  0))
+            p7c  = float(ar.get("PRIOR7_CREDITS", 0))
+            l7t  = float(ar.get("LAST7_TOKENS",   0))
+            p7t  = float(ar.get("PRIOR7_TOKENS",  0))
+            wow_c = round((l7c - p7c) / p7c * 100, 1) if p7c > 0 else None
+            wow_t = round((l7t - p7t) / p7t * 100, 1) if p7t > 0 else None
+
+            # Find use cases for this account
+            acct_ucs = sub[sub["ACCOUNT_NAME_UPPER"] == ar.get("ACCOUNT_NAME_UPPER", "")]
+            uc_names = [str(r.get("USE_CASE_NAME", ""))[:35] for _, r in acct_ucs.iterrows()]
+
+            acct_rows.append({
+                "account":   acct_name,
+                "l7_credits": l7c,
+                "p7_credits": p7c,
+                "wow_credits": wow_c,
+                "wow_tokens":  wow_t,
+                "uc_names":    uc_names,
+            })
+
+        # Sort by largest absolute credit WoW change to surface the driver
+        acct_rows.sort(key=lambda r: abs(r["wow_credits"] or 0), reverse=True)
+
+        acct_lines = []
+        for ar in acct_rows:
+            wow_str = f"{ar['wow_credits']:+.1f}%" if ar["wow_credits"] is not None else "N/A"
+            uc_str  = ", ".join(ar["uc_names"]) if ar["uc_names"] else "no UCs"
+            acct_lines.append(
+                f"  {ar['account']}: Last7d ${_fmt_num(ar['l7_credits'],',.0f')} credits"
+                f" (WoW: {wow_str}) | UCs: {uc_str}"
+            )
+
+        if acct_rows:
+            driver_acct = acct_rows[0]  # biggest mover
+
+        acct_section = f"\nPer-account credit breakdown (IS_COCO_FINAL accounts only):\n"
+        acct_section += "\n".join(acct_lines[:15])
+        if len(acct_lines) > 15:
+            acct_section += f"\n  ... ({len(acct_lines) - 15} more accounts)"
+
+    # ── Driver summary ────────────────────────────────────────────────────────
+    driver_section = ""
+    if driver_acct and driver_acct.get("wow_credits") is not None:
+        direction = "decline" if driver_acct["wow_credits"] < 0 else "increase"
+        uc_list   = ", ".join(driver_acct["uc_names"]) if driver_acct["uc_names"] else "no linked use cases"
+        driver_section = (
+            f"\nLargest credit {direction}: {driver_acct['account']}"
+            f" (WoW: {driver_acct['wow_credits']:+.1f}%)"
+            f" — use cases at this account: {uc_list}"
+        )
+
+    full_text = uc_section + acct_section + driver_section
+    return {
+        "total_ucs": total_ucs, "coco_ucs": coco_ucs, "coco_pct": coco_pct,
+        "driver_account": driver_acct,
+        "text": full_text,
+    }
+
+
+
     """Stalled/aging UCs via get_stalled_use_cases."""
     try:
         from utils.queries import get_stalled_use_cases
@@ -542,6 +657,7 @@ _RESOLVERS = {
     "region":      resolve_region,
     "attribution": resolve_attribution,
     "confidence":  resolve_confidence,
+    "uc_analysis": resolve_uc_analysis,
 }
 
 
@@ -595,16 +711,29 @@ def get_verified_answer(conn, question: str, intent: dict) -> dict | None:
 
     # Ask LLM to write clean prose around the verified numbers
     from utils.cortex_helpers import cortex_complete
+    is_uc_analysis = metric == "uc_analysis"
     prompt = (
         "You are a concise data assistant for the CoCo (Cortex Code) partner adoption dashboard.\n\n"
-        f"The following numbers are EXACT and verified — do not modify, contradict, or supplement them:\n"
+        f"The following data is EXACT and verified — do not modify or contradict it:\n"
         f"{verified_block}\n\n"
         f"User question: {question}\n\n"
-        "Answer in 2-4 sentences using ONLY the verified numbers above. "
-        "If the verified block says a value is 0 or unavailable, state that clearly — do not invent alternative numbers. "
-        "Do not say 'approximately'. "
-        "If the verified block has a per-partner table, extract the most relevant rows for the question."
     )
+    if is_uc_analysis:
+        prompt += (
+            "Answer the question by reasoning over the verified use case and account data above. "
+            "When identifying a 'driver' of a credit/token change, cite the specific account "
+            "and use cases shown in 'Largest credit decline/increase'. "
+            "Be clear that credits are attributed at the customer-account level and the named "
+            "use case is the one at that account — not a direct causal link. "
+            "Keep the answer to 4-6 sentences."
+        )
+    else:
+        prompt += (
+            "Answer in 2-4 sentences using ONLY the verified numbers above. "
+            "If the verified block says a value is 0 or unavailable, state that clearly — do not invent alternative numbers. "
+            "Do not say 'approximately'. "
+            "If the verified block has a per-partner table, extract the most relevant rows for the question."
+        )
 
     try:
         answer = cortex_complete(conn, "claude-sonnet-4-5", prompt)

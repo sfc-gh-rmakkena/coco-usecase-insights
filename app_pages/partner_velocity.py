@@ -24,7 +24,7 @@ _MANAGED_PARTNERS_SQL = (
     "'Perficient Inc.','Perficient India Pvt Ltd',"
     "'Merkle','Merkle inc USA','Merkle ANZ Pty Ltd','Merkle Switzerland AG',"
     "'PT Merkle Inovasi Teknologi','Davanti a Merkle Company',"
-    "'Archetype Consulting','Apex Systems',"
+    "'Archetype Consulting','Everforth Apex Systems',"
     "'Tata Consultancy Services','TCS','Tata Consultancy Services (TCS)',"
     "'OneSix','Icon Analytics','Sparq Holdings, Inc.',"
     "'CitiusTech Inc.','CITIUS TECH',"
