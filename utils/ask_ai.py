@@ -3,6 +3,8 @@ import streamlit as st
 from utils.cortex_helpers import cortex_complete
 from utils.config import get_schema
 from utils import resolve_region_theaters, resolve_partner_filter
+from utils.intent_classifier import detect_intent
+from utils.verified_metrics import get_verified_answer
 
 SCHEMA = get_schema()
 
@@ -40,6 +42,12 @@ SNOWFLAKE SCHEMA (all tables in {SCHEMA}):
 - PARTNER_HIERARCHY: PARTNER_NAME, PARENT_PARTNER_NAME
 
 EXTERNAL SCHEMA — CoCo credit/token consumption (SNOWSCIENCE.LLM):
+CRITICAL: CORTEX_CODE_USER_DAY_FACT has NO PARTNER_NAME column. Credits/tokens are stored
+at the customer-account level. To get credits FOR A PARTNER (e.g. Spaulding Ridge), you MUST
+join through DT_OKR_USE_CASES: get the partner's IS_COCO_FINAL customer account names, then
+look up those accounts in CORTEX_CODE_USER_DAY_FACT with SNOWFLAKE_ACCOUNT_TYPE='Customer'.
+NEVER search for a partner name (e.g. 'Spaulding Ridge') directly in SALESFORCE_ACCOUNT_NAME —
+partners are SI firms, not customer accounts.
 - CORTEX_CODE_USER_DAY_FACT columns:
     DS (date), USER_ID, ACCOUNT_ID, SNOWFLAKE_ACCOUNT_NAME, SALESFORCE_ACCOUNT_NAME,
     SNOWFLAKE_ACCOUNT_TYPE ('Customer' or 'Partner'),
@@ -82,7 +90,7 @@ RSIs → NOAM RSIs (all NoAM scope — Regional SIs + PSE Managed Partners merge
 PSE Managed Partners (now merged into NOAM RSIs above — NoAM scope):
   'Spaulding Ridge', 'TEKsystems Global Services, LLC.', 'Blend360, LLC',
   'Tiger Analytics Inc.', 'Atrium', 'Perficient Inc.', 'SDK Tek Services Ltd.',
-  'Merkle', 'Archetype Consulting', 'Apex Systems', 'Tata Consultancy Services',
+  'Merkle', 'Archetype Consulting', 'Everforth Apex Systems',  'Tata Consultancy Services',
   'OneSix', 'Icon Analytics', 'Sparq Holdings, Inc.', 'CitiusTech Inc.',
   'Hexaware Technologies'
 
@@ -95,7 +103,7 @@ ALL MANAGED (use for "all partners" questions — combine GSI + NOAM RSIs):
   'Squadron Data Inc','Tredence Inc.',
   'Spaulding Ridge','TEKsystems Global Services, LLC.','Blend360, LLC',
   'Tiger Analytics Inc.','Atrium','Perficient Inc.','SDK Tek Services Ltd.',
-  'Merkle','Archetype Consulting','Apex Systems','Tata Consultancy Services',
+  'Merkle','Archetype Consulting','Everforth Apex Systems','Tata Consultancy Services',
   'OneSix','Icon Analytics','Sparq Holdings, Inc.','CitiusTech Inc.','Hexaware Technologies'
 
 KEY CONCEPTS:
@@ -246,7 +254,7 @@ WITH all_partner_ucs AS (
         'Squadron Data Inc','Tredence Inc.',
         'Spaulding Ridge','TEKsystems Global Services, LLC.','Blend360, LLC',
         'Tiger Analytics Inc.','Atrium','Perficient Inc.','SDK Tek Services Ltd.',
-        'Merkle','Archetype Consulting','Apex Systems','Tata Consultancy Services',
+        'Merkle','Archetype Consulting','Everforth Apex Systems','Tata Consultancy Services',
         'OneSix','Icon Analytics','Sparq Holdings, Inc.','CitiusTech Inc.','Hexaware Technologies'
     )
     AND ((USE_CASE_STAGE IN ('3 - Technical / Business Validation','4 - Use Case Won / Migration Plan')
@@ -847,7 +855,7 @@ _NOAM_RSI_PARTNERS = frozenset({
     # Former PSE Managed Partners
     'Spaulding Ridge','TEKsystems Global Services, LLC.','Blend360, LLC',
     'Tiger Analytics Inc.','Atrium','Perficient Inc.','SDK Tek Services Ltd.',
-    'Merkle','Archetype Consulting','Apex Systems','Tata Consultancy Services',
+    'Merkle','Archetype Consulting','Everforth Apex Systems','Tata Consultancy Services',
     'OneSix','Icon Analytics','Sparq Holdings, Inc.','CitiusTech Inc.',
     'Hexaware Technologies',
 })
@@ -1104,8 +1112,22 @@ def build_uc_pattern_context(detail_df=None) -> str:
 
 
 def ask_ai_agent(question: str, chat_history: list = None) -> dict:
-    """Call COCO_AGENT via Cortex Agent REST API. Returns {answer, sql, sql_result}."""
+    """Call COCO_AGENT via Cortex Agent REST API. Returns {answer, sql, sql_result}.
+    Tries programmatic verified answer first; falls through to Cortex Agent if no match."""
     from utils.cortex_helpers import run_cortex_agent
+
+    # ── Programmatic layer: deterministic exact-number answers ──────────────
+    intent = detect_intent(question, chat_history)
+    if intent["confidence"] == "high":
+        try:
+            conn = st.connection("snowflake")
+            result = get_verified_answer(conn, question, intent)
+            if result:
+                return result
+        except Exception:
+            pass  # fall through to agent on any error
+    # ────────────────────────────────────────────────────────────────────────
+
     # Inject active date range into the question for context
     start_date = str(st.session_state.get("okr_start_date", "2026-08-01"))
     end_date   = str(st.session_state.get("okr_end_date",   "2026-10-31"))
@@ -1117,6 +1139,18 @@ def ask_ai_agent(question: str, chat_history: list = None) -> dict:
 
 
 def ask_ai(conn, question: str, page_context: str = "", debug: bool = False, chat_history: list = None):
+    # ── Programmatic layer: deterministic exact-number answers ──────────────
+    if not debug:
+        intent = detect_intent(question, chat_history)
+        if intent["confidence"] == "high":
+            try:
+                result = get_verified_answer(conn, question, intent)
+                if result:
+                    return result
+            except Exception:
+                pass  # fall through to LLM on any error
+    # ────────────────────────────────────────────────────────────────────────
+
     filter_block = build_filter_context()
 
     # Inject active date range explicitly so LLM never falls back to hardcoded example dates

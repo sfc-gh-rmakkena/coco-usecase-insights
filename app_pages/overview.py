@@ -139,7 +139,7 @@ with st.expander(":material/info: How Use Cases Are Retrieved", expanded=False):
     | Group | Partners | Scope |
     |---|---|---|
     | **GSI** | Accenture, Capgemini Technologies LLC, Cognizant Technology Solutions US Corp, Deloitte Consulting, EY, IBM | Global |
-    | **NOAM RSI** | 7Rivers, Aimpoint Digital, Apex Systems, Archetype Consulting, Atrium, Blend360, BlueCloud, CitiusTech, evolv Consulting, Hexaware, Icon Analytics, Infosys, Infostrux, kipi.ai, KPMG, LTM, Merkle, OneSix, Perficient, phData, SDK Tek, Slalom, Sparq, Spaulding Ridge, Squadron Data, Tata Consultancy Services, TEKsystems, Tiger Analytics, Tredence | NoAM theaters |
+    | **NOAM RSI** | 7Rivers, Aimpoint Digital, Everforth Apex Systems, Archetype Consulting, Atrium, Blend360, BlueCloud, CitiusTech, evolv Consulting, Hexaware, Icon Analytics, Infosys, Infostrux, kipi.ai, KPMG, LTM, Merkle, OneSix, Perficient, phData, SDK Tek, Slalom, Sparq, Spaulding Ridge, Squadron Data, Tata Consultancy Services, TEKsystems, Tiger Analytics, Tredence | NoAM theaters |
     | **APJ RSI** | NTT Data (Japan), Megazone (Korea), Infinite Lambda (ASEAN), Altis (ANZ), Prolim (India) | Country-scoped |
     | **EMEA RSI** | Infomotion (CentralEMEA), Civica (SouthEMEA), Kubrick (UK), KPC (SouthEMEA) | Region-scoped |
     """)

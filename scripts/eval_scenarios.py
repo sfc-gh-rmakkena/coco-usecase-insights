@@ -156,6 +156,64 @@ SCENARIOS = [
             },
         ],
     },
+    {
+        "id": "uc_analysis_credit_decline",
+        "title": "Use case analysis — credit decline driver",
+        "why": "When a user asks why a partner's credits declined, Ask AI should "
+               "identify the partner's in-scope use cases, link them to customer "
+               "accounts, and name the account with the biggest credit drop. "
+               "It must NOT say the partner is a customer account.",
+        "turns": [
+            {
+                "q": "Why is Spaulding Ridge showing a 7D decline in CoCo credits?",
+                "sql_required": False,
+                "forbid_entities": ["customer account, not the SI partner",
+                                    "not a partner", "not an SI"],
+                "expect_entities": ["Spaulding Ridge"],
+                "probe": True,
+            },
+            {
+                "q": "Which use case is driving that credit decline?",
+                "sql_required": False,
+                "expect_entities": ["Spaulding Ridge"],
+                "forbid_entities": ["cannot answer", "no way to know",
+                                    "data source that carries token"],
+                "probe": True,
+                "carry_from": 1,
+            },
+        ],
+    },
+    {
+        "id": "uc_analysis_in_scope",
+        "title": "Use case analysis — list in-scope UCs with attribution",
+        "why": "Ask AI should return the partner's in-scope use cases with CoCo "
+               "attribution source, not a generic count. The answer must name "
+               "at least one account and show whether each UC is CoCo or not.",
+        "turns": [
+            {
+                "q": "Show me the use cases for Accenture this quarter and which are CoCo attached.",
+                "sql_required": False,
+                "expect_entities": ["Accenture"],
+                "probe": True,
+            },
+        ],
+    },
+    {
+        "id": "uc_analysis_partner_confusion",
+        "title": "Partner vs customer account — must not confuse SI with account",
+        "why": "For CORTEX_CODE_USER_DAY_FACT queries, the LLM must join through "
+               "DT_OKR_USE_CASES to get customer accounts — never search for the "
+               "partner name directly in SALESFORCE_ACCOUNT_NAME.",
+        "turns": [
+            {
+                "q": "What are the token consumption trends for Deloitte's CoCo use cases?",
+                "sql_required": False,
+                "expect_entities": ["Deloitte"],
+                "forbid_entities": ["Deloitte is a customer", "not an SI", "not a partner"],
+                "probe": True,
+            },
+        ],
+    },
 ]
 
 JUDGE_RUBRIC = """You are grading whether an AI data assistant maintained CONVERSATIONAL MEMORY
