@@ -765,6 +765,25 @@ def get_distinct_partners(_conn, region=None, source=None, start_date=None, end_
     return ["All"] + result['PARTNER_NAME'].tolist()
 
 @st.cache_data(ttl=timedelta(minutes=30))
+def get_distinct_subregions(_conn, region=None, start_date=None, end_date=None):
+    """Sub-regions (REGION_NAME) available inside the current theatre/region scope.
+
+    REGION_NAME is the level below THEATER_NAME and its meaning varies by theatre:
+    industry for USMajors (HCLS, FSI, TMT...), country for APJ, sub-geography for
+    EMEA. Options therefore cascade from whatever theatre/region is selected.
+    """
+    tf = _theater_filter(region)
+    query = f"""{_use_case_base(start_date, end_date)}
+    SELECT DISTINCT REGION_NAME
+    FROM use_cases
+    WHERE REGION_NAME IS NOT NULL AND TRIM(REGION_NAME) <> ''{tf}
+    ORDER BY REGION_NAME
+    """
+    result = _conn.query(query)
+    return result['REGION_NAME'].tolist()
+
+
+@st.cache_data(ttl=timedelta(minutes=30))
 def get_aging_analysis(_conn, region=None, source=None, start_date=None, end_date=None):
     tf = _theater_filter(region)
     sf = _source_filter(source or "")

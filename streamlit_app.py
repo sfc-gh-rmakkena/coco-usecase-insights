@@ -1,5 +1,5 @@
 import streamlit as st
-from utils.queries import get_distinct_partners
+from utils.queries import get_distinct_partners, get_distinct_subregions
 from utils import PARTNER_GROUPS
 from utils.ask_ai import ask_ai, ask_ai_agent
 from datetime import date, timedelta
@@ -20,6 +20,8 @@ if "selected_region" not in st.session_state:
     st.session_state.selected_region = "Global"
 if "selected_theater" not in st.session_state:
     st.session_state.selected_theater = "All"
+if "selected_subregions" not in st.session_state:
+    st.session_state.selected_subregions = []
 if "selected_partners" not in st.session_state:
     st.session_state.selected_partners = list(PARTNER_GROUPS)
 if "okr_start_date" not in st.session_state:
@@ -56,6 +58,24 @@ with st.sidebar:
     else:
         st.session_state.selected_region = _ui_reg
     partners = get_distinct_partners(st.session_state.conn, region=st.session_state.selected_region)
+
+    # Sub-region sits one level below theatre. Its options depend on the theatre
+    # selected above, because the values are industries under USMajors, countries
+    # under APJ and sub-geographies under EMEA. Empty selection means all.
+    _subregion_options = get_distinct_subregions(
+        st.session_state.conn, region=st.session_state.selected_region
+    )
+    _kept = [s for s in st.session_state.get("selected_subregions", [])
+             if s in _subregion_options]
+    if _kept != st.session_state.get("selected_subregions", []):
+        st.session_state.selected_subregions = _kept
+    st.multiselect(
+        "Sub-region",
+        options=_subregion_options,
+        key="selected_subregions",
+        help="Level below Theater: industry for USMajors (HCLS, FSI, TMT), country "
+             "for APJ, sub-geography for EMEA. Empty = all.",
+    )
     # Remove "All" from the options list for multiselect (empty = all)
     partner_options = [p for p in partners if p != "All"]
     # Add group options at the top
