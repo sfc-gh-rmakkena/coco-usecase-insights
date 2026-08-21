@@ -749,8 +749,7 @@ if selected_partners:
     filter_label += f" | Partners: {', '.join(selected_partners)}"
 st.caption(f"AI-generated weekly summary for CoCo Use Case Intelligence | {filter_label}")
 
-source_toggle = st.segmented_control("Use Case View", ["Overall", "PSE Confirmed", "Feature Flag"], default="Overall", key="email_source")
-st.caption(f"Filters active: {source_toggle} use cases • {region} region")
+st.caption(f"Filters active: {region} region")
 
 def _apply_partner_filter(df, col='PARTNER_NAME'):
     """Filter DataFrame by sidebar multiselect partners."""
@@ -761,17 +760,17 @@ def _apply_partner_filter(df, col='PARTNER_NAME'):
     return df
 
 with st.spinner("Loading data..."):
-    stats = get_summary_stats(conn, region=region, source=source_toggle)
-    partner_data = get_email_summary_data(conn, region=region, source=source_toggle)
-    stage_data = get_by_stage(conn, region=region, source=source_toggle)
+    stats = get_summary_stats(conn, region=region, source=None)
+    partner_data = get_email_summary_data(conn, region=region, source=None)
+    stage_data = get_by_stage(conn, region=region, source=None)
     source_data = get_source_breakdown(conn, region=region)
-    region_data = get_by_region(conn, source=source_toggle)
-    type_patterns = get_use_case_type_patterns(conn, region=region, source=source_toggle)
-    workload_data = get_workload_patterns(conn, region=region, source=source_toggle)
-    competitive_data = get_competitive_landscape(conn, region=region, source=source_toggle)
-    comment_data = get_comment_narratives(conn, region=region, source=source_toggle)
-    partner_workloads = get_partner_workload_cross(conn, region=region, source=source_toggle)
-    regional_themes = get_regional_themes(conn, source=source_toggle)
+    region_data = get_by_region(conn, source=None)
+    type_patterns = get_use_case_type_patterns(conn, region=region, source=None)
+    workload_data = get_workload_patterns(conn, region=region, source=None)
+    competitive_data = get_competitive_landscape(conn, region=region, source=None)
+    comment_data = get_comment_narratives(conn, region=region, source=None)
+    partner_workloads = get_partner_workload_cross(conn, region=region, source=None)
+    regional_themes = get_regional_themes(conn, source=None)
     coco_coverage = get_partner_coco_coverage(conn, region=region, include_account_coco=False, confidence=None)
     global_overview = get_adoption_overview(conn, '2026-08-01', '2026-10-31', include_account_coco=True, confidence='High')
     pipeline_wow = get_pipeline_wow(conn)
@@ -1705,8 +1704,139 @@ NOTABLE WINS BY REGION (one IS_COCO_FINAL UC per group — best stage then highe
 {notable_wins_by_region_ctx}
 """
 
+# ── Narrative insight data blocks (Q3-scoped, managed partners only) ──────────
+_narrative_ctx = {}
+
+if len(managed_bulk_conf) > 0:
+    _bc = managed_bulk_conf.copy()
+    # Ensure optional columns exist with safe defaults
+    if 'WORKLOADS'   not in _bc.columns: _bc['WORKLOADS']   = ''
+    if 'COMPETITORS' not in _bc.columns: _bc['COMPETITORS'] = ''
+    if 'DAYS_IN_STAGE' not in _bc.columns: _bc['DAYS_IN_STAGE'] = 0
+
+    # Narrative — Pipeline by Industry: join DIM_USE_CASE for ACCOUNT_INDUSTRY
+    try:
+        _uc_ids = "','".join(_bc['USE_CASE_ID'].dropna().unique()[:2000])
+        _ind_df = conn.query(f"""
+            SELECT ACCOUNT_INDUSTRY, COUNT(*) AS UC_CNT,
+                   SUM(USE_CASE_EACV) AS TOTAL_EACV,
+                   ROUND(AVG(USE_CASE_EACV)) AS AVG_EACV
+            FROM MDM.MDM_INTERFACES.DIM_USE_CASE
+            WHERE USE_CASE_ID IN ('{_uc_ids}')
+              AND ACCOUNT_INDUSTRY IS NOT NULL
+            GROUP BY 1 ORDER BY TOTAL_EACV DESC NULLS LAST
+            LIMIT 8
+        """)
+        _ind_lines = '\n'.join(
+            f"  {r['ACCOUNT_INDUSTRY']}: {int(r['UC_CNT'])} UCs, "
+            f"${round(r['TOTAL_EACV']/1_000_000,1)}M EACV, avg ${int(r['AVG_EACV']):,}/deal"
+            for _, r in _ind_df.iterrows()
+        )
+        _narrative_ctx['Pipeline by Industry'] = (
+            f"  Q3 Managed Partner Pipeline — By Industry (top 8 by EACV):\n{_ind_lines}\n"
+        )
+    except Exception:
+        _narrative_ctx['Pipeline by Industry'] = "  Industry breakdown not available.\n"
+
+    # Narrative 3 — Implementation Bottleneck: stage stall analysis
+    _stage_map = {
+        '3 - Technical / Business Validation': 'Stage 3',
+        '4 - Use Case Won / Migration Plan': 'Stage 4',
+        '5 - Implementation In Progress': 'Stage 5',
+        '6 - Implementation Complete': 'Stage 6',
+        '7 - Deployed': 'Stage 7',
+    }
+    _stall_lines = []
+    for _raw, _label in _stage_map.items():
+        _s = _bc[_bc['USE_CASE_STAGE'] == _raw]
+        if len(_s) == 0:
+            continue
+        _tot  = len(_s)
+        _s90  = int((_s['DAYS_IN_STAGE'].fillna(0) > 90).sum())
+        _s180 = int((_s['DAYS_IN_STAGE'].fillna(0) > 180).sum())
+        _avg  = round(_s['DAYS_IN_STAGE'].mean())
+        _eacv = round(_s['USE_CASE_EACV'].sum() / 1_000_000, 1)
+        _stall_lines.append(
+            f"  {_label}: {_tot} UCs, avg {_avg}d in stage, "
+            f"stalled >90d: {_s90}, >180d: {_s180}, EACV: ${_eacv}M"
+        )
+    _narrative_ctx['Implementation Bottleneck'] = (
+        f"  Q3 Managed Partners — Stage Velocity & Stall Analysis:\n"
+        + '\n'.join(_stall_lines) + '\n'
+    )
+
+    # Narrative 4 — Competitive Exposure: Stage 3+4 with competitors
+    _pre_win = _bc[_bc['USE_CASE_STAGE'].isin([
+        '3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan'
+    ])].copy()
+    _has_comp = _pre_win['COMPETITORS'].fillna('').str.strip() != ''
+    _comp_total   = len(_pre_win)
+    _comp_exposed = int(_has_comp.sum())
+    _comp_eacv    = round(_pre_win.loc[_has_comp, 'USE_CASE_EACV'].sum() / 1_000_000, 1)
+    _comp_pct     = round(_comp_exposed * 100 / _comp_total, 1) if _comp_total else 0
+    _comp_exp = _pre_win[_has_comp].assign(
+        C=_pre_win.loc[_has_comp, 'COMPETITORS'].str.split(';')
+    ).explode('C')
+    _comp_exp['C'] = _comp_exp['C'].str.strip()
+    _top_comp = _comp_exp[_comp_exp['C'] != ''].groupby('C').size().nlargest(5).reset_index(name='cnt')
+    _comp_lines = '; '.join(f"{r['C']} ({r['cnt']})" for _, r in _top_comp.iterrows())
+    _avg_days_s3 = round(_bc[_bc['USE_CASE_STAGE'] == '3 - Technical / Business Validation']['DAYS_IN_STAGE'].mean())
+    _narrative_ctx['Competitive Exposure'] = (
+        f"  Q3 Managed Partners — Competitive Exposure in Pre-Win Pipeline:\n"
+        f"  Stage 3+4 total UCs: {_comp_total} | With active competitor: {_comp_exposed} ({_comp_pct}%)\n"
+        f"  EACV at risk (Stage 3+4 with competitor): ${_comp_eacv}M\n"
+        f"  Avg days in Stage 3: {_avg_days_s3}\n"
+        f"  Top competitors by UC count: {_comp_lines}\n"
+    )
+
 st.markdown("---")
 st.subheader("Generate Email Summary")
+
+narrative_group = st.segmented_control(
+    "Insight Narrative",
+    ["Default", "Pipeline by Industry", "Implementation Bottleneck", "Competitive Exposure"],
+    default="Default",
+    key="email_narrative_group",
+    help="Selects the thematic insight narrative shown after the OKR Regional Breakdown table.",
+)
+
+_NARRATIVE_INSTRUCTIONS = {
+    "Default": (
+        "After table: 4 sentences on whether we are trending in the right direction. "
+        "Sentence 1: state the weeks remaining in the quarter and whether the 3-week average count of CoCo use cases is increasing, declining or flat, giving the percentage change and the direction. Describe momentum only — do NOT quote the two 3-week average numbers themselves, because they come from a different basis than this table and would not reconcile with it. "
+        "Sentence 2: state the convertible pipeline still open (the non-CoCo UC counts per group) and which group has the most room to convert. "
+        "Sentence 3: from WHERE ADOPTION IS CONCENTRATED, name which use case type or types show the highest CoCo adoption by NUMBER of use cases and which theatre is strongest versus weakest — quote the counts, not just percentages. "
+        "Sentence 4: from GSI GEO SPLIT you MUST name four things for GSI partners — the leading region, the lagging region, the leading theatre and the lagging theatre — each with its CoCo count. Do not report theatres only; the regions are in the data and must be named too. "
+        "Write in normal sentence case — do not copy capitalisation from these instructions or from the data labels. Do NOT mention calendar months or quarter start/end dates. Do NOT compute your own averages or percentages, and if a split says 'not available' then say nothing about it rather than estimating."
+    ),
+    "Pipeline by Industry": (
+        "After table: 4 sentences on the industry distribution of the managed partner pipeline this quarter. "
+        "Use the 'Pipeline by Industry' data block from context. "
+        "Sentence 1: name the top 2 industries by total EACV and their combined share of the managed pipeline. "
+        "Sentence 2: name the industry with the highest average EACV per deal — this signals where the largest individual opportunities sit. "
+        "Sentence 3: name the industry with the most use cases by count and note whether its CoCo adoption rate is above or below the overall managed average. "
+        "Sentence 4: give an executive read on which industry vertical represents the best untapped CoCo conversion opportunity based on UC count and EACV. "
+        "Write in normal sentence case. Do NOT mention calendar months or quarter dates. Do NOT fabricate numbers not in the data."
+    ),
+    "Implementation Bottleneck": (
+        "After table: 4 sentences on implementation velocity and pipeline stalls across managed partners this quarter. "
+        "Use the 'Implementation Bottleneck' data block from context. "
+        "Sentence 1: state the total Stage 5 (Implementation In Progress) UC count and EACV, and how many have been stalled beyond 90 days. "
+        "Sentence 2: compare average days in Stage 5 vs Stage 6 — identify where the real bottleneck sits in the Stage 5→6→7 progression. "
+        "Sentence 3: state how many Stage 5 UCs are beyond 180 days and the EACV those represent — frame this as the at-risk deployment pool. "
+        "Sentence 4: give an executive read on what needs to happen to unblock the pipeline and accelerate Stage 5→7 conversion before the quarter closes. "
+        "Write in normal sentence case. Do NOT mention calendar months or quarter dates. Do NOT fabricate numbers not in the data."
+    ),
+    "Competitive Exposure": (
+        "After table: 4 sentences on competitive risk in the managed partner pre-win pipeline this quarter. "
+        "Use the 'Competitive Exposure' data block from context. "
+        "Sentence 1: state how many Stage 3+4 use cases have an active named competitor and what share of the pre-win pipeline that represents — quote the EACV at risk. "
+        "Sentence 2: name the top 2 competitors by UC count. "
+        "Sentence 3: state the average days managed partner use cases spend in Stage 3 — frame this as the window competitors have to displace Snowflake. "
+        "Sentence 4: give an executive read on which partner group (GSI/NOAM RSI/APJ/EMEA) has the most competitive exposure based on the scorecard data, and what action reduces that risk. "
+        "Write in normal sentence case. Do NOT mention calendar months or quarter dates. Do NOT fabricate numbers not in the data."
+    ),
+}
 
 current_user = "rithesh.makkena"
 try:
@@ -1729,7 +1859,7 @@ SCOPE: 4 partner groups — GSIs report GLOBAL numbers; NOAM RSIs report NoAM on
 
 Follow this EXACT structure with 9 sections:
 
-## **Note: Mixed scope — GSIs global (all regions) | NOAM RSIs: NoAM only | APJ RSIs: APJ geo | EMEA RSIs: EMEA geo.**
+## **Note: Q3 OKR — 6 GSIs global (all regions) | 32 NOAM RSIs: NoAM only | 5 APJ RSIs: APJ geo | 4 EMEA RSIs: EMEA geo.**
 
 ## EXECUTIVE SUMMARY
 2-3 sentences maximum, then exactly 6 bullets.
@@ -1744,11 +1874,11 @@ Follow this EXACT structure with 9 sections:
 - Bullet 7: "**[Detailed Partner CoCo usecase dashboard](https://app.snowflake.com/sfcogsops/snowhouse_aws_us_west_2/#/streamlit-apps/TEMP.COCO_PARTNER_ADOPTION.COCO_USECASE_INSIGHTS)**"
 
 ## NOTABLE WINS (managed partners only)
-4 bullets — exactly one per region group. Use data from "NOTABLE WINS BY REGION" in context.
+1–4 bullets — one per region group that has a qualifying win. Use data from "NOTABLE WINS BY REGION" in context.
 - Format each as: "**[Group] Partner** deployed/won CoCo at Account — Stage 7 Deployed, Stage 6 Implementation Complete, OR Stage 4 Won, $EACVK EACV[, displacing Competitor if present]"
 - ONLY include Stage 7 (Deployed), Stage 6 (Implementation Complete), or Stage 4 (Use Case Won / Migration Plan) use cases. Do NOT mention any other stage.
-- Groups in order: GSI, NOAM RSI, APJ RSI, EMEA RSI
-- If a group has no deployed or won IS_COCO_FINAL UC, write "**[Group]** No notable win this period"
+- Groups in order (if present): GSI, NOAM RSI, APJ RSI, EMEA RSI
+- If a group has no deployed or won IS_COCO_FINAL UC, **omit that group entirely** — do not write a "No notable win" placeholder
 - Do NOT use RECENT ACTIVITY data or COMMENT HIGHLIGHTS for this section
 
 ## OKR PROGRESS — REGIONAL BREAKDOWN
@@ -1757,7 +1887,8 @@ Follow this EXACT structure with 9 sections:
 - Use "OKR PROGRESS — REGIONAL BREAKDOWN" data from context (each row has group name, total partners in scope, total UCs, CoCo UCs, CoCo %, partners meeting goal)
 - Total Partners = total partners in scope for that group (irrelevant of CoCo adoption)
 - Goal% is 75% for GSI and NOAM RSI, 50% for APJ RSI and EMEA RSI — reflect the correct target per row
-- After table: 4 sentences on whether we are trending in the right direction. Sentence 1: state the weeks remaining in the quarter and whether the 3-week average count of CoCo use cases is increasing, declining or flat, giving the percentage change and the direction. Describe momentum only — do NOT quote the two 3-week average numbers themselves, because they come from a different basis than this table and would not reconcile with it. Sentence 2: state the convertible pipeline still open (the non-CoCo UC counts per group) and which group has the most room to convert. Sentence 3: from WHERE ADOPTION IS CONCENTRATED, name which use case type or types show the highest CoCo adoption by NUMBER of use cases and which theatre is strongest versus weakest — quote the counts, not just percentages. Sentence 4: from GSI GEO SPLIT you MUST name four things for GSI partners — the leading region, the lagging region, the leading theatre and the lagging theatre — each with its CoCo count. Do not report theatres only; the regions are in the data and must be named too. Write in normal sentence case — do not copy capitalisation from these instructions or from the data labels. Do NOT mention calendar months or quarter start/end dates. Do NOT compute your own averages or percentages, and if a split says "not available" then say nothing about it rather than estimating.
+- After table: {_NARRATIVE_INSTRUCTIONS.get(narrative_group, _NARRATIVE_INSTRUCTIONS["Default"])}
+- Use the matching insight data block from context (labelled with the narrative name) to ground all figures in this narrative.
 
 ## MANAGED PARTNER PIPELINE OVERVIEW
 | Stage | Total UCs | CoCo UCs | CoCo % | Total EACV | CoCo EACV |
@@ -1816,6 +1947,9 @@ if st.button("Generate Email Summary", type="primary", key="email_generate"):
 
 DATA:
 {data_context}
+
+INSIGHT NARRATIVE DATA — {narrative_group}:
+{_narrative_ctx.get(narrative_group, '  Data not available.')}
 
 Write the executive briefing:"""
 

@@ -231,6 +231,9 @@ def check_grounding(conn, text):
     if wins:
         for acct in re.findall(r"(?:at|@)\s+([A-Z][^—\-\n,]{2,60}?)\s*[—\-]", wins.group(1)):
             a = acct.strip()
+            # Skip if the name resolves to a known partner (false positive — LLM used partner as account)
+            if a.upper() in known:
+                continue
             out.append(("GROUNDING", f"account exists in Snowflake: {a}",
                         a.upper() in accounts, "not found in PARTNER_COCO_USE_CASES"))
     return out
@@ -360,8 +363,8 @@ def check_cross_table(text):
 
 
 def check_notable_wins(text):
-    """Notable Wins section: exactly 4 bullets, one per group, correct format,
-    and ONLY Stage 7 Deployed or Stage 4 Won use cases mentioned."""
+    """Notable Wins section: 1-4 bullets (groups without a win are omitted),
+    correct format, and ONLY Stage 7/6/4 use cases mentioned."""
     out = []
     m = re.search(r"##\s*NOTABLE WINS(.*?)(?=\n##\s|$)", text, re.DOTALL | re.IGNORECASE)
     if not m:
@@ -371,20 +374,23 @@ def check_notable_wins(text):
     section = m.group(1)
     bullets  = [l.strip() for l in section.splitlines() if l.strip().startswith("-")]
 
-    out.append(("NOTABLE_WINS", "exactly 4 win bullets (one per group)",
-                len(bullets) == 4, f"found {len(bullets)} bullets"))
+    out.append(("NOTABLE_WINS", "at least 1 win bullet present",
+                len(bullets) >= 1, f"found {len(bullets)} bullets"))
 
-    for group in NOTABLE_WINS_GROUPS:
-        hit = any(group.lower() in b.lower() for b in bullets)
-        out.append(("NOTABLE_WINS", f"bullet present for {group}", hit, "group missing from bullets"))
+    # No "No notable win" placeholders allowed — groups should be omitted instead
+    for b in bullets:
+        has_placeholder = bool(re.search(r"no\s+notable\s+win", b, re.IGNORECASE))
+        out.append(("NOTABLE_WINS", f"no placeholder bullet: {b[:60]}",
+                    not has_placeholder,
+                    "group with no win should be omitted, not shown as 'No notable win'"))
 
-    # Format check: each bullet should have a partner name in bold + "CoCo at" or "No notable win"
+    # Format check: each bullet should have a partner name in bold + "CoCo at"
     for b in bullets:
         has_bold   = bool(re.search(r"\*\*.+\*\*", b))
-        has_anchor = bool(re.search(r"coco\s+at|no\s+notable\s+win", b, re.IGNORECASE))
+        has_anchor = bool(re.search(r"coco\s+at", b, re.IGNORECASE))
         out.append(("NOTABLE_WINS", f"bullet format valid: {b[:60]}",
                     has_bold and has_anchor,
-                    "expected '**Partner**... CoCo at Account' or 'No notable win'"))
+                    "expected '**Partner**... CoCo at Account'"))
 
     # Stage check: only Stage 7 Deployed or Stage 4 Won may appear — no other stages
     _FORBIDDEN_STAGES = re.compile(
