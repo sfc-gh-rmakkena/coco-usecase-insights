@@ -228,6 +228,9 @@ page = st.navigation({
         st.Page("app_pages/partner_consultants.py", title="Partner Consultants", icon=":material/groups:"),
     ],
     "OKR & Reports": _okr_pages,
+    "AIM & FDE": [
+        st.Page("app_pages/aim_adoption.py", title="AIM Adoption", icon=":material/rocket_launch:"),
+    ],
 })
 
 page.run()

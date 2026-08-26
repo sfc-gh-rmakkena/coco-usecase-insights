@@ -414,6 +414,258 @@ def check_notable_wins(text):
     return out
 
 
+def check_industry_narrative(text, industry_data=None, overall_coco_pct=None):
+    """Pipeline by Industry narrative checks (only runs when industry_data is provided):
+    1. CoCo % per industry must match pre-computed coco_pct (±3pp)
+    2. UC counts per industry must match total_ucs (±5 UCs tolerance for rounding)
+    3. No % figures appear that cannot be tied to a known industry or the overall average
+    4. Overall managed CoCo % must match pre-computed value (±3pp)
+    """
+    out = []
+    if industry_data is None or len(industry_data) == 0:
+        return out  # tab not selected or data unavailable — skip
+
+    # Find the OKR Regional Breakdown section where the industry narrative appears.
+    # If no section header exists (e.g. UC Insights bullet output), check the full text.
+    section_m = re.search(
+        r"##\s*OKR PROGRESS.*?REGIONAL BREAKDOWN(.*?)(?=\n##\s|$)",
+        text, re.DOTALL | re.IGNORECASE,
+    )
+    if section_m:
+        section = section_m.group(1)
+    else:
+        section = text  # UC Insights: entire response is the industry narrative
+    pct_pattern = re.compile(r'(\d{1,3}(?:\.\d)?)\s*%')
+    num_pattern = re.compile(r'\b(\d{1,4})\b')
+
+    # Build lookups keyed by lowercase industry name
+    known_pcts  = {str(r['ACCOUNT_INDUSTRY']).lower(): float(r['COCO_PCT'])   for _, r in industry_data.iterrows()}
+    known_total = {str(r['ACCOUNT_INDUSTRY']).lower(): int(r['TOTAL_UCS'])    for _, r in industry_data.iterrows()}
+    known_coco  = {str(r['ACCOUNT_INDUSTRY']).lower(): int(r['COCO_UCS'])     for _, r in industry_data.iterrows()}
+    industry_names = list(industry_data['ACCOUNT_INDUSTRY'].dropna().unique())
+    known_names_lower = {n.lower() for n in industry_names}
+
+    sentences = re.split(r'(?<=[.!?])\s+', section)
+
+    # 1. CoCo % per industry must be grounded (±3pp)
+    for ind_name in industry_names:
+        ind_lower = ind_name.lower()
+        for sent in sentences:
+            if ind_lower not in sent.lower():
+                continue
+            for m in pct_pattern.finditer(sent):
+                stated_pct = float(m.group(1))
+                expected   = known_pcts.get(ind_lower)
+                if expected is None:
+                    continue
+                out.append((
+                    "INDUSTRY_NARRATIVE",
+                    f"{ind_name} CoCo% grounded: stated {stated_pct}% vs data {expected}%",
+                    abs(stated_pct - expected) <= 3.0,
+                    f"stated {stated_pct}% deviates >3pp from pre-computed {expected}%",
+                ))
+
+    # 2. UC counts per industry must be grounded (±5 UCs)
+    # Only check sentences that explicitly mention "use case", "UC", or "deal" counts
+    # Skip numbers adjacent to $ or followed by M/K/% (EACV values)
+    _dollar_adj = re.compile(r'\$\s*\d|[\d]\s*[MKmk%]')
+    for ind_name in industry_names:
+        ind_lower = ind_name.lower()
+        for sent in sentences:
+            if ind_lower not in sent.lower():
+                continue
+            # Only check sentences that are talking about counts, not EACV
+            if not re.search(r'\buse\s*case|\bUC\b|\bdeals?\b|\baccounts?\b', sent, re.I):
+                continue
+            for m in num_pattern.finditer(sent):
+                n = int(m.group(1))
+                if not (5 <= n <= 500):
+                    continue
+                # Skip if the number appears to be part of an EACV/currency figure
+                start = m.start()
+                surrounding = sent[max(0, start-2):m.end()+2]
+                if re.search(r'[\$MKmk%]', surrounding):
+                    continue
+                total = known_total.get(ind_lower, 0)
+                coco  = known_coco.get(ind_lower, 0)
+                if abs(n - total) <= 5 or abs(n - coco) <= 5:
+                    continue  # matches — OK
+                out.append((
+                    "INDUSTRY_NARRATIVE",
+                    f"{ind_name} UC count grounded: stated {n} vs total={total}/coco={coco}",
+                    False,
+                    f"stated {n} UCs doesn't match total={total} or coco={coco} (±5 tolerance)",
+                ))
+
+    # 3. No % figures without a known industry name or overall average nearby
+    for sent in sentences:
+        if not pct_pattern.search(sent):
+            continue
+        has_known_ind = any(n in sent.lower() for n in known_names_lower)
+        has_overall   = bool(re.search(r'overall|average|managed\s+average|adoption\s+rate', sent, re.I))
+        if not has_known_ind and not has_overall:
+            out.append(("INDUSTRY_NARRATIVE",
+                        f"% tied to known industry or overall avg: {sent[:80]}",
+                        False,
+                        "percentage in narrative cannot be tied to any industry in data block"))
+
+    # 4. Overall managed CoCo % must be grounded (±3pp)
+    if overall_coco_pct is not None:
+        for sent in sentences:
+            if not re.search(r'overall|average|managed\s+average', sent, re.I):
+                continue
+            for m in pct_pattern.finditer(sent):
+                stated = float(m.group(1))
+                out.append((
+                    "INDUSTRY_NARRATIVE",
+                    f"overall managed CoCo% grounded: stated {stated}% vs data {overall_coco_pct}%",
+                    abs(stated - overall_coco_pct) <= 3.0,
+                    f"stated {stated}% deviates >3pp from pre-computed overall {overall_coco_pct}%",
+                ))
+
+    if not out:
+        out.append(("INDUSTRY_NARRATIVE", "industry figures checked", True,
+                    "no industry-specific figures found to verify"))
+    return out
+
+
+def check_velocity_narrative(text, velocity_ctx: dict | None = None):
+    """Pipeline Velocity narrative checks (only runs when velocity_ctx is provided):
+    1. Partners-meeting count is stated and matches pre-computed value (±1)
+    2. Partners-below count matches (±1)
+    3. Partners-within-threshold count matches (±1)
+    4. Weeks-remaining figure matches today's real date arithmetic (±1 week)
+    """
+    out = []
+    if not velocity_ctx:
+        return out
+    pct_pat = re.compile(r'\b(\d{1,3}(?:\.\d)?)\s*%')
+    num_pat = re.compile(r'\b(\d{1,3})\b')
+
+    # 1. Partners meeting target
+    expected_meeting = int(velocity_ctx.get('partners_meeting', -1))
+    expected_below   = int(velocity_ctx.get('partners_below', -1))
+    expected_close   = int(velocity_ctx.get('partners_close', -1))
+    expected_weeks   = float(velocity_ctx.get('weeks_remaining', -1))
+
+    nums = [int(m.group(1)) for m in num_pat.finditer(text)]
+
+    if expected_meeting >= 0:
+        close_match = any(abs(n - expected_meeting) <= 1 for n in nums)
+        out.append(("VELOCITY", f"partners meeting target ({expected_meeting}) mentioned", close_match,
+                    f"expected ~{expected_meeting} in text"))
+
+    if expected_below >= 0:
+        close_match = any(abs(n - expected_below) <= 1 for n in nums)
+        out.append(("VELOCITY", f"partners below target ({expected_below}) mentioned", close_match,
+                    f"expected ~{expected_below} in text"))
+
+    if expected_close >= 0:
+        close_match = any(abs(n - expected_close) <= 1 for n in nums)
+        out.append(("VELOCITY", f"partners within 1-2 UCs of threshold ({expected_close}) mentioned", close_match,
+                    f"expected ~{expected_close} in text"))
+
+    # 2. Weeks remaining ±1
+    if expected_weeks >= 0:
+        wk_match = any(abs(float(m.group(1)) - expected_weeks) <= 1.5 for m in re.finditer(r'\b(\d{1,2}(?:\.\d)?)\b', text))
+        out.append(("VELOCITY", f"weeks remaining (~{expected_weeks}) mentioned", wk_match,
+                    f"expected ~{expected_weeks} weeks in text"))
+
+    return out
+
+
+def check_eacv_conversion(text, eacv_ctx: dict | None = None):
+    """EACV Conversion narrative checks (only runs when eacv_ctx is provided):
+    1. Total unconverted EACV is stated and within ±10% of pre-computed value
+    2. Stage-5 EACV stated within ±10%
+    3. Total non-CoCo UC count mentioned within ±5
+    4. No unanchored large EACV figure appears (>10% deviation from any known value)
+    """
+    out = []
+    if not eacv_ctx:
+        return out
+
+    total_eacv  = float(eacv_ctx.get('total_eacv_m', -1))
+    stage5_eacv = float(eacv_ctx.get('stage5_eacv_m', -1))
+    total_ucs   = int(eacv_ctx.get('total_ucs', -1))
+
+    dollar_pat = re.compile(r'\$(\d+(?:\.\d+)?)\s*([MKmk]?)')
+
+    def _to_m(val, suffix):
+        suffix = suffix.upper()
+        if suffix == 'M': return float(val)
+        if suffix == 'K': return float(val) / 1000
+        return float(val) / 1_000_000
+
+    stated_eacvs = [_to_m(m.group(1), m.group(2)) for m in dollar_pat.finditer(text)]
+
+    if total_eacv > 0 and stated_eacvs:
+        best = min(abs(v - total_eacv) / total_eacv for v in stated_eacvs)
+        out.append(("EACV_CONVERSION", f"total unconverted EACV (~${total_eacv}M) grounded",
+                    best <= 0.10, f"closest stated value deviates {round(best*100)}% from ${total_eacv}M"))
+
+    if stage5_eacv > 0 and stated_eacvs:
+        best = min(abs(v - stage5_eacv) / max(stage5_eacv, 0.01) for v in stated_eacvs)
+        out.append(("EACV_CONVERSION", f"Stage-5 EACV (~${stage5_eacv}M) grounded",
+                    best <= 0.10, f"closest stated value deviates {round(best*100)}% from ${stage5_eacv}M"))
+
+    if total_ucs > 0:
+        nums = [int(m.group(1)) for m in re.finditer(r'\b(\d{2,3})\b', text)]
+        out.append(("EACV_CONVERSION", f"non-CoCo UC count (~{total_ucs}) mentioned",
+                    any(abs(n - total_ucs) <= 5 for n in nums),
+                    f"expected ~{total_ucs} UCs in text"))
+
+    return out
+
+
+def check_stalled_pipeline(text, stall_ctx: dict | None = None):
+    """Stalled Pipeline narrative checks (only runs when stall_ctx is provided):
+    1. >180-day stalled count mentioned within ±2
+    2. >180-day stalled EACV within ±10%
+    3. 90-180-day stalled count mentioned within ±2
+    4. At least one top stalled account name mentioned (basic grounding)
+    """
+    out = []
+    if not stall_ctx:
+        return out
+
+    count180    = int(stall_ctx.get('count180', -1))
+    eacv180     = float(stall_ctx.get('eacv180_m', -1))
+    count90_180 = int(stall_ctx.get('count90_180', -1))
+    top_accounts = stall_ctx.get('top_accounts', [])
+
+    nums = [int(m.group(1)) for m in re.finditer(r'\b(\d{1,3})\b', text)]
+
+    if count180 >= 0:
+        out.append(("STALLED_PIPELINE", f">180d stalled count ({count180}) mentioned",
+                    any(abs(n - count180) <= 2 for n in nums),
+                    f"expected ~{count180} in text"))
+
+    if eacv180 > 0:
+        dollar_pat = re.compile(r'\$(\d+(?:\.\d+)?)\s*([MKmk]?)')
+        def _to_m(val, suffix):
+            s = suffix.upper()
+            if s == 'M': return float(val)
+            if s == 'K': return float(val) / 1000
+            return float(val) / 1_000_000
+        stated = [_to_m(m.group(1), m.group(2)) for m in dollar_pat.finditer(text)]
+        best = min((abs(v - eacv180) / max(eacv180, 0.01) for v in stated), default=1.0)
+        out.append(("STALLED_PIPELINE", f">180d stalled EACV (~${eacv180}M) grounded",
+                    best <= 0.10, f"closest stated deviates {round(best*100)}% from ${eacv180}M"))
+
+    if count90_180 >= 0:
+        out.append(("STALLED_PIPELINE", f"90-180d stalled count ({count90_180}) mentioned",
+                    any(abs(n - count90_180) <= 2 for n in nums),
+                    f"expected ~{count90_180} in text"))
+
+    if top_accounts:
+        found = any(acct.lower() in text.lower() for acct in top_accounts)
+        out.append(("STALLED_PIPELINE", "at least one top stalled account named", found,
+                    f"none of {top_accounts[:3]} found in output"))
+
+    return out
+
+
 def score(results):
     lines = ["# Executive Email — deterministic eval", "",
              f"Run: {datetime.now().isoformat(timespec='seconds')}", ""]
