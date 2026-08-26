@@ -1714,31 +1714,59 @@ if len(managed_bulk_conf) > 0:
     if 'COMPETITORS' not in _bc.columns: _bc['COMPETITORS'] = ''
     if 'DAYS_IN_STAGE' not in _bc.columns: _bc['DAYS_IN_STAGE'] = 0
 
-    # Narrative — Pipeline by Industry: join DIM_USE_CASE for ACCOUNT_INDUSTRY
+    # Narrative — Pipeline by Industry: join DIM_USE_CASE, compute CoCo rate per industry in Python
+    _industry_data = pd.DataFrame()  # exposed for eval
     try:
-        _uc_ids = "','".join(_bc['USE_CASE_ID'].dropna().unique()[:2000])
-        _ind_df = conn.query(f"""
-            SELECT ACCOUNT_INDUSTRY, COUNT(*) AS UC_CNT,
-                   SUM(USE_CASE_EACV) AS TOTAL_EACV,
-                   ROUND(AVG(USE_CASE_EACV)) AS AVG_EACV
+        # Use ALL managed UC IDs for total counts; IS_COCO_FINAL subset for CoCo counts
+        _all_ids  = list(_bc['USE_CASE_ID'].dropna().unique()[:2000])
+        _coco_ids = set(_bc.loc[_bc['IS_COCO_FINAL'], 'USE_CASE_ID'].dropna().unique())
+        _ids_sql  = "','".join(_all_ids)
+        _raw_ind  = conn.query(f"""
+            SELECT USE_CASE_ID, ACCOUNT_INDUSTRY, USE_CASE_EACV
             FROM MDM.MDM_INTERFACES.DIM_USE_CASE
-            WHERE USE_CASE_ID IN ('{_uc_ids}')
+            WHERE USE_CASE_ID IN ('{_ids_sql}')
               AND ACCOUNT_INDUSTRY IS NOT NULL
-            GROUP BY 1 ORDER BY TOTAL_EACV DESC NULLS LAST
-            LIMIT 8
         """)
-        _ind_lines = '\n'.join(
-            f"  {r['ACCOUNT_INDUSTRY']}: {int(r['UC_CNT'])} UCs, "
-            f"${round(r['TOTAL_EACV']/1_000_000,1)}M EACV, avg ${int(r['AVG_EACV']):,}/deal"
-            for _, r in _ind_df.iterrows()
-        )
-        _narrative_ctx['Pipeline by Industry'] = (
-            f"  Q3 Managed Partner Pipeline — By Industry (top 8 by EACV):\n{_ind_lines}\n"
-        )
+        if len(_raw_ind) > 0:
+            _raw_ind['IS_COCO'] = _raw_ind['USE_CASE_ID'].isin(_coco_ids)
+            _ind_agg = (
+                _raw_ind.groupby('ACCOUNT_INDUSTRY')
+                .agg(
+                    TOTAL_UCS   =('USE_CASE_ID',    'count'),
+                    COCO_UCS    =('IS_COCO',         'sum'),
+                    TOTAL_EACV  =('USE_CASE_EACV',   'sum'),
+                    COCO_EACV   =('USE_CASE_EACV',   lambda x: x[_raw_ind.loc[x.index, 'IS_COCO']].sum()),
+                )
+                .reset_index()
+            )
+            _ind_agg['AVG_EACV']  = (_ind_agg['TOTAL_EACV'] / _ind_agg['TOTAL_UCS']).round().astype(int)
+            _ind_agg['COCO_PCT']  = (_ind_agg['COCO_UCS'] * 100 / _ind_agg['TOTAL_UCS']).round(1)
+            _ind_agg = _ind_agg.sort_values('TOTAL_EACV', ascending=False).head(8)
+            _industry_data = _ind_agg.copy()  # expose for eval
+            _overall_coco_pct = round(_bc['IS_COCO_FINAL'].sum() * 100 / max(len(_bc), 1), 1)
+            _ind_lines = '\n'.join(
+                f"  {r['ACCOUNT_INDUSTRY']}:"
+                f" total_use_cases={int(r['TOTAL_UCS'])},"
+                f" coco_use_cases={int(r['COCO_UCS'])},"
+                f" coco_pct={r['COCO_PCT']}%,"
+                f" total_eacv_dollars=${round(r['TOTAL_EACV']/1_000_000,1)}M,"
+                f" coco_eacv_dollars=${round(r['COCO_EACV']/1_000_000,1)}M,"
+                f" avg_eacv_per_deal=${int(r['AVG_EACV']):,}"
+                for _, r in _ind_agg.iterrows()
+            )
+            _narrative_ctx['Pipeline by Industry'] = (
+                f"  Q3 Managed Partners — Industry Breakdown (top 8 by total EACV):\n"
+                f"  overall_managed_coco_pct={_overall_coco_pct}%  ← THIS IS THE PORTFOLIO AVERAGE, not any industry's coco_pct\n"
+                f"{_ind_lines}\n"
+                f"  RULES: Use only field values above. coco_pct is each industry's own rate. "
+                f"overall_managed_coco_pct is the portfolio average. Do NOT swap them.\n"
+            )
     except Exception:
         _narrative_ctx['Pipeline by Industry'] = "  Industry breakdown not available.\n"
+        _industry_data = pd.DataFrame()
+        _overall_coco_pct = None
 
-    # Narrative 3 — Implementation Bottleneck: stage stall analysis
+    # Narrative 3 — Additional Insights: surface (CLI/Desktop/UI) adoption by stage
     _stage_map = {
         '3 - Technical / Business Validation': 'Stage 3',
         '4 - Use Case Won / Migration Plan': 'Stage 4',
@@ -1746,47 +1774,207 @@ if len(managed_bulk_conf) > 0:
         '6 - Implementation Complete': 'Stage 6',
         '7 - Deployed': 'Stage 7',
     }
-    _stall_lines = []
+    _surface_cols = ['CLI_CREDITS', 'DESKTOP_CREDITS', 'UI_CREDITS',
+                     'CLI_TOKENS', 'DESKTOP_TOKENS', 'UI_TOKENS',
+                     'CLI_REQUESTS', 'DESKTOP_REQUESTS', 'UI_REQUESTS']
+    for _col in _surface_cols:
+        if _col not in _bc.columns:
+            _bc[_col] = 0
+    _surf_lines = []
+    _coco_bc = _bc[_bc['IS_COCO_FINAL']].copy()
     for _raw, _label in _stage_map.items():
-        _s = _bc[_bc['USE_CASE_STAGE'] == _raw]
+        _s = _coco_bc[_coco_bc['USE_CASE_STAGE'] == _raw]
         if len(_s) == 0:
             continue
-        _tot  = len(_s)
-        _s90  = int((_s['DAYS_IN_STAGE'].fillna(0) > 90).sum())
-        _s180 = int((_s['DAYS_IN_STAGE'].fillna(0) > 180).sum())
-        _avg  = round(_s['DAYS_IN_STAGE'].mean())
-        _eacv = round(_s['USE_CASE_EACV'].sum() / 1_000_000, 1)
-        _stall_lines.append(
-            f"  {_label}: {_tot} UCs, avg {_avg}d in stage, "
-            f"stalled >90d: {_s90}, >180d: {_s180}, EACV: ${_eacv}M"
+        _n    = len(_s)
+        _cli  = int(_s['CLI_CREDITS'].sum())
+        _desk = int(_s['DESKTOP_CREDITS'].sum())
+        _ui   = int(_s['UI_CREDITS'].sum())
+        _tot_cr = _cli + _desk + _ui or 1
+        _cli_tok  = int(_s['CLI_TOKENS'].sum())
+        _desk_tok = int(_s['DESKTOP_TOKENS'].sum())
+        _ui_tok   = int(_s['UI_TOKENS'].sum())
+        _tot_tok  = _cli_tok + _desk_tok + _ui_tok or 1
+        _surf_lines.append(
+            f"  {_label}: {_n} CoCo UCs | "
+            f"Credits — CLI={_cli:,} ({round(_cli*100/_tot_cr)}%), "
+            f"Desktop={_desk:,} ({round(_desk*100/_tot_cr)}%), "
+            f"UI={_ui:,} ({round(_ui*100/_tot_cr)}%), total={_tot_cr:,} | "
+            f"Tokens — CLI={_cli_tok:,}, Desktop={_desk_tok:,}, UI={_ui_tok:,}, total={_tot_tok:,}"
         )
-    _narrative_ctx['Implementation Bottleneck'] = (
-        f"  Q3 Managed Partners — Stage Velocity & Stall Analysis:\n"
-        + '\n'.join(_stall_lines) + '\n'
+    _surf_block = (
+        f"  Q3 CoCo UCs — Surface Adoption (CLI / Desktop / UI) by Stage:\n"
+        + '\n'.join(_surf_lines) + '\n'
+        + "  NOTE: Use these pre-computed figures. Do NOT fabricate numbers not shown above.\n"
+    )
+    _narrative_ctx['UC Insights'] = _surf_block
+
+    # ── Narrative: Pipeline Velocity & Target Attainment Pace ────────────────
+    from datetime import date as _date
+    _today       = _date.today()
+    _q3_end_date = _date(2026, 10, 31)
+    _weeks_left  = max(0, round((_q3_end_date - _today).days / 7, 1))
+
+    _grp_targets = {'GSI': 75, 'NOAM RSI': 75, 'APJ RSI': 50, 'EMEA RSI': 50}
+    _vel_lines   = []
+    # Canonical UNIQUE partner counts (aliases deduplicated): GSI=6, NOAM RSI=29, APJ RSI=5, EMEA RSI=4 → total 44
+    _CANONICAL_TOTAL = 44
+    _grp_sizes = {'GSI': 6, 'NOAM RSI': 29, 'APJ RSI': 5, 'EMEA RSI': 4}
+    _total_close = 0
+    _close_names = []
+    for _grp, _tgt in _grp_targets.items():
+        _gdf    = _full_partner_summary[_full_partner_summary['_GROUP'] == _grp]
+        _meeting = int(_gdf['MEETS_GOAL'].sum())
+        _total_g = _grp_sizes.get(_grp, len(_gdf))   # use canonical count, not UC-filtered count
+        _below_g = _gdf[~_gdf['MEETS_GOAL']].copy()
+        # Partners with 0 UCs are also below target
+        _zero_uc_count = _total_g - len(_gdf)
+        _total_below_g = len(_below_g) + _zero_uc_count
+        # UCs needed to cross threshold per partner (only for those with UCs)
+        _below_g['_needed'] = (
+            (_tgt / 100.0 * _below_g['TOTAL_UCS']).apply(lambda x: int(x) + 1)
+            - _below_g['COCO_UCS']
+        ).clip(lower=1)
+        _close_g = _below_g[_below_g['_needed'] <= 2]
+        _total_close += len(_close_g)
+        _close_names += list(_close_g['PARTNER_NAME'])
+        _vel_lines.append(
+            f"  {_grp}: {_meeting}/{_total_g} partners at target ({_tgt}%) "
+            f"[DENOMINATOR IS FIXED AT {_total_g} — do NOT change this] | "
+            f"below target: {_total_below_g} | within 1-2 UCs of threshold: {len(_close_g)}"
+        )
+
+    # 3-week WoW from trend_data  [(label, count, total), ...]
+    _trend_str = 'N/A'
+    if trend_data and len(trend_data) >= 2:
+        _last3 = trend_data[-3:] if len(trend_data) >= 3 else trend_data
+        _counts = [t[1] for t in _last3]
+        _avg3   = round(sum(_counts) / len(_counts), 1)
+        _wow_d  = trend_data[-1][1] - trend_data[-2][1]
+        _wow_dir = 'up' if _wow_d > 0 else ('down' if _wow_d < 0 else 'flat')
+        _trend_str = (
+            f"3-week avg partners at target: {_avg3} | "
+            f"WoW change (latest week): {'+' if _wow_d >= 0 else ''}{_wow_d} ({_wow_dir})"
+        )
+
+    _narrative_ctx['Pipeline Velocity'] = (
+        f"  Q3 FY27 Target Attainment — Pipeline Velocity:\n"
+        f"  Weeks remaining in Q3: {_weeks_left}\n"
+        f"  Total managed partners in scope (unique, aliases deduplicated): {_CANONICAL_TOTAL}\n"
+        f"  Partners meeting target: {partners_meeting_75}/{_CANONICAL_TOTAL}\n"
+        f"  Partners below target: {_CANONICAL_TOTAL - partners_meeting_75}\n"
+        f"  Partners within 1-2 UCs of threshold: {_total_close} ({', '.join(_close_names[:5])}{'...' if len(_close_names) > 5 else ''})\n"
+        + '\n'.join(_vel_lines) + '\n'
+        + f"  Trend: {_trend_str}\n"
+        + f"  NOTE: Total is {_CANONICAL_TOTAL} unique partners (GSI=6, NOAM RSI=29, APJ RSI=5, EMEA RSI=4). Use only these pre-computed figures. Do NOT fabricate partner names, counts, or percentages.\n"
     )
 
-    # Narrative 4 — Competitive Exposure: Stage 3+4 with competitors
-    _pre_win = _bc[_bc['USE_CASE_STAGE'].isin([
-        '3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan'
-    ])].copy()
-    _has_comp = _pre_win['COMPETITORS'].fillna('').str.strip() != ''
-    _comp_total   = len(_pre_win)
-    _comp_exposed = int(_has_comp.sum())
-    _comp_eacv    = round(_pre_win.loc[_has_comp, 'USE_CASE_EACV'].sum() / 1_000_000, 1)
-    _comp_pct     = round(_comp_exposed * 100 / _comp_total, 1) if _comp_total else 0
-    _comp_exp = _pre_win[_has_comp].assign(
-        C=_pre_win.loc[_has_comp, 'COMPETITORS'].str.split(';')
-    ).explode('C')
-    _comp_exp['C'] = _comp_exp['C'].str.strip()
-    _top_comp = _comp_exp[_comp_exp['C'] != ''].groupby('C').size().nlargest(5).reset_index(name='cnt')
-    _comp_lines = '; '.join(f"{r['C']} ({r['cnt']})" for _, r in _top_comp.iterrows())
-    _avg_days_s3 = round(_bc[_bc['USE_CASE_STAGE'] == '3 - Technical / Business Validation']['DAYS_IN_STAGE'].mean())
-    _narrative_ctx['Competitive Exposure'] = (
-        f"  Q3 Managed Partners — Competitive Exposure in Pre-Win Pipeline:\n"
-        f"  Stage 3+4 total UCs: {_comp_total} | With active competitor: {_comp_exposed} ({_comp_pct}%)\n"
-        f"  EACV at risk (Stage 3+4 with competitor): ${_comp_eacv}M\n"
-        f"  Avg days in Stage 3: {_avg_days_s3}\n"
-        f"  Top competitors by UC count: {_comp_lines}\n"
+    # ── Narrative: EACV Conversion Opportunity ──────────────────────────────
+    _convert_stages = ['4 - Use Case Won / Migration Plan', '5 - Implementation In Progress']
+    _conv_df = managed_bulk_conf[
+        (~managed_bulk_conf['IS_COCO_FINAL']) &
+        (managed_bulk_conf['USE_CASE_STAGE'].isin(_convert_stages))
+    ].copy()
+    _conv_df['USE_CASE_EACV'] = pd.to_numeric(_conv_df['USE_CASE_EACV'], errors='coerce').fillna(0)
+    _conv_total_eacv = round(_conv_df['USE_CASE_EACV'].sum() / 1_000_000, 1)
+    _conv_total_ucs  = len(_conv_df)
+    _conv_grp_lines  = []
+    for _grp in ['GSI', 'NOAM RSI', 'APJ RSI', 'EMEA RSI']:
+        _cg = _conv_df[_conv_df['_GROUP'] == _grp]
+        _conv_grp_lines.append(
+            f"  {_grp}: {len(_cg)} non-CoCo UCs in Stage 4-5 | "
+            f"EACV: ${round(_cg['USE_CASE_EACV'].sum()/1_000_000,1)}M"
+        )
+    # Top 5 accounts by unconverted EACV
+    _top_conv_accts = (
+        _conv_df.groupby('ACCOUNT_NAME')['USE_CASE_EACV'].sum()
+        .nlargest(5).reset_index()
+    )
+    _top_conv_str = '; '.join(
+        f"{r['ACCOUNT_NAME']} (${round(r['USE_CASE_EACV']/1000)}K)"
+        for _, r in _top_conv_accts.iterrows()
+    )
+    # Stage 5 only (deeper in implementation, more likely already using Cortex)
+    _stage5_nc = _conv_df[_conv_df['USE_CASE_STAGE'] == '5 - Implementation In Progress']
+    _stage5_eacv = round(_stage5_nc['USE_CASE_EACV'].sum() / 1_000_000, 1)
+
+    _narrative_ctx['EACV Conversion'] = (
+        f"  Q3 FY27 — Unconverted CoCo EACV (Managed Partners Stage 4-5):\n"
+        f"  Total non-CoCo Stage 4-5 UCs: {_conv_total_ucs} | Total EACV: ${_conv_total_eacv}M\n"
+        f"  Stage 5 (Implementation In Progress) EACV: ${_stage5_eacv}M across {len(_stage5_nc)} UCs\n"
+        + '\n'.join(_conv_grp_lines) + '\n'
+        + f"  Top 5 accounts by unconverted EACV: {_top_conv_str}\n"
+        + "  NOTE: Use only these pre-computed figures. Do NOT invent account names or EACV values.\n"
+    )
+
+    # ── Narrative: Stalled High-Value Pipeline ───────────────────────────────
+    # managed_bulk_conf doesn't carry DAYS_IN_STAGE — query DT_OKR_USE_CASES directly
+    _stall_stages = [
+        '3 - Technical / Business Validation',
+        '4 - Use Case Won / Migration Plan',
+        '5 - Implementation In Progress',
+    ]
+    try:
+        _mp_sql = "','".join(MANAGED_PARTNERS)
+        _stall_raw = conn.query(f"""
+            SELECT
+                u.PARTNER_NAME,
+                u.ACCOUNT_NAME,
+                u.USE_CASE_STAGE,
+                TRY_CAST(u.USE_CASE_EACV AS FLOAT)   AS USE_CASE_EACV,
+                TRY_CAST(u.DAYS_IN_STAGE AS INTEGER)  AS DAYS_IN_STAGE,
+                u.IS_COCO
+            FROM TEMP.COCO_PARTNER_ADOPTION.DT_OKR_USE_CASES u
+            WHERE u.PARTNER_NAME IN ('{_mp_sql}')
+              AND u.USE_CASE_STAGE IN (
+                    '3 - Technical / Business Validation',
+                    '4 - Use Case Won / Migration Plan',
+                    '5 - Implementation In Progress'
+              )
+              AND TRY_CAST(u.USE_CASE_EACV AS FLOAT) > 50000
+        """)
+        # Map partner → group using managed_bulk_conf lookup
+        _grp_map = (
+            managed_bulk_conf[['PARTNER_NAME','_GROUP']]
+            .drop_duplicates()
+            .set_index('PARTNER_NAME')['_GROUP']
+            .to_dict()
+        )
+        _stall_raw['_GROUP'] = _stall_raw['PARTNER_NAME'].map(_grp_map).fillna('Other')
+        # Only non-CoCo rows
+        _stall_nc = _stall_raw[~_stall_raw['IS_COCO'].fillna(False)]
+        _stall180 = _stall_nc[_stall_nc['DAYS_IN_STAGE'] > 180]
+        _stall90  = _stall_nc[_stall_nc['DAYS_IN_STAGE'].between(90, 180)]
+    except Exception:
+        _stall_raw = pd.DataFrame()
+        _stall180  = pd.DataFrame(columns=['PARTNER_NAME','ACCOUNT_NAME','USE_CASE_EACV','DAYS_IN_STAGE','_GROUP'])
+        _stall90   = pd.DataFrame(columns=['PARTNER_NAME','ACCOUNT_NAME','USE_CASE_EACV','DAYS_IN_STAGE','_GROUP'])
+    _stall180['USE_CASE_EACV'] = pd.to_numeric(_stall180['USE_CASE_EACV'], errors='coerce').fillna(0)
+    _stall90['USE_CASE_EACV']  = pd.to_numeric(_stall90['USE_CASE_EACV'],  errors='coerce').fillna(0)
+    _stall180_eacv = round(_stall180['USE_CASE_EACV'].sum() / 1_000_000, 1)
+    _stall90_eacv  = round(_stall90['USE_CASE_EACV'].sum() / 1_000_000, 1)
+    _stall_grp_lines = []
+    for _grp in ['GSI', 'NOAM RSI', 'APJ RSI', 'EMEA RSI']:
+        _sg180 = _stall180[_stall180['_GROUP'] == _grp]
+        _stall_grp_lines.append(
+            f"  {_grp}: {len(_sg180)} UCs stalled >180d with EACV>$50K | "
+            f"EACV: ${round(_sg180['USE_CASE_EACV'].sum()/1_000_000,1)}M"
+        )
+    _top_stall = (
+        _stall180.nlargest(5, 'USE_CASE_EACV')[['ACCOUNT_NAME', 'USE_CASE_EACV', 'DAYS_IN_STAGE', '_GROUP']]
+    )
+    _top_stall_str = '; '.join(
+        f"{r['ACCOUNT_NAME']} (${round(r['USE_CASE_EACV']/1000)}K, {int(r['DAYS_IN_STAGE'])}d, {r['_GROUP']})"
+        for _, r in _top_stall.iterrows()
+    )
+
+    _narrative_ctx['Stalled Pipeline'] = (
+        f"  Q3 FY27 — Stalled High-Value Managed Partner Pipeline (non-CoCo, EACV>$50K):\n"
+        f"  Stalled >180 days: {len(_stall180)} UCs | EACV: ${_stall180_eacv}M\n"
+        f"  Stalled 90-180 days: {len(_stall90)} UCs | EACV: ${_stall90_eacv}M\n"
+        + '\n'.join(_stall_grp_lines) + '\n'
+        + f"  Top 5 stalled accounts: {_top_stall_str}\n"
+        + "  NOTE: Use only these pre-computed figures. Do NOT fabricate account names, days, or EACV values.\n"
     )
 
 st.markdown("---")
@@ -1794,7 +1982,7 @@ st.subheader("Generate Email Summary")
 
 narrative_group = st.segmented_control(
     "Insight Narrative",
-    ["Default", "Pipeline by Industry", "Implementation Bottleneck", "Competitive Exposure"],
+    ["Default", "UC Insights"],
     default="Default",
     key="email_narrative_group",
     help="Selects the thematic insight narrative shown after the OKR Regional Breakdown table.",
@@ -1809,32 +1997,14 @@ _NARRATIVE_INSTRUCTIONS = {
         "Sentence 4: from GSI GEO SPLIT you MUST name four things for GSI partners — the leading region, the lagging region, the leading theatre and the lagging theatre — each with its CoCo count. Do not report theatres only; the regions are in the data and must be named too. "
         "Write in normal sentence case — do not copy capitalisation from these instructions or from the data labels. Do NOT mention calendar months or quarter start/end dates. Do NOT compute your own averages or percentages, and if a split says 'not available' then say nothing about it rather than estimating."
     ),
-    "Pipeline by Industry": (
-        "After table: 4 sentences on the industry distribution of the managed partner pipeline this quarter. "
-        "Use the 'Pipeline by Industry' data block from context. "
-        "Sentence 1: name the top 2 industries by total EACV and their combined share of the managed pipeline. "
-        "Sentence 2: name the industry with the highest average EACV per deal — this signals where the largest individual opportunities sit. "
-        "Sentence 3: name the industry with the most use cases by count and note whether its CoCo adoption rate is above or below the overall managed average. "
-        "Sentence 4: give an executive read on which industry vertical represents the best untapped CoCo conversion opportunity based on UC count and EACV. "
-        "Write in normal sentence case. Do NOT mention calendar months or quarter dates. Do NOT fabricate numbers not in the data."
-    ),
-    "Implementation Bottleneck": (
-        "After table: 4 sentences on implementation velocity and pipeline stalls across managed partners this quarter. "
-        "Use the 'Implementation Bottleneck' data block from context. "
-        "Sentence 1: state the total Stage 5 (Implementation In Progress) UC count and EACV, and how many have been stalled beyond 90 days. "
-        "Sentence 2: compare average days in Stage 5 vs Stage 6 — identify where the real bottleneck sits in the Stage 5→6→7 progression. "
-        "Sentence 3: state how many Stage 5 UCs are beyond 180 days and the EACV those represent — frame this as the at-risk deployment pool. "
-        "Sentence 4: give an executive read on what needs to happen to unblock the pipeline and accelerate Stage 5→7 conversion before the quarter closes. "
-        "Write in normal sentence case. Do NOT mention calendar months or quarter dates. Do NOT fabricate numbers not in the data."
-    ),
-    "Competitive Exposure": (
-        "After table: 4 sentences on competitive risk in the managed partner pre-win pipeline this quarter. "
-        "Use the 'Competitive Exposure' data block from context. "
-        "Sentence 1: state how many Stage 3+4 use cases have an active named competitor and what share of the pre-win pipeline that represents — quote the EACV at risk. "
-        "Sentence 2: name the top 2 competitors by UC count. "
-        "Sentence 3: state the average days managed partner use cases spend in Stage 3 — frame this as the window competitors have to displace Snowflake. "
-        "Sentence 4: give an executive read on which partner group (GSI/NOAM RSI/APJ/EMEA) has the most competitive exposure based on the scorecard data, and what action reduces that risk. "
-        "Write in normal sentence case. Do NOT mention calendar months or quarter dates. Do NOT fabricate numbers not in the data."
+    "UC Insights": (
+        "After table: 4 sentences on CoCo surface adoption (CLI, Desktop, UI) across implementation stages for managed partners this quarter. "
+        "Use the matching insight data block from context (labelled 'UC Insights') — it contains pre-computed credits, tokens, and surface share percentages per stage. "
+        "Sentence 1: state which surface (CLI, Desktop, or UI) dominates credit consumption across all stages, quote its overall share % from the data, and name the stage where that dominance is highest. "
+        "Sentence 2: describe how the Desktop vs CLI split differs between Stage 5 (Implementation In Progress) and Stage 7 (Deployed) — use the credit percentages from the data block. "
+        "Sentence 3: describe the credit and token acceleration trend as use cases progress from Stage 5 to Stage 7 — compare the total credits at Stage 7 vs Stage 5 and note whether deployed UCs are generating more consumption per use case. "
+        "Sentence 4: give an executive read on what the surface adoption pattern (UI-led production, Desktop-heavy implementation) signals for deployment readiness across the managed partner portfolio. "
+        "Write in normal sentence case. Do NOT mention calendar months or quarter dates. Do NOT compute or estimate any figure not explicitly in the data block."
     ),
 }
 
@@ -1935,15 +2105,146 @@ FORMATTING RULES:
 - Tone: confident, data-driven, executive-appropriate
 - No greeting, sign-off, subject line, or filler"""
 
-prompt_input = st.text_area(
-    "Prompt",
-    value=default_prompt,
-    height=300,
-    help="Edit this prompt to customize the email output. Data summary above will be automatically included."
+_UC_INSIGHTS_PROMPT = (
+    "Generate 4 sentences on CoCo surface adoption (CLI, Desktop, UI) across implementation stages "
+    "for managed partners this quarter.\n"
+    "Use the 'UC Insights' data block from context — it contains pre-computed credits, tokens, and "
+    "surface share percentages per stage.\n"
+    "Sentence 1: state which surface (CLI, Desktop, or UI) dominates credit consumption across all stages, "
+    "quote its overall share % from the data, and name the stage where that dominance is highest.\n"
+    "Sentence 2: describe how the Desktop vs CLI split differs between Stage 5 (Implementation In Progress) "
+    "and Stage 7 (Deployed) — use the credit percentages from the data block.\n"
+    "Sentence 3: describe the credit and token acceleration trend as use cases progress from Stage 5 to Stage 7 "
+    "— compare the total credits at Stage 7 vs Stage 5 and note whether deployed UCs are generating more "
+    "consumption per use case.\n"
+    "Sentence 4: give an executive read on what the surface adoption pattern (UI-led production, "
+    "Desktop-heavy implementation) signals for deployment readiness across the managed partner portfolio.\n"
+    "Format the output as exactly 4 bullet points (use '- ' prefix for each). "
+    "Write in normal sentence case. Do NOT mention calendar months or quarter dates. "
+    "Do NOT compute or estimate any figure not explicitly in the data block."
 )
 
-if st.button("Generate Email Summary", type="primary", key="email_generate"):
-    full_prompt = f"""{prompt_input}
+_UC_INSIGHTS_INDUSTRY_PROMPT = (
+    "Generate 4 bullet points on the industry distribution of the managed partner pipeline this quarter.\n"
+    "Use ONLY the 'Pipeline by Industry' data block from context — every number you write MUST come "
+    "from that data block exclusively. Do NOT use figures from any other data block.\n"
+    "CRITICAL: Each industry row has fields: total_ucs, coco_ucs, coco_pct, total_eacv, coco_eacv, avg_eacv. "
+    "The 'overall managed CoCo adoption' is a SEPARATE value at the top — do NOT confuse it with any industry's coco_pct. "
+    "Quote each figure exactly as it appears; do NOT swap, round differently, or recalculate.\n"
+    "Bullet 1: name the top 2 industries by total_eacv and state their combined EACV and combined share "
+    "of the total managed pipeline EACV — use only figures from the data block.\n"
+    "Bullet 2: name the industry with the highest avg_eacv per deal and quote that figure exactly.\n"
+    "Bullet 3: name the industry with the most total_ucs, quote its coco_pct exactly, and compare it "
+    "to the pre-computed overall managed CoCo adoption rate at the top of the block.\n"
+    "Bullet 4: name the industry with the largest gap between total_ucs and coco_pct (most untapped) "
+    "as the best conversion opportunity — quote its total_ucs and coco_pct exactly.\n"
+    "Format as exactly 4 bullet points (use '- ' prefix for each). Write in normal sentence case. "
+    "Do NOT mention calendar months or quarter dates. "
+    "Do NOT compute or estimate any figure not explicitly in the 'Pipeline by Industry' data block."
+)
+
+_UC_INSIGHTS_VELOCITY_PROMPT = (
+    "Generate 4 bullet points on Q3 CoCo target attainment pace for managed partners.\n"
+    "Use ONLY the 'Pipeline Velocity' data block from context — it contains pre-computed partner counts, "
+    "group breakdowns, weeks remaining, and trend data.\n"
+    "CRITICAL: The total number of unique managed partners is exactly 44 (GSI=6, NOAM RSI=29, APJ RSI=5, EMEA RSI=4 — aliases deduplicated). "
+    "Each group line shows X/Y where Y is the FIXED denominator. "
+    "Do NOT change, recalculate, or deviate from these denominators: GSI=6, NOAM RSI=29, APJ RSI=5, EMEA RSI=4, total=44.\n"
+    "Bullet 1: state the total managed partners meeting their CoCo target this quarter out of 44 total, "
+    "and how many partners are within 1-2 use cases of crossing the threshold — name those partners.\n"
+    "Bullet 2: break down target attainment by group (GSI, NOAM RSI, APJ RSI, EMEA RSI) using the exact "
+    "X/Y format from the data block for each group — use ONLY the pre-computed denominators (6, 32, 5, 4).\n"
+    "Bullet 3: state the WoW trend direction (up/flat/down) and the 3-week average partners at target "
+    "from the data block — do NOT quote individual weekly counts.\n"
+    "Bullet 4: give an executive read on which group needs the most urgent intervention before Q3 ends, "
+    "based on weeks remaining and partners below target.\n"
+    "Format as exactly 4 bullet points (use '- ' prefix). Write in normal sentence case. "
+    "Do NOT mention calendar months or specific dates. Do NOT fabricate partner names not in the data block. "
+    "Do NOT recompute any X/Y ratio — use the pre-computed values exactly as given."
+)
+
+_UC_INSIGHTS_EACV_PROMPT = (
+    "Generate 4 bullet points on the unconverted CoCo EACV opportunity in the managed partner pipeline.\n"
+    "Use ONLY the 'EACV Conversion' data block from context — it contains pre-computed UC counts, "
+    "EACV totals, group breakdowns, and top accounts.\n"
+    "Bullet 1: state the total number of managed non-CoCo use cases in Stage 4-5 and their combined EACV "
+    "— quote both figures exactly from the data block.\n"
+    "Bullet 2: name the group (GSI/NOAM RSI/APJ RSI/EMEA RSI) with the largest unconverted EACV and "
+    "quote its Stage 4-5 EACV from the data block.\n"
+    "Bullet 3: state the Stage 5 (Implementation In Progress) UC count and EACV separately — these are "
+    "the highest-probability conversions since implementation is already active.\n"
+    "Bullet 4: name up to 3 of the top accounts by unconverted EACV from the data block and frame them "
+    "as the highest-return SE outreach targets this quarter.\n"
+    "Format as exactly 4 bullet points (use '- ' prefix). Write in normal sentence case. "
+    "Do NOT mention calendar months or quarter dates. Do NOT invent account names or EACV figures."
+)
+
+_UC_INSIGHTS_STALLED_PROMPT = (
+    "Generate 4 bullet points on the stalled high-value managed partner pipeline.\n"
+    "Use ONLY the 'Stalled Pipeline' data block from context — it contains pre-computed counts, EACV "
+    "totals, group breakdowns, and top stalled accounts.\n"
+    "Bullet 1: state how many managed non-CoCo use cases with EACV above $50K have been stalled more "
+    "than 180 days and the total EACV they represent — quote both figures from the data block.\n"
+    "Bullet 2: state the 90-180 day stalled count and EACV — frame this as the at-risk pool that will "
+    "become >180 day stalls if not addressed this quarter.\n"
+    "Bullet 3: name the group (GSI/NOAM RSI/APJ RSI/EMEA RSI) with the most >180-day stalled UCs and "
+    "quote its count and EACV from the data block.\n"
+    "Bullet 4: name up to 3 of the top stalled accounts from the data block (with their EACV and days "
+    "stalled) and give an executive read on why clearing these unlocks the most pipeline value.\n"
+    "Format as exactly 4 bullet points (use '- ' prefix). Write in normal sentence case. "
+    "Do NOT mention calendar months or quarter dates. Do NOT fabricate account names, days, or EACV values."
+)
+
+if narrative_group == "UC Insights":
+    st.caption("**Insight 1 — Surface Adoption (CLI / Desktop / UI)**")
+    st.caption(_UC_INSIGHTS_PROMPT)
+    st.caption("**Insight 2 — Industry Distribution**")
+    st.caption(_UC_INSIGHTS_INDUSTRY_PROMPT)
+    st.caption("**Insight 3 — Pipeline Velocity & Target Attainment**")
+    st.caption(_UC_INSIGHTS_VELOCITY_PROMPT)
+    st.caption("**Insight 4 — EACV Conversion Opportunity**")
+    st.caption(_UC_INSIGHTS_EACV_PROMPT)
+    st.caption("**Insight 5 — Stalled High-Value Pipeline**")
+    st.caption(_UC_INSIGHTS_STALLED_PROMPT)
+    prompt_input = None
+else:
+    prompt_input = st.text_area(
+        "Prompt",
+        value=default_prompt,
+        height=300,
+        help="Edit this prompt to customize the email output. Data summary above will be automatically included."
+    )
+
+_btn_label = "Generate UC Insights" if narrative_group == "UC Insights" else "Generate Email Summary"
+if st.button(_btn_label, type="primary", key="email_generate"):
+    if narrative_group == "UC Insights":
+        _prompt1 = (
+            f"{_UC_INSIGHTS_PROMPT}\n\n"
+            f"UC Insights DATA:\n{_narrative_ctx.get('UC Insights', '  Data not available.')}\n\n"
+            f"Write the narrative:"
+        )
+        _prompt2 = (
+            f"{_UC_INSIGHTS_INDUSTRY_PROMPT}\n\n"
+            f"Pipeline by Industry DATA:\n{_narrative_ctx.get('Pipeline by Industry', '  Data not available.')}\n\n"
+            f"Write the narrative:"
+        )
+        _prompt3 = (
+            f"{_UC_INSIGHTS_VELOCITY_PROMPT}\n\n"
+            f"Pipeline Velocity DATA:\n{_narrative_ctx.get('Pipeline Velocity', '  Data not available.')}\n\n"
+            f"Write the narrative:"
+        )
+        _prompt4 = (
+            f"{_UC_INSIGHTS_EACV_PROMPT}\n\n"
+            f"EACV Conversion DATA:\n{_narrative_ctx.get('EACV Conversion', '  Data not available.')}\n\n"
+            f"Write the narrative:"
+        )
+        _prompt5 = (
+            f"{_UC_INSIGHTS_STALLED_PROMPT}\n\n"
+            f"Stalled Pipeline DATA:\n{_narrative_ctx.get('Stalled Pipeline', '  Data not available.')}\n\n"
+            f"Write the narrative:"
+        )
+    else:
+        full_prompt = f"""{prompt_input}
 
 DATA:
 {data_context}
@@ -1953,31 +2254,49 @@ INSIGHT NARRATIVE DATA — {narrative_group}:
 
 Write the executive briefing:"""
 
-    response_placeholder = st.empty()
-    response_placeholder.info("Generating executive briefing with Cortex Complete...")
-    full_response = cortex_complete(conn, "claude-sonnet-4-5", full_prompt)
-    # Escape $ followed by digits so Streamlit doesn't interpret $X.XM as LaTeX math delimiters.
-    # Without this, text like "$23.5M), Deloitte(19.8M), EY ($" renders "Deloitte" in italic serif.
-    import re as _re
-    _display = _re.sub(r'\$(\d)', r'\\$\1', full_response)
-    response_placeholder.markdown(_display)
+    if narrative_group == "UC Insights":
+        import re as _re
+        st.markdown("**Insight 1 — Surface Adoption**")
+        _ph1 = st.empty()
+        _ph1.info("Generating...")
+        _r1 = cortex_complete(conn, "claude-sonnet-4-5", _prompt1)
+        _ph1.markdown(_re.sub(r'\$(\d)', r'\\$\1', _r1))
 
-    st.success("Email generated successfully!")
+        st.markdown("**Insight 2 — Industry Distribution**")
+        _ph2 = st.empty()
+        _ph2.info("Generating...")
+        _r2 = cortex_complete(conn, "claude-sonnet-4-5", _prompt2)
+        _ph2.markdown(_re.sub(r'\$(\d)', r'\\$\1', _r2))
+
+        st.markdown("**Insight 3 — Pipeline Velocity & Target Attainment**")
+        _ph3 = st.empty()
+        _ph3.info("Generating...")
+        _r3 = cortex_complete(conn, "claude-sonnet-4-5", _prompt3)
+        _ph3.markdown(_re.sub(r'\$(\d)', r'\\$\1', _r3))
+
+        st.markdown("**Insight 4 — EACV Conversion Opportunity**")
+        _ph4 = st.empty()
+        _ph4.info("Generating...")
+        _r4 = cortex_complete(conn, "claude-sonnet-4-5", _prompt4)
+        _ph4.markdown(_re.sub(r'\$(\d)', r'\\$\1', _r4))
+
+        st.markdown("**Insight 5 — Stalled High-Value Pipeline**")
+        _ph5 = st.empty()
+        _ph5.info("Generating...")
+        _r5 = cortex_complete(conn, "claude-sonnet-4-5", _prompt5)
+        _ph5.markdown(_re.sub(r'\$(\d)', r'\\$\1', _r5))
+
+        full_response = "\n\n".join([_r1, _r2, _r3, _r4, _r5])
+    else:
+        response_placeholder = st.empty()
+        response_placeholder.info("Generating executive briefing with Cortex Complete...")
+        full_response = cortex_complete(conn, "claude-sonnet-4-5", full_prompt)
+        import re as _re
+        _display = _re.sub(r'\$(\d)', r'\\$\1', full_response)
+        response_placeholder.markdown(_display)
+
+    st.success("UC Insights generated!" if narrative_group == "UC Insights" else "Email generated successfully!")
     st.markdown("---")
-
-    html_email = md_to_html(full_response)
-
-    # Inject heat map after Executive Summary bullets
-    if len(managed_q2_partners) > 0:
-        heatmap_html = generate_heatmap_html(adoption_wow_data, managed_q2_partners)
-        html_email = inject_heatmap(html_email, heatmap_html)
-
-    to_lines = [l.strip() for l in recipients_input.strip().splitlines() if l.strip()] if recipients_input.strip() else []
-    to_emails = [name_to_email(n) for n in to_lines]
-    to_str = ','.join(to_emails)
-    subject_text = f"Cortex Code Q3 FY27 Partner Intelligence - {datetime.now().strftime('%B %d, %Y')}"
-    subject = urllib.parse.quote(subject_text)
-    gmail_url = f"https://mail.google.com/mail/?view=cm&fs=1&to={to_str}&su={subject}"
 
     # ── Inline eval ──────────────────────────────────────────────────────────
     import sys as _sys
@@ -1987,17 +2306,61 @@ Write the executive briefing:"""
         from scripts.eval_exec_email import (
             check_structure, check_arithmetic, check_grounding,
             check_section_order, check_completeness, check_cross_table,
-            check_notable_wins, score as _eval_score,
+            check_notable_wins, check_industry_narrative,
+            check_velocity_narrative, check_eacv_conversion, check_stalled_pipeline,
+            score as _eval_score,
         )
-        _eval_results = (
-            check_structure(full_response)
-            + check_arithmetic(full_response)
-            + check_grounding(conn, full_response)
-            + check_section_order(full_response)
-            + check_completeness(full_response)
-            + check_cross_table(full_response)
-            + check_notable_wins(full_response)
-        )
+        if narrative_group == "UC Insights":
+            # Build eval context dicts from pre-computed data blocks
+            _vel_ctx = {
+                'partners_meeting':  partners_meeting_75,
+                'partners_below':    _CANONICAL_TOTAL - partners_meeting_75,
+                'partners_close':    _total_close,
+                'weeks_remaining':   _weeks_left,
+            }
+            _eacv_ctx = {
+                'total_eacv_m':   _conv_total_eacv,
+                'stage5_eacv_m':  _stage5_eacv,
+                'total_ucs':      _conv_total_ucs,
+            }
+            _stall_ctx = {
+                'count180':    len(_stall180),
+                'eacv180_m':   _stall180_eacv,
+                'count90_180': len(_stall90),
+                'top_accounts': list(_top_stall['ACCOUNT_NAME']) if len(_top_stall) > 0 else [],
+            }
+            _eval_results = (
+                check_arithmetic(full_response)
+                # Run grounding per-insight to avoid cross-contamination between responses
+                + check_grounding(conn, _r1)   # surface adoption
+                + check_grounding(conn, _r2)   # industry
+                + check_grounding(conn, _r4)   # EACV conversion (has account names)
+                + check_grounding(conn, _r5)   # stalled pipeline (has account names)
+                # _r3 (velocity) mentions weeks — skip check_grounding to avoid date mismatch
+                + check_industry_narrative(
+                    _r2,
+                    _industry_data if len(_industry_data) > 0 else None,
+                    _overall_coco_pct,
+                )
+                + check_velocity_narrative(_r3, _vel_ctx)
+                + check_eacv_conversion(_r4, _eacv_ctx)
+                + check_stalled_pipeline(_r5, _stall_ctx)
+            )
+        else:
+            _eval_results = (
+                check_structure(full_response)
+                + check_arithmetic(full_response)
+                + check_grounding(conn, full_response)
+                + check_section_order(full_response)
+                + check_completeness(full_response)
+                + check_cross_table(full_response)
+                + check_notable_wins(full_response)
+                + check_industry_narrative(
+                    full_response,
+                    None,
+                    None,
+                )
+            )
         _passes  = sum(1 for _, _, ok, _ in _eval_results if ok)
         _total   = len(_eval_results)
         _fails   = [r for r in _eval_results if not r[2]]
@@ -2016,47 +2379,61 @@ Write the executive briefing:"""
         st.warning(f"Eval skipped: {_e}")
     # ─────────────────────────────────────────────────────────────────────────
 
-    st.info("**How to send:** Click **Copy Rich Text** below, then **Open in Gmail**, and paste (Ctrl+V / Cmd+V) into the email body. Tables will render with full formatting.")
+    if narrative_group != "UC Insights":
+        html_email = md_to_html(full_response)
+        if len(managed_q2_partners) > 0:
+            heatmap_html = generate_heatmap_html(adoption_wow_data, managed_q2_partners)
+            html_email = inject_heatmap(html_email, heatmap_html)
+        to_lines = [l.strip() for l in recipients_input.strip().splitlines() if l.strip()] if recipients_input.strip() else []
+        to_emails = [name_to_email(n) for n in to_lines]
+        to_str = ','.join(to_emails)
+        subject_text = f"Cortex Code Q3 FY27 Partner Intelligence - {datetime.now().strftime('%B %d, %Y')}"
+        subject = urllib.parse.quote(subject_text)
+        gmail_url = f"https://mail.google.com/mail/?view=cm&fs=1&to={to_str}&su={subject}"
 
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        escaped_html = html_email.replace('`', '\\`').replace('${', '\\${')
-        plain_text = full_response.replace(chr(96), '').replace('${', '')[:8000]
-        copy_js = f"""
-        <button onclick="copyRich()" id="copyBtn" style="
-            background-color: #29B5E8; color: white; border: none; padding: 8px 20px;
-            border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: 600;
-            width: 100%;">Copy Rich Text</button>
-        <script>
-        function copyRich() {{
-            const html = `{escaped_html}`;
-            const blob = new Blob([html], {{type: 'text/html'}});
-            const plainBlob = new Blob([`{plain_text}`], {{type: 'text/plain'}});
-            const item = new ClipboardItem({{
-                'text/html': blob,
-                'text/plain': plainBlob
-            }});
-            navigator.clipboard.write([item]).then(() => {{
-                document.getElementById('copyBtn').textContent = 'Copied!';
-                document.getElementById('copyBtn').style.backgroundColor = '#28a745';
-                setTimeout(() => {{
-                    document.getElementById('copyBtn').textContent = 'Copy Rich Text';
-                    document.getElementById('copyBtn').style.backgroundColor = '#29B5E8';
-                }}, 2000);
-            }});
-        }}
-        </script>
-        """
-        components.html(copy_js, height=45)
-    with col2:
-        st.link_button("Open in Gmail", gmail_url, type="primary")
-    with col3:
-        st.download_button(
-            label="Download as HTML",
-            data=html_email,
-            file_name=f"coco_usecase_briefing_{datetime.now().strftime('%Y%m%d')}.html",
-            mime="text/html"
-        )
+    if narrative_group != "UC Insights":
+        st.info("**How to send:** Click **Copy Rich Text** below, then **Open in Gmail**, and paste (Ctrl+V / Cmd+V) into the email body. Tables will render with full formatting.")
+
+    if narrative_group != "UC Insights":
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            escaped_html = html_email.replace('`', '\\`').replace('${', '\\${')
+            plain_text = full_response.replace(chr(96), '').replace('${', '')[:8000]
+            copy_js = f"""
+            <button onclick="copyRich()" id="copyBtn" style="
+                background-color: #29B5E8; color: white; border: none; padding: 8px 20px;
+                border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: 600;
+                width: 100%;">Copy Rich Text</button>
+            <script>
+            function copyRich() {{
+                const html = `{escaped_html}`;
+                const blob = new Blob([html], {{type: 'text/html'}});
+                const plainBlob = new Blob([`{plain_text}`], {{type: 'text/plain'}});
+                const item = new ClipboardItem({{
+                    'text/html': blob,
+                    'text/plain': plainBlob
+                }});
+                navigator.clipboard.write([item]).then(() => {{
+                    document.getElementById('copyBtn').textContent = 'Copied!';
+                    document.getElementById('copyBtn').style.backgroundColor = '#28a745';
+                    setTimeout(() => {{
+                        document.getElementById('copyBtn').textContent = 'Copy Rich Text';
+                        document.getElementById('copyBtn').style.backgroundColor = '#29B5E8';
+                    }}, 2000);
+                }});
+            }}
+            </script>
+            """
+            components.html(copy_js, height=45)
+        with col2:
+            st.link_button("Open in Gmail", gmail_url, type="primary")
+        with col3:
+            st.download_button(
+                label="Download as HTML",
+                data=html_email,
+                file_name=f"coco_usecase_briefing_{datetime.now().strftime('%Y%m%d')}.html",
+                mime="text/html"
+            )
 
 st.markdown("---")
 st.caption("Powered by Snowflake Cortex Complete | Q3 FY27 (Aug–Oct 2026) | Data sourced from CoCo Use Case Intelligence")

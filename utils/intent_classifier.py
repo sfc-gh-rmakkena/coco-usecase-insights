@@ -14,7 +14,7 @@ _SHORT_FORMS = {
     "ntt":         "NTT DATA Group Corporation",
     "megazone":    "MegazoneCloud Corporation",
     "infinite lambda": "Infinite Lambda Limited",
-    "altis":       "Altis Global Limited",
+    "altis":       "Altis Consulting, ANZ",
     "prolim":      "PROLIM Global Corporation",
     "infomotion":  "INFOMOTION GMBH",
     "civica":      "CIVICA SOFTWARE, S.L.",

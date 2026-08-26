@@ -158,10 +158,10 @@ if include_account_coco:
                          'CLI_CREDITS','CLI_TOKENS','CLI_REQUESTS',
                          'DESKTOP_CREDITS','DESKTOP_TOKENS','DESKTOP_REQUESTS',
                          'UI_CREDITS','UI_TOKENS','UI_REQUESTS','AGENT_REQUESTS']
+        _credit_dedup = _credit_dedup.copy()
         for _c in _surface_cols:
             if _c in _credit_dedup.columns:
-                _credit_dedup = _credit_dedup.copy()
-                _credit_dedup[_c] = _credit_dedup[_c].apply(lambda x: float(x) if x is not None else 0.0)
+                _credit_dedup[_c] = pd.to_numeric(_credit_dedup[_c], errors='coerce').fillna(0)
         _agg_dict = dict(Q2_CREDITS=('Q2_CREDITS','sum'), Q2_TOKENS=('Q2_TOKENS','sum'),
                          LAST7_CREDITS=('LAST7_CREDITS','sum'), PRIOR7_CREDITS=('PRIOR7_CREDITS','sum'),
                          LAST7_TOKENS=('LAST7_TOKENS','sum'), PRIOR7_TOKENS=('PRIOR7_TOKENS','sum'))
@@ -188,14 +188,12 @@ if include_account_coco:
         _partner_usage = _partner_usage.merge(_accts_usage, on='PARTNER_NAME', how='left')
         _partner_usage['ACCTS_WITH_USAGE'] = _partner_usage['ACCTS_WITH_USAGE'].fillna(0).astype(int)
         # Portfolio-level WoW (sum last7 vs sum prior7)
-        _partner_usage['CREDITS_WOW_PCT'] = (
-            (_partner_usage['LAST7_CREDITS'] - _partner_usage['PRIOR7_CREDITS'])
-            * 100.0 / _partner_usage['PRIOR7_CREDITS'].replace(0, float('nan'))
-        ).round(1)
-        _partner_usage['TOKENS_WOW_PCT'] = (
-            (_partner_usage['LAST7_TOKENS'] - _partner_usage['PRIOR7_TOKENS'])
-            * 100.0 / _partner_usage['PRIOR7_TOKENS'].replace(0, float('nan'))
-        ).round(1)
+        _l7c  = pd.to_numeric(_partner_usage['LAST7_CREDITS'],  errors='coerce').fillna(0)
+        _p7c  = pd.to_numeric(_partner_usage['PRIOR7_CREDITS'], errors='coerce').fillna(0)
+        _l7t  = pd.to_numeric(_partner_usage['LAST7_TOKENS'],   errors='coerce').fillna(0)
+        _p7t  = pd.to_numeric(_partner_usage['PRIOR7_TOKENS'],  errors='coerce').fillna(0)
+        _partner_usage['CREDITS_WOW_PCT'] = ((_l7c - _p7c) * 100.0 / _p7c.replace(0, float('nan'))).round(1)
+        _partner_usage['TOKENS_WOW_PCT']  = ((_l7t - _p7t) * 100.0 / _p7t.replace(0, float('nan'))).round(1)
         summary = summary.merge(_partner_usage, on='PARTNER_NAME', how='left')
     else:
         # Rename aliases in base_summary and re-aggregate so merged partners show as one row

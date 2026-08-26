@@ -700,6 +700,223 @@ tables:
         default_aggregation: sum
 
 verified_queries:
+
+  # ── OVERALL ADOPTION ────────────────────────────────────────────────────────
+
+  - name: overall_q3_adoption
+    question: What is the overall CoCo adoption rate for all managed partners in Q3?
+    sql: |
+      SELECT
+        COUNT(USE_CASE_ID)                                                          AS total_uc,
+        COUNT_IF(IS_COCO_FINAL = TRUE)                                              AS coco_uc,
+        ROUND(COUNT_IF(IS_COCO_FINAL=TRUE)*100.0/NULLIF(COUNT(USE_CASE_ID),0),1)   AS coco_pct,
+        ROUND(SUM(CASE WHEN IS_COCO_FINAL=TRUE THEN USE_CASE_EACV ELSE 0 END)/1e6,1) AS coco_eacv_m,
+        COUNT_IF(IS_COCO_FINAL=TRUE AND USE_CASE_STAGE='7 - Deployed')              AS coco_deployed
+      FROM TEMP.COCO_PARTNER_ADOPTION.V_OKR_USE_CASES_COCO_FINAL_Q3
+
+  - name: overall_q2_adoption
+    question: What is the overall CoCo adoption rate for all managed partners in Q2?
+    sql: |
+      SELECT
+        COUNT(USE_CASE_ID)                                                          AS total_uc,
+        COUNT_IF(IS_COCO_FINAL = TRUE)                                              AS coco_uc,
+        ROUND(COUNT_IF(IS_COCO_FINAL=TRUE)*100.0/NULLIF(COUNT(USE_CASE_ID),0),1)   AS coco_pct,
+        ROUND(SUM(CASE WHEN IS_COCO_FINAL=TRUE THEN USE_CASE_EACV ELSE 0 END)/1e6,1) AS coco_eacv_m
+      FROM TEMP.COCO_PARTNER_ADOPTION.V_OKR_USE_CASES_COCO_FINAL_Q2
+
+  - name: q3_adoption_by_group
+    question: CoCo adoption by partner group (GSI, NOAM RSI, APJ RSI, EMEA RSI) in Q3
+    sql: |
+      SELECT
+        CASE
+          WHEN PARTNER_NAME IN ('Accenture','Capgemini Technologies LLC','Cognizant Technology Solutions US Corp','Deloitte Consulting','EY','Ernst & Young (EY)','IBM','IBM Consulting') THEN 'GSI'
+          WHEN PARTNER_NAME IN ('NTT DATA Group Corporation','MegazoneCloud Corporation','Infinite Lambda Limited','Infinite Lambda Inc','INFINITE LAMBDA (SINGAPORE) PTE. LTD.','Altis Consulting, ANZ','PROLIM Global Corporation') THEN 'APJ RSI'
+          WHEN PARTNER_NAME IN ('INFOMOTION GMBH','INFOMOTION GMBH, BearingPoint','CIVICA SOFTWARE, S.L.','Kubrick Group','KPC (Key Performance Consulting)','KPC') THEN 'EMEA RSI'
+          ELSE 'NOAM RSI'
+        END                                                                           AS partner_group,
+        COUNT(USE_CASE_ID)                                                            AS total_uc,
+        COUNT_IF(IS_COCO_FINAL=TRUE)                                                  AS coco_uc,
+        ROUND(COUNT_IF(IS_COCO_FINAL=TRUE)*100.0/NULLIF(COUNT(USE_CASE_ID),0),1)     AS coco_pct,
+        ROUND(SUM(CASE WHEN IS_COCO_FINAL=TRUE THEN USE_CASE_EACV ELSE 0 END)/1e6,1) AS coco_eacv_m,
+        ROUND(SUM(CASE WHEN IS_COCO_FINAL=TRUE THEN Q2_CREDITS ELSE 0 END),0)         AS coco_credits,
+        COUNT_IF(IS_COCO_FINAL=TRUE AND USE_CASE_STAGE='7 - Deployed')                AS coco_deployed
+      FROM TEMP.COCO_PARTNER_ADOPTION.V_OKR_USE_CASES_COCO_FINAL_Q3
+      GROUP BY 1 ORDER BY 1
+
+  - name: q2_adoption_by_group
+    question: CoCo adoption by partner group in Q2
+    sql: |
+      SELECT
+        CASE
+          WHEN PARTNER_NAME IN ('Accenture','Capgemini Technologies LLC','Cognizant Technology Solutions US Corp','Deloitte Consulting','EY','Ernst & Young (EY)','IBM','IBM Consulting') THEN 'GSI'
+          WHEN PARTNER_NAME IN ('NTT DATA Group Corporation','MegazoneCloud Corporation','Infinite Lambda Limited','Infinite Lambda Inc','INFINITE LAMBDA (SINGAPORE) PTE. LTD.','Altis Consulting, ANZ','PROLIM Global Corporation') THEN 'APJ RSI'
+          WHEN PARTNER_NAME IN ('INFOMOTION GMBH','INFOMOTION GMBH, BearingPoint','CIVICA SOFTWARE, S.L.','Kubrick Group','KPC (Key Performance Consulting)','KPC') THEN 'EMEA RSI'
+          ELSE 'NOAM RSI'
+        END                                                                         AS partner_group,
+        COUNT(USE_CASE_ID)                                                          AS total_uc,
+        COUNT_IF(IS_COCO_FINAL=TRUE)                                                AS coco_uc,
+        ROUND(COUNT_IF(IS_COCO_FINAL=TRUE)*100.0/NULLIF(COUNT(USE_CASE_ID),0),1)   AS coco_pct,
+        ROUND(SUM(CASE WHEN IS_COCO_FINAL=TRUE THEN USE_CASE_EACV ELSE 0 END)/1e6,1) AS coco_eacv_m
+      FROM TEMP.COCO_PARTNER_ADOPTION.V_OKR_USE_CASES_COCO_FINAL_Q2
+      GROUP BY 1 ORDER BY 1
+
+  # ── PER-PARTNER RANKINGS ────────────────────────────────────────────────────
+
+  - name: all_partners_q3_ranked
+    question: CoCo adoption for every managed partner ranked by CoCo count in Q3
+    sql: |
+      SELECT
+        PARTNER_NAME,
+        COUNT(USE_CASE_ID)                                                            AS total_uc,
+        COUNT_IF(IS_COCO_FINAL=TRUE)                                                  AS coco_uc,
+        ROUND(COUNT_IF(IS_COCO_FINAL=TRUE)*100.0/NULLIF(COUNT(USE_CASE_ID),0),1)     AS coco_pct,
+        ROUND(SUM(CASE WHEN IS_COCO_FINAL=TRUE THEN USE_CASE_EACV ELSE 0 END)/1e3,0) AS coco_eacv_k,
+        ROUND(SUM(CASE WHEN IS_COCO_FINAL=TRUE THEN Q2_CREDITS ELSE 0 END),0)         AS coco_credits
+      FROM TEMP.COCO_PARTNER_ADOPTION.V_OKR_USE_CASES_COCO_FINAL_Q3
+      GROUP BY 1 ORDER BY coco_uc DESC NULLS LAST
+
+  - name: top10_partners_by_coco_q3
+    question: Top 10 partners by CoCo use case count in Q3
+    sql: |
+      SELECT
+        PARTNER_NAME,
+        COUNT_IF(IS_COCO_FINAL=TRUE)                                                  AS coco_uc,
+        COUNT(USE_CASE_ID)                                                            AS total_uc,
+        ROUND(COUNT_IF(IS_COCO_FINAL=TRUE)*100.0/NULLIF(COUNT(USE_CASE_ID),0),1)     AS coco_pct,
+        ROUND(SUM(CASE WHEN IS_COCO_FINAL=TRUE THEN USE_CASE_EACV ELSE 0 END)/1e3,0) AS coco_eacv_k
+      FROM TEMP.COCO_PARTNER_ADOPTION.V_OKR_USE_CASES_COCO_FINAL_Q3
+      GROUP BY 1 ORDER BY coco_uc DESC NULLS LAST LIMIT 10
+
+  - name: top10_partners_by_coco_pct_q3
+    question: Top 10 partners by CoCo adoption percentage in Q3
+    sql: |
+      SELECT
+        PARTNER_NAME,
+        COUNT_IF(IS_COCO_FINAL=TRUE)                                                AS coco_uc,
+        COUNT(USE_CASE_ID)                                                          AS total_uc,
+        ROUND(COUNT_IF(IS_COCO_FINAL=TRUE)*100.0/NULLIF(COUNT(USE_CASE_ID),0),1)   AS coco_pct
+      FROM TEMP.COCO_PARTNER_ADOPTION.V_OKR_USE_CASES_COCO_FINAL_Q3
+      WHERE COUNT(USE_CASE_ID) >= 3
+      GROUP BY 1 HAVING COUNT(USE_CASE_ID) >= 3
+      ORDER BY coco_pct DESC NULLS LAST LIMIT 10
+
+  - name: top10_partners_by_eacv_q3
+    question: Top 10 partners by CoCo pipeline EACV in Q3
+    sql: |
+      SELECT
+        PARTNER_NAME,
+        COUNT_IF(IS_COCO_FINAL=TRUE)                                                  AS coco_uc,
+        ROUND(SUM(CASE WHEN IS_COCO_FINAL=TRUE THEN USE_CASE_EACV ELSE 0 END)/1e6,1) AS coco_eacv_m,
+        ROUND(COUNT_IF(IS_COCO_FINAL=TRUE)*100.0/NULLIF(COUNT(USE_CASE_ID),0),1)     AS coco_pct
+      FROM TEMP.COCO_PARTNER_ADOPTION.V_OKR_USE_CASES_COCO_FINAL_Q3
+      GROUP BY 1 ORDER BY coco_eacv_m DESC NULLS LAST LIMIT 10
+
+  - name: top10_partners_by_credits_q3
+    question: Top 10 partners by CoCo credit consumption in Q3
+    sql: |
+      SELECT
+        PARTNER_NAME,
+        ROUND(SUM(CASE WHEN IS_COCO_FINAL=TRUE THEN Q2_CREDITS ELSE 0 END),0)         AS coco_credits,
+        COUNT_IF(IS_COCO_FINAL=TRUE)                                                    AS coco_uc,
+        ROUND(SUM(Q2_CREDITS),0)                                                        AS total_credits
+      FROM TEMP.COCO_PARTNER_ADOPTION.V_OKR_USE_CASES_COCO_FINAL_Q3
+      GROUP BY 1 ORDER BY coco_credits DESC NULLS LAST LIMIT 10
+
+  # ── TARGET ATTAINMENT ───────────────────────────────────────────────────────
+
+  - name: partners_meeting_target_q3
+    question: Which partners are meeting their CoCo adoption target in Q3?
+    sql: |
+      SELECT
+        PARTNER_NAME,
+        CASE
+          WHEN PARTNER_NAME IN ('Accenture','Capgemini Technologies LLC','Cognizant Technology Solutions US Corp','Deloitte Consulting','EY','Ernst & Young (EY)','IBM','IBM Consulting') THEN 75
+          WHEN PARTNER_NAME IN ('NTT DATA Group Corporation','MegazoneCloud Corporation','Infinite Lambda Limited','Infinite Lambda Inc','INFINITE LAMBDA (SINGAPORE) PTE. LTD.','Altis Consulting, ANZ','PROLIM Global Corporation','INFOMOTION GMBH','INFOMOTION GMBH, BearingPoint','CIVICA SOFTWARE, S.L.','Kubrick Group','KPC (Key Performance Consulting)','KPC') THEN 50
+          ELSE 75
+        END                                                                           AS target_pct,
+        COUNT(USE_CASE_ID)                                                            AS total_uc,
+        COUNT_IF(IS_COCO_FINAL=TRUE)                                                  AS coco_uc,
+        ROUND(COUNT_IF(IS_COCO_FINAL=TRUE)*100.0/NULLIF(COUNT(USE_CASE_ID),0),1)     AS coco_pct,
+        CASE WHEN ROUND(COUNT_IF(IS_COCO_FINAL=TRUE)*100.0/NULLIF(COUNT(USE_CASE_ID),0),1) >=
+          CASE WHEN PARTNER_NAME IN ('Accenture','Capgemini Technologies LLC','Cognizant Technology Solutions US Corp','Deloitte Consulting','EY','Ernst & Young (EY)','IBM','IBM Consulting') THEN 75
+               WHEN PARTNER_NAME IN ('NTT DATA Group Corporation','MegazoneCloud Corporation','Infinite Lambda Limited','Infinite Lambda Inc','INFINITE LAMBDA (SINGAPORE) PTE. LTD.','Altis Consulting, ANZ','PROLIM Global Corporation','INFOMOTION GMBH','INFOMOTION GMBH, BearingPoint','CIVICA SOFTWARE, S.L.','Kubrick Group','KPC (Key Performance Consulting)','KPC') THEN 50
+               ELSE 75 END
+        THEN 'Meeting' ELSE 'Below Target' END                                        AS status
+      FROM TEMP.COCO_PARTNER_ADOPTION.V_OKR_USE_CASES_COCO_FINAL_Q3
+      GROUP BY 1,2 ORDER BY status, coco_pct DESC NULLS LAST
+
+  - name: partners_below_target_q3
+    question: Which partners are below their CoCo adoption target in Q3?
+    sql: |
+      SELECT
+        PARTNER_NAME,
+        CASE WHEN PARTNER_NAME IN ('NTT DATA Group Corporation','MegazoneCloud Corporation','Infinite Lambda Limited','Infinite Lambda Inc','INFINITE LAMBDA (SINGAPORE) PTE. LTD.','Altis Consulting, ANZ','PROLIM Global Corporation','INFOMOTION GMBH','INFOMOTION GMBH, BearingPoint','CIVICA SOFTWARE, S.L.','Kubrick Group','KPC (Key Performance Consulting)','KPC') THEN 50 ELSE 75 END AS target_pct,
+        COUNT(USE_CASE_ID)                                                          AS total_uc,
+        COUNT_IF(IS_COCO_FINAL=TRUE)                                                AS coco_uc,
+        ROUND(COUNT_IF(IS_COCO_FINAL=TRUE)*100.0/NULLIF(COUNT(USE_CASE_ID),0),1)   AS coco_pct,
+        CASE WHEN PARTNER_NAME IN ('NTT DATA Group Corporation','MegazoneCloud Corporation','Infinite Lambda Limited','Infinite Lambda Inc','INFINITE LAMBDA (SINGAPORE) PTE. LTD.','Altis Consulting, ANZ','PROLIM Global Corporation','INFOMOTION GMBH','INFOMOTION GMBH, BearingPoint','CIVICA SOFTWARE, S.L.','Kubrick Group','KPC (Key Performance Consulting)','KPC') THEN 50 ELSE 75 END
+          - ROUND(COUNT_IF(IS_COCO_FINAL=TRUE)*100.0/NULLIF(COUNT(USE_CASE_ID),0),1) AS gap_to_target
+      FROM TEMP.COCO_PARTNER_ADOPTION.V_OKR_USE_CASES_COCO_FINAL_Q3
+      GROUP BY 1,2
+      HAVING coco_pct < target_pct
+      ORDER BY gap_to_target DESC NULLS LAST
+
+  # ── STAGE BREAKDOWN ─────────────────────────────────────────────────────────
+
+  - name: q3_coco_pipeline_by_stage
+    question: CoCo use case pipeline breakdown by stage in Q3
+    sql: |
+      SELECT
+        USE_CASE_STAGE,
+        COUNT(USE_CASE_ID)                                                            AS total_uc,
+        COUNT_IF(IS_COCO_FINAL=TRUE)                                                  AS coco_uc,
+        ROUND(COUNT_IF(IS_COCO_FINAL=TRUE)*100.0/NULLIF(COUNT(USE_CASE_ID),0),1)     AS coco_pct,
+        ROUND(SUM(CASE WHEN IS_COCO_FINAL=TRUE THEN USE_CASE_EACV ELSE 0 END)/1e6,1) AS coco_eacv_m
+      FROM TEMP.COCO_PARTNER_ADOPTION.V_OKR_USE_CASES_COCO_FINAL_Q3
+      GROUP BY 1 ORDER BY 1
+
+  - name: q3_deployed_coco
+    question: How many CoCo use cases are deployed (Stage 7) in Q3?
+    sql: |
+      SELECT
+        COUNT(USE_CASE_ID)                                                            AS total_deployed,
+        COUNT_IF(IS_COCO_FINAL=TRUE)                                                  AS coco_deployed,
+        ROUND(COUNT_IF(IS_COCO_FINAL=TRUE)*100.0/NULLIF(COUNT(USE_CASE_ID),0),1)     AS coco_pct,
+        ROUND(SUM(CASE WHEN IS_COCO_FINAL=TRUE THEN USE_CASE_EACV ELSE 0 END)/1e6,1) AS coco_eacv_m
+      FROM TEMP.COCO_PARTNER_ADOPTION.V_OKR_USE_CASES_COCO_FINAL_Q3
+      WHERE USE_CASE_STAGE = '7 - Deployed'
+
+  - name: q3_stage_by_partner_group
+    question: Stage breakdown of CoCo use cases by partner group in Q3
+    sql: |
+      SELECT
+        CASE
+          WHEN PARTNER_NAME IN ('Accenture','Capgemini Technologies LLC','Cognizant Technology Solutions US Corp','Deloitte Consulting','EY','Ernst & Young (EY)','IBM','IBM Consulting') THEN 'GSI'
+          WHEN PARTNER_NAME IN ('NTT DATA Group Corporation','MegazoneCloud Corporation','Infinite Lambda Limited','Infinite Lambda Inc','INFINITE LAMBDA (SINGAPORE) PTE. LTD.','Altis Consulting, ANZ','PROLIM Global Corporation') THEN 'APJ RSI'
+          WHEN PARTNER_NAME IN ('INFOMOTION GMBH','INFOMOTION GMBH, BearingPoint','CIVICA SOFTWARE, S.L.','Kubrick Group','KPC (Key Performance Consulting)','KPC') THEN 'EMEA RSI'
+          ELSE 'NOAM RSI'
+        END                          AS partner_group,
+        USE_CASE_STAGE,
+        COUNT_IF(IS_COCO_FINAL=TRUE) AS coco_uc
+      FROM TEMP.COCO_PARTNER_ADOPTION.V_OKR_USE_CASES_COCO_FINAL_Q3
+      WHERE IS_COCO_FINAL = TRUE
+      GROUP BY 1,2 ORDER BY 1,2
+
+  # ── THEATER / REGION ────────────────────────────────────────────────────────
+
+  - name: q3_coco_by_theater
+    question: CoCo adoption by sales theater in Q3
+    sql: |
+      SELECT
+        THEATER_NAME,
+        COUNT(USE_CASE_ID)                                                          AS total_uc,
+        COUNT_IF(IS_COCO_FINAL=TRUE)                                                AS coco_uc,
+        ROUND(COUNT_IF(IS_COCO_FINAL=TRUE)*100.0/NULLIF(COUNT(USE_CASE_ID),0),1)   AS coco_pct,
+        ROUND(SUM(CASE WHEN IS_COCO_FINAL=TRUE THEN USE_CASE_EACV ELSE 0 END)/1e6,1) AS coco_eacv_m
+      FROM TEMP.COCO_PARTNER_ADOPTION.V_OKR_USE_CASES_COCO_FINAL_Q3
+      WHERE THEATER_NAME IS NOT NULL
+      GROUP BY 1 ORDER BY coco_uc DESC NULLS LAST
+
   - name: usmajors_q3_summary
     question: Total and CoCo-qualified use cases for USMajors in Q3
     sql: |
@@ -719,6 +936,245 @@ verified_queries:
         ROUND(COUNT_IF(IS_COCO_FINAL = TRUE) * 100.0 / NULLIF(COUNT(USE_CASE_ID), 0), 1) AS coco_pct
       FROM TEMP.COCO_PARTNER_ADOPTION.V_OKR_USE_CASES_COCO_FINAL_Q2
       WHERE THEATER_NAME = 'USMajors'
+
+  - name: usmajors_by_industry_q3
+    question: USMajors CoCo adoption breakdown by industry in Q3
+    sql: |
+      SELECT
+        REGION_NAME                                                                 AS industry,
+        COUNT(USE_CASE_ID)                                                          AS total_uc,
+        COUNT_IF(IS_COCO_FINAL=TRUE)                                                AS coco_uc,
+        ROUND(COUNT_IF(IS_COCO_FINAL=TRUE)*100.0/NULLIF(COUNT(USE_CASE_ID),0),1)   AS coco_pct,
+        ROUND(SUM(CASE WHEN IS_COCO_FINAL=TRUE THEN USE_CASE_EACV ELSE 0 END)/1e6,1) AS coco_eacv_m
+      FROM TEMP.COCO_PARTNER_ADOPTION.V_OKR_USE_CASES_COCO_FINAL_Q3
+      WHERE THEATER_NAME = 'USMajors' AND REGION_NAME IS NOT NULL
+      GROUP BY 1 ORDER BY coco_uc DESC NULLS LAST
+
+  - name: apj_by_country_q3
+    question: APJ RSI CoCo adoption by country in Q3
+    sql: |
+      SELECT
+        REGION_NAME                                                                 AS country,
+        PARTNER_NAME,
+        COUNT(USE_CASE_ID)                                                          AS total_uc,
+        COUNT_IF(IS_COCO_FINAL=TRUE)                                                AS coco_uc,
+        ROUND(COUNT_IF(IS_COCO_FINAL=TRUE)*100.0/NULLIF(COUNT(USE_CASE_ID),0),1)   AS coco_pct
+      FROM TEMP.COCO_PARTNER_ADOPTION.V_OKR_USE_CASES_COCO_FINAL_Q3
+      WHERE PARTNER_NAME IN ('NTT DATA Group Corporation','MegazoneCloud Corporation','Infinite Lambda Limited','Infinite Lambda Inc','INFINITE LAMBDA (SINGAPORE) PTE. LTD.','Altis Consulting, ANZ','PROLIM Global Corporation')
+      GROUP BY 1,2 ORDER BY coco_uc DESC NULLS LAST
+
+  - name: emea_by_subregion_q3
+    question: EMEA RSI CoCo adoption by sub-region in Q3
+    sql: |
+      SELECT
+        REGION_NAME                                                                 AS sub_region,
+        PARTNER_NAME,
+        COUNT(USE_CASE_ID)                                                          AS total_uc,
+        COUNT_IF(IS_COCO_FINAL=TRUE)                                                AS coco_uc,
+        ROUND(COUNT_IF(IS_COCO_FINAL=TRUE)*100.0/NULLIF(COUNT(USE_CASE_ID),0),1)   AS coco_pct
+      FROM TEMP.COCO_PARTNER_ADOPTION.V_OKR_USE_CASES_COCO_FINAL_Q3
+      WHERE PARTNER_NAME IN ('INFOMOTION GMBH','INFOMOTION GMBH, BearingPoint','CIVICA SOFTWARE, S.L.','Kubrick Group','KPC (Key Performance Consulting)','KPC')
+      GROUP BY 1,2 ORDER BY coco_uc DESC NULLS LAST
+
+  # ── WORKLOAD / TECHNICAL USE CASE ───────────────────────────────────────────
+
+  - name: q3_coco_by_workload
+    question: CoCo use cases by workload category in Q3
+    sql: |
+      SELECT
+        WORKLOAD_CATEGORY,
+        COUNT_IF(IS_COCO_FINAL=TRUE)                                                  AS coco_uc,
+        COUNT(USE_CASE_ID)                                                            AS total_uc,
+        ROUND(COUNT_IF(IS_COCO_FINAL=TRUE)*100.0/NULLIF(COUNT(USE_CASE_ID),0),1)     AS coco_pct,
+        ROUND(SUM(CASE WHEN IS_COCO_FINAL=TRUE THEN USE_CASE_EACV ELSE 0 END)/1e6,1) AS coco_eacv_m
+      FROM TEMP.COCO_PARTNER_ADOPTION.V_OKR_USE_CASES_COCO_FINAL_Q3
+      WHERE WORKLOAD_CATEGORY IS NOT NULL
+      GROUP BY 1 ORDER BY coco_uc DESC NULLS LAST
+
+  - name: q3_ai_workload_coco
+    question: How many CoCo use cases are AI workload in Q3?
+    sql: |
+      SELECT
+        COUNT_IF(IS_COCO_FINAL=TRUE AND WORKLOAD_CATEGORY='AI')   AS ai_coco_uc,
+        COUNT_IF(IS_COCO_FINAL=TRUE)                               AS total_coco_uc,
+        ROUND(COUNT_IF(IS_COCO_FINAL=TRUE AND WORKLOAD_CATEGORY='AI')*100.0/NULLIF(COUNT_IF(IS_COCO_FINAL=TRUE),0),1) AS ai_share_pct
+      FROM TEMP.COCO_PARTNER_ADOPTION.V_OKR_USE_CASES_COCO_FINAL_Q3
+
+  - name: q3_technical_uc_breakdown
+    question: CoCo use cases by technical use case type in Q3
+    sql: |
+      SELECT
+        TECHNICAL_USE_CASE,
+        COUNT_IF(IS_COCO_FINAL=TRUE)  AS coco_uc,
+        COUNT(USE_CASE_ID)            AS total_uc
+      FROM TEMP.COCO_PARTNER_ADOPTION.V_OKR_USE_CASES_COCO_FINAL_Q3
+      WHERE TECHNICAL_USE_CASE IS NOT NULL AND IS_COCO_FINAL = TRUE
+      GROUP BY 1 ORDER BY coco_uc DESC NULLS LAST LIMIT 15
+
+  # ── CREDIT / TOKEN CONSUMPTION ──────────────────────────────────────────────
+
+  - name: q3_coco_credits_by_group
+    question: CoCo credit consumption by partner group in Q3
+    sql: |
+      SELECT
+        CASE
+          WHEN PARTNER_NAME IN ('Accenture','Capgemini Technologies LLC','Cognizant Technology Solutions US Corp','Deloitte Consulting','EY','Ernst & Young (EY)','IBM','IBM Consulting') THEN 'GSI'
+          WHEN PARTNER_NAME IN ('NTT DATA Group Corporation','MegazoneCloud Corporation','Infinite Lambda Limited','Infinite Lambda Inc','INFINITE LAMBDA (SINGAPORE) PTE. LTD.','Altis Consulting, ANZ','PROLIM Global Corporation') THEN 'APJ RSI'
+          WHEN PARTNER_NAME IN ('INFOMOTION GMBH','INFOMOTION GMBH, BearingPoint','CIVICA SOFTWARE, S.L.','Kubrick Group','KPC (Key Performance Consulting)','KPC') THEN 'EMEA RSI'
+          ELSE 'NOAM RSI'
+        END                                                                   AS partner_group,
+        ROUND(SUM(CASE WHEN IS_COCO_FINAL=TRUE THEN Q2_CREDITS ELSE 0 END),0) AS coco_credits,
+        ROUND(SUM(Q2_CREDITS),0)                                               AS total_credits,
+        COUNT_IF(IS_COCO_FINAL=TRUE)                                           AS coco_uc
+      FROM TEMP.COCO_PARTNER_ADOPTION.V_OKR_USE_CASES_COCO_FINAL_Q3
+      GROUP BY 1 ORDER BY coco_credits DESC NULLS LAST
+
+  - name: q3_wow_credits_by_partner
+    question: Week-over-week credit change by partner in Q3
+    sql: |
+      SELECT
+        PARTNER_NAME,
+        ROUND(SUM(CASE WHEN IS_COCO_FINAL=TRUE THEN LAST7_CREDITS ELSE 0 END),2)  AS last7_credits,
+        ROUND(SUM(CASE WHEN IS_COCO_FINAL=TRUE THEN PRIOR7_CREDITS ELSE 0 END),2) AS prior7_credits,
+        ROUND((SUM(CASE WHEN IS_COCO_FINAL=TRUE THEN LAST7_CREDITS ELSE 0 END)
+              -SUM(CASE WHEN IS_COCO_FINAL=TRUE THEN PRIOR7_CREDITS ELSE 0 END))*100.0
+              /NULLIF(SUM(CASE WHEN IS_COCO_FINAL=TRUE THEN PRIOR7_CREDITS ELSE 0 END),0),1) AS wow_pct
+      FROM TEMP.COCO_PARTNER_ADOPTION.V_OKR_USE_CASES_COCO_FINAL_Q3
+      WHERE LAST7_CREDITS > 0 OR PRIOR7_CREDITS > 0
+      GROUP BY 1 ORDER BY last7_credits DESC NULLS LAST
+
+  - name: q3_top10_accounts_by_credits
+    question: Top 10 customer accounts by CoCo credit consumption in Q3
+    sql: |
+      SELECT
+        ACCOUNT_NAME,
+        PARTNER_NAME,
+        ROUND(Q2_CREDITS,2)    AS q3_credits,
+        Q2_TOKENS              AS q3_tokens,
+        ROUND(LAST7_CREDITS,2) AS last7_credits,
+        ROUND(PRIOR7_CREDITS,2) AS prior7_credits
+      FROM TEMP.COCO_PARTNER_ADOPTION.V_OKR_USE_CASES_COCO_FINAL_Q3
+      WHERE IS_COCO_FINAL = TRUE AND Q2_CREDITS > 0
+      ORDER BY Q2_CREDITS DESC NULLS LAST LIMIT 10
+
+  - name: q3_wow_tokens_by_partner
+    question: Week-over-week token change by partner in Q3
+    sql: |
+      SELECT
+        PARTNER_NAME,
+        SUM(CASE WHEN IS_COCO_FINAL=TRUE THEN LAST7_TOKENS ELSE 0 END)   AS last7_tokens,
+        SUM(CASE WHEN IS_COCO_FINAL=TRUE THEN PRIOR7_TOKENS ELSE 0 END)  AS prior7_tokens,
+        ROUND((SUM(CASE WHEN IS_COCO_FINAL=TRUE THEN LAST7_TOKENS ELSE 0 END)
+              -SUM(CASE WHEN IS_COCO_FINAL=TRUE THEN PRIOR7_TOKENS ELSE 0 END))*100.0
+              /NULLIF(SUM(CASE WHEN IS_COCO_FINAL=TRUE THEN PRIOR7_TOKENS ELSE 0 END),0),1) AS wow_pct
+      FROM TEMP.COCO_PARTNER_ADOPTION.V_OKR_USE_CASES_COCO_FINAL_Q3
+      WHERE LAST7_TOKENS > 0 OR PRIOR7_TOKENS > 0
+      GROUP BY 1 ORDER BY last7_tokens DESC NULLS LAST
+
+  # ── QoQ COMPARISON ──────────────────────────────────────────────────────────
+
+  - name: q2_vs_q3_by_group
+    question: Compare CoCo adoption between Q2 and Q3 by partner group
+    sql: |
+      SELECT
+        g.partner_group,
+        q2.coco_uc AS q2_coco_uc, q2.total_uc AS q2_total_uc, q2.coco_pct AS q2_coco_pct,
+        q3.coco_uc AS q3_coco_uc, q3.total_uc AS q3_total_uc, q3.coco_pct AS q3_coco_pct,
+        q3.coco_uc - q2.coco_uc AS coco_uc_delta,
+        ROUND(q3.coco_pct - q2.coco_pct, 1) AS pct_delta
+      FROM (
+        SELECT CASE
+          WHEN PARTNER_NAME IN ('Accenture','Capgemini Technologies LLC','Cognizant Technology Solutions US Corp','Deloitte Consulting','EY','Ernst & Young (EY)','IBM','IBM Consulting') THEN 'GSI'
+          WHEN PARTNER_NAME IN ('NTT DATA Group Corporation','MegazoneCloud Corporation','Infinite Lambda Limited','Infinite Lambda Inc','INFINITE LAMBDA (SINGAPORE) PTE. LTD.','Altis Consulting, ANZ','PROLIM Global Corporation') THEN 'APJ RSI'
+          WHEN PARTNER_NAME IN ('INFOMOTION GMBH','INFOMOTION GMBH, BearingPoint','CIVICA SOFTWARE, S.L.','Kubrick Group','KPC (Key Performance Consulting)','KPC') THEN 'EMEA RSI'
+          ELSE 'NOAM RSI' END AS partner_group
+        FROM TEMP.COCO_PARTNER_ADOPTION.V_OKR_USE_CASES_COCO_FINAL_Q3
+        GROUP BY 1
+      ) g
+      LEFT JOIN (
+        SELECT CASE
+          WHEN PARTNER_NAME IN ('Accenture','Capgemini Technologies LLC','Cognizant Technology Solutions US Corp','Deloitte Consulting','EY','Ernst & Young (EY)','IBM','IBM Consulting') THEN 'GSI'
+          WHEN PARTNER_NAME IN ('NTT DATA Group Corporation','MegazoneCloud Corporation','Infinite Lambda Limited','Infinite Lambda Inc','INFINITE LAMBDA (SINGAPORE) PTE. LTD.','Altis Consulting, ANZ','PROLIM Global Corporation') THEN 'APJ RSI'
+          WHEN PARTNER_NAME IN ('INFOMOTION GMBH','INFOMOTION GMBH, BearingPoint','CIVICA SOFTWARE, S.L.','Kubrick Group','KPC (Key Performance Consulting)','KPC') THEN 'EMEA RSI'
+          ELSE 'NOAM RSI' END AS partner_group,
+          COUNT_IF(IS_COCO_FINAL=TRUE) AS coco_uc, COUNT(USE_CASE_ID) AS total_uc,
+          ROUND(COUNT_IF(IS_COCO_FINAL=TRUE)*100.0/NULLIF(COUNT(USE_CASE_ID),0),1) AS coco_pct
+        FROM TEMP.COCO_PARTNER_ADOPTION.V_OKR_USE_CASES_COCO_FINAL_Q2 GROUP BY 1
+      ) q2 ON g.partner_group = q2.partner_group
+      LEFT JOIN (
+        SELECT CASE
+          WHEN PARTNER_NAME IN ('Accenture','Capgemini Technologies LLC','Cognizant Technology Solutions US Corp','Deloitte Consulting','EY','Ernst & Young (EY)','IBM','IBM Consulting') THEN 'GSI'
+          WHEN PARTNER_NAME IN ('NTT DATA Group Corporation','MegazoneCloud Corporation','Infinite Lambda Limited','Infinite Lambda Inc','INFINITE LAMBDA (SINGAPORE) PTE. LTD.','Altis Consulting, ANZ','PROLIM Global Corporation') THEN 'APJ RSI'
+          WHEN PARTNER_NAME IN ('INFOMOTION GMBH','INFOMOTION GMBH, BearingPoint','CIVICA SOFTWARE, S.L.','Kubrick Group','KPC (Key Performance Consulting)','KPC') THEN 'EMEA RSI'
+          ELSE 'NOAM RSI' END AS partner_group,
+          COUNT_IF(IS_COCO_FINAL=TRUE) AS coco_uc, COUNT(USE_CASE_ID) AS total_uc,
+          ROUND(COUNT_IF(IS_COCO_FINAL=TRUE)*100.0/NULLIF(COUNT(USE_CASE_ID),0),1) AS coco_pct
+        FROM TEMP.COCO_PARTNER_ADOPTION.V_OKR_USE_CASES_COCO_FINAL_Q3 GROUP BY 1
+      ) q3 ON g.partner_group = q3.partner_group
+      ORDER BY g.partner_group
+
+  - name: q2_vs_q3_per_partner
+    question: Compare each partner's CoCo count between Q2 and Q3
+    sql: |
+      SELECT
+        COALESCE(q3.PARTNER_NAME, q2.PARTNER_NAME)   AS partner_name,
+        COALESCE(q2.coco_uc, 0)                       AS q2_coco_uc,
+        COALESCE(q3.coco_uc, 0)                       AS q3_coco_uc,
+        COALESCE(q3.coco_uc,0) - COALESCE(q2.coco_uc,0) AS delta
+      FROM (
+        SELECT PARTNER_NAME, COUNT_IF(IS_COCO_FINAL=TRUE) AS coco_uc
+        FROM TEMP.COCO_PARTNER_ADOPTION.V_OKR_USE_CASES_COCO_FINAL_Q2 GROUP BY 1
+      ) q2
+      FULL OUTER JOIN (
+        SELECT PARTNER_NAME, COUNT_IF(IS_COCO_FINAL=TRUE) AS coco_uc
+        FROM TEMP.COCO_PARTNER_ADOPTION.V_OKR_USE_CASES_COCO_FINAL_Q3 GROUP BY 1
+      ) q3 ON q2.PARTNER_NAME = q3.PARTNER_NAME
+      ORDER BY delta DESC NULLS LAST
+
+  # ── ATTRIBUTION SOURCE ──────────────────────────────────────────────────────
+
+  - name: q3_coco_by_attribution_source
+    question: CoCo use case attribution source breakdown in Q3
+    sql: |
+      SELECT
+        COCO_SOURCE,
+        COUNT(USE_CASE_ID)                                                            AS coco_uc,
+        ROUND(SUM(USE_CASE_EACV)/1e6,1)                                               AS eacv_m,
+        ROUND(SUM(Q2_CREDITS),0)                                                      AS credits
+      FROM TEMP.COCO_PARTNER_ADOPTION.V_OKR_USE_CASES_COCO_FINAL_Q3
+      WHERE IS_COCO_FINAL = TRUE AND COCO_SOURCE IS NOT NULL
+      GROUP BY 1 ORDER BY coco_uc DESC NULLS LAST
+
+  - name: q3_attribution_by_group
+    question: CoCo attribution source by partner group in Q3
+    sql: |
+      SELECT
+        CASE
+          WHEN PARTNER_NAME IN ('Accenture','Capgemini Technologies LLC','Cognizant Technology Solutions US Corp','Deloitte Consulting','EY','Ernst & Young (EY)','IBM','IBM Consulting') THEN 'GSI'
+          WHEN PARTNER_NAME IN ('NTT DATA Group Corporation','MegazoneCloud Corporation','Infinite Lambda Limited','Infinite Lambda Inc','INFINITE LAMBDA (SINGAPORE) PTE. LTD.','Altis Consulting, ANZ','PROLIM Global Corporation') THEN 'APJ RSI'
+          WHEN PARTNER_NAME IN ('INFOMOTION GMBH','INFOMOTION GMBH, BearingPoint','CIVICA SOFTWARE, S.L.','Kubrick Group','KPC (Key Performance Consulting)','KPC') THEN 'EMEA RSI'
+          ELSE 'NOAM RSI'
+        END       AS partner_group,
+        COCO_SOURCE,
+        COUNT(*)  AS coco_uc
+      FROM TEMP.COCO_PARTNER_ADOPTION.V_OKR_USE_CASES_COCO_FINAL_Q3
+      WHERE IS_COCO_FINAL = TRUE AND COCO_SOURCE IS NOT NULL
+      GROUP BY 1,2 ORDER BY 1,3 DESC NULLS LAST
+
+  # ── CONFIDENCE BAND ─────────────────────────────────────────────────────────
+
+  - name: q3_confidence_band_distribution
+    question: Distribution of use cases by confidence band in Q3
+    sql: |
+      SELECT
+        CONFIDENCE_BAND,
+        COUNT(USE_CASE_ID)   AS uc_count,
+        COUNT_IF(IS_COCO_FINAL=TRUE) AS coco_final_count,
+        ROUND(SUM(USE_CASE_EACV)/1e6,1) AS eacv_m
+      FROM TEMP.COCO_PARTNER_ADOPTION.V_OKR_USE_CASES_COCO_FINAL_Q3
+      GROUP BY 1 ORDER BY uc_count DESC NULLS LAST
+
+  # ── YTD ─────────────────────────────────────────────────────────────────────
 
   - name: ytd_by_partner_group
     question: FY27 YTD CoCo adoption rate by partner group
@@ -762,3 +1218,162 @@ verified_queries:
           'Kubrick Group','KPC (Key Performance Consulting)','KPC'
         )
       GROUP BY partner_group ORDER BY partner_group
+
+  - name: ytd_top10_partners
+    question: Top 10 partners by CoCo count for FY27 YTD
+    sql: |
+      SELECT
+        PARTNER_NAME,
+        COUNT_IF(IS_COCO_FINAL=TRUE)                                                  AS coco_uc,
+        COUNT(USE_CASE_ID)                                                            AS total_uc,
+        ROUND(COUNT_IF(IS_COCO_FINAL=TRUE)*100.0/NULLIF(COUNT(USE_CASE_ID),0),1)     AS coco_pct,
+        ROUND(SUM(CASE WHEN IS_COCO_FINAL=TRUE THEN USE_CASE_EACV ELSE 0 END)/1e6,1) AS coco_eacv_m
+      FROM TEMP.COCO_PARTNER_ADOPTION.V_OKR_USE_CASES_COCO_FINAL
+      WHERE PARTNER_NAME IN (
+        'Accenture','Capgemini Technologies LLC','Cognizant Technology Solutions US Corp',
+        'Deloitte Consulting','EY','Ernst & Young (EY)','IBM','IBM Consulting',
+        '7Rivers, Inc','Aimpoint Digital','BlueCloud Services Inc','kipi.ai','Kipi.ai',
+        'evolv Consulting','Infostrux Solutions Inc.','Infosys','KPMG LLP',
+        'LTM','LTI Mindtree','phData, Inc.','Slalom, LLC.','Squadron Data Inc','Tredence Inc.',
+        'Spaulding Ridge','TEKsystems Global Services, LLC.','Blend360, LLC','Tiger Analytics Inc.',
+        'Atrium','Perficient Inc.','SDK Tek Services Ltd.','Merkle','Archetype Consulting',
+        'Everforth Apex Systems','Tata Consultancy Services','OneSix','Icon Analytics',
+        'Sparq Holdings, Inc.','CitiusTech Inc.','Hexaware Technologies',
+        'NTT DATA Group Corporation','MegazoneCloud Corporation','Infinite Lambda Limited',
+        'Altis Consulting, ANZ','PROLIM Global Corporation',
+        'INFOMOTION GMBH','CIVICA SOFTWARE, S.L.','Kubrick Group','KPC (Key Performance Consulting)'
+      )
+      GROUP BY 1 ORDER BY coco_uc DESC NULLS LAST LIMIT 10
+
+  # ── INDUSTRY (joins MDM.MDM_INTERFACES.DIM_USE_CASE for ACCOUNT_INDUSTRY) ──
+
+  - name: q3_coco_by_industry
+    question: CoCo adoption by industry in Q3
+    sql: |
+      SELECT
+        d.ACCOUNT_INDUSTRY,
+        COUNT(v.USE_CASE_ID)                                                              AS total_uc,
+        COUNT_IF(v.IS_COCO_FINAL = TRUE)                                                  AS coco_uc,
+        ROUND(COUNT_IF(v.IS_COCO_FINAL=TRUE)*100.0/NULLIF(COUNT(v.USE_CASE_ID),0),1)     AS coco_pct,
+        ROUND(SUM(CASE WHEN v.IS_COCO_FINAL=TRUE THEN v.USE_CASE_EACV ELSE 0 END)/1e6,1) AS coco_eacv_m,
+        ROUND(SUM(CASE WHEN v.IS_COCO_FINAL=TRUE THEN v.Q2_CREDITS ELSE 0 END),0)         AS coco_credits
+      FROM TEMP.COCO_PARTNER_ADOPTION.V_OKR_USE_CASES_COCO_FINAL_Q3 v
+      JOIN MDM.MDM_INTERFACES.DIM_USE_CASE d ON v.USE_CASE_ID = d.USE_CASE_ID
+      WHERE d.ACCOUNT_INDUSTRY IS NOT NULL
+      GROUP BY 1 ORDER BY coco_uc DESC NULLS LAST
+
+  - name: q3_top_industries_by_eacv
+    question: Top industries by CoCo pipeline EACV in Q3
+    sql: |
+      SELECT
+        d.ACCOUNT_INDUSTRY,
+        COUNT_IF(v.IS_COCO_FINAL=TRUE)                                                    AS coco_uc,
+        ROUND(SUM(CASE WHEN v.IS_COCO_FINAL=TRUE THEN v.USE_CASE_EACV ELSE 0 END)/1e6,1) AS coco_eacv_m,
+        ROUND(SUM(CASE WHEN v.IS_COCO_FINAL=TRUE THEN v.Q2_CREDITS ELSE 0 END),0)         AS coco_credits
+      FROM TEMP.COCO_PARTNER_ADOPTION.V_OKR_USE_CASES_COCO_FINAL_Q3 v
+      JOIN MDM.MDM_INTERFACES.DIM_USE_CASE d ON v.USE_CASE_ID = d.USE_CASE_ID
+      WHERE d.ACCOUNT_INDUSTRY IS NOT NULL AND v.IS_COCO_FINAL = TRUE
+      GROUP BY 1 ORDER BY coco_eacv_m DESC NULLS LAST
+
+  - name: q3_industry_sub_industry_breakdown
+    question: CoCo adoption by industry and sub-industry in Q3
+    sql: |
+      SELECT
+        d.ACCOUNT_INDUSTRY,
+        d.ACCOUNT_SUB_INDUSTRY,
+        COUNT_IF(v.IS_COCO_FINAL=TRUE)                                                AS coco_uc,
+        COUNT(v.USE_CASE_ID)                                                          AS total_uc,
+        ROUND(COUNT_IF(v.IS_COCO_FINAL=TRUE)*100.0/NULLIF(COUNT(v.USE_CASE_ID),0),1) AS coco_pct,
+        ROUND(SUM(CASE WHEN v.IS_COCO_FINAL=TRUE THEN v.USE_CASE_EACV ELSE 0 END)/1e6,1) AS coco_eacv_m
+      FROM TEMP.COCO_PARTNER_ADOPTION.V_OKR_USE_CASES_COCO_FINAL_Q3 v
+      JOIN MDM.MDM_INTERFACES.DIM_USE_CASE d ON v.USE_CASE_ID = d.USE_CASE_ID
+      WHERE d.ACCOUNT_INDUSTRY IS NOT NULL AND d.ACCOUNT_SUB_INDUSTRY IS NOT NULL
+      GROUP BY 1,2 ORDER BY 1, coco_uc DESC NULLS LAST
+
+  - name: q3_financial_services_sub_industry
+    question: CoCo adoption breakdown within Financial Services in Q3
+    sql: |
+      SELECT
+        d.ACCOUNT_SUB_INDUSTRY,
+        COUNT_IF(v.IS_COCO_FINAL=TRUE)                                                AS coco_uc,
+        COUNT(v.USE_CASE_ID)                                                          AS total_uc,
+        ROUND(COUNT_IF(v.IS_COCO_FINAL=TRUE)*100.0/NULLIF(COUNT(v.USE_CASE_ID),0),1) AS coco_pct,
+        ROUND(SUM(CASE WHEN v.IS_COCO_FINAL=TRUE THEN v.USE_CASE_EACV ELSE 0 END)/1e6,1) AS coco_eacv_m
+      FROM TEMP.COCO_PARTNER_ADOPTION.V_OKR_USE_CASES_COCO_FINAL_Q3 v
+      JOIN MDM.MDM_INTERFACES.DIM_USE_CASE d ON v.USE_CASE_ID = d.USE_CASE_ID
+      WHERE d.ACCOUNT_INDUSTRY = 'Financial Services' AND d.ACCOUNT_SUB_INDUSTRY IS NOT NULL
+      GROUP BY 1 ORDER BY coco_uc DESC NULLS LAST
+
+  - name: q3_healthcare_sub_industry
+    question: CoCo adoption breakdown within Healthcare and Life Sciences in Q3
+    sql: |
+      SELECT
+        d.ACCOUNT_SUB_INDUSTRY,
+        COUNT_IF(v.IS_COCO_FINAL=TRUE)                                                AS coco_uc,
+        COUNT(v.USE_CASE_ID)                                                          AS total_uc,
+        ROUND(COUNT_IF(v.IS_COCO_FINAL=TRUE)*100.0/NULLIF(COUNT(v.USE_CASE_ID),0),1) AS coco_pct,
+        ROUND(SUM(CASE WHEN v.IS_COCO_FINAL=TRUE THEN v.USE_CASE_EACV ELSE 0 END)/1e6,1) AS coco_eacv_m
+      FROM TEMP.COCO_PARTNER_ADOPTION.V_OKR_USE_CASES_COCO_FINAL_Q3 v
+      JOIN MDM.MDM_INTERFACES.DIM_USE_CASE d ON v.USE_CASE_ID = d.USE_CASE_ID
+      WHERE d.ACCOUNT_INDUSTRY = 'Healthcare & Life Sciences' AND d.ACCOUNT_SUB_INDUSTRY IS NOT NULL
+      GROUP BY 1 ORDER BY coco_uc DESC NULLS LAST
+
+  - name: q3_industry_by_partner_group
+    question: Industry distribution of CoCo use cases by partner group in Q3
+    sql: |
+      SELECT
+        CASE
+          WHEN v.PARTNER_NAME IN ('Accenture','Capgemini Technologies LLC','Cognizant Technology Solutions US Corp','Deloitte Consulting','EY','Ernst & Young (EY)','IBM','IBM Consulting') THEN 'GSI'
+          WHEN v.PARTNER_NAME IN ('NTT DATA Group Corporation','MegazoneCloud Corporation','Infinite Lambda Limited','Infinite Lambda Inc','INFINITE LAMBDA (SINGAPORE) PTE. LTD.','Altis Consulting, ANZ','PROLIM Global Corporation') THEN 'APJ RSI'
+          WHEN v.PARTNER_NAME IN ('INFOMOTION GMBH','INFOMOTION GMBH, BearingPoint','CIVICA SOFTWARE, S.L.','Kubrick Group','KPC (Key Performance Consulting)','KPC') THEN 'EMEA RSI'
+          ELSE 'NOAM RSI'
+        END                            AS partner_group,
+        d.ACCOUNT_INDUSTRY,
+        COUNT_IF(v.IS_COCO_FINAL=TRUE) AS coco_uc
+      FROM TEMP.COCO_PARTNER_ADOPTION.V_OKR_USE_CASES_COCO_FINAL_Q3 v
+      JOIN MDM.MDM_INTERFACES.DIM_USE_CASE d ON v.USE_CASE_ID = d.USE_CASE_ID
+      WHERE v.IS_COCO_FINAL = TRUE AND d.ACCOUNT_INDUSTRY IS NOT NULL
+      GROUP BY 1,2 ORDER BY 1, coco_uc DESC NULLS LAST
+
+  - name: q3_highest_coco_pct_industries
+    question: Which industries have the highest CoCo adoption rate in Q3?
+    sql: |
+      SELECT
+        d.ACCOUNT_INDUSTRY,
+        COUNT_IF(v.IS_COCO_FINAL=TRUE)                                                AS coco_uc,
+        COUNT(v.USE_CASE_ID)                                                          AS total_uc,
+        ROUND(COUNT_IF(v.IS_COCO_FINAL=TRUE)*100.0/NULLIF(COUNT(v.USE_CASE_ID),0),1) AS coco_pct
+      FROM TEMP.COCO_PARTNER_ADOPTION.V_OKR_USE_CASES_COCO_FINAL_Q3 v
+      JOIN MDM.MDM_INTERFACES.DIM_USE_CASE d ON v.USE_CASE_ID = d.USE_CASE_ID
+      WHERE d.ACCOUNT_INDUSTRY IS NOT NULL
+      GROUP BY 1
+      HAVING COUNT(v.USE_CASE_ID) >= 5
+      ORDER BY coco_pct DESC NULLS LAST
+
+  - name: q3_industry_credits_ranking
+    question: Which industries consume the most CoCo credits in Q3?
+    sql: |
+      SELECT
+        d.ACCOUNT_INDUSTRY,
+        ROUND(SUM(CASE WHEN v.IS_COCO_FINAL=TRUE THEN v.Q2_CREDITS ELSE 0 END),0)    AS coco_credits,
+        COUNT_IF(v.IS_COCO_FINAL=TRUE)                                                AS coco_uc,
+        ROUND(SUM(CASE WHEN v.IS_COCO_FINAL=TRUE THEN v.Q2_CREDITS ELSE 0 END)
+              /NULLIF(COUNT_IF(v.IS_COCO_FINAL=TRUE),0),0)                            AS avg_credits_per_uc
+      FROM TEMP.COCO_PARTNER_ADOPTION.V_OKR_USE_CASES_COCO_FINAL_Q3 v
+      JOIN MDM.MDM_INTERFACES.DIM_USE_CASE d ON v.USE_CASE_ID = d.USE_CASE_ID
+      WHERE d.ACCOUNT_INDUSTRY IS NOT NULL AND v.IS_COCO_FINAL = TRUE
+      GROUP BY 1 ORDER BY coco_credits DESC NULLS LAST
+
+  - name: q3_enterprise_vs_majors_coco
+    question: CoCo adoption by account segment (Enterprise vs Majors) in Q3
+    sql: |
+      SELECT
+        d.ACCOUNT_SEGMENT,
+        COUNT_IF(v.IS_COCO_FINAL=TRUE)                                                AS coco_uc,
+        COUNT(v.USE_CASE_ID)                                                          AS total_uc,
+        ROUND(COUNT_IF(v.IS_COCO_FINAL=TRUE)*100.0/NULLIF(COUNT(v.USE_CASE_ID),0),1) AS coco_pct,
+        ROUND(SUM(CASE WHEN v.IS_COCO_FINAL=TRUE THEN v.USE_CASE_EACV ELSE 0 END)/1e6,1) AS coco_eacv_m
+      FROM TEMP.COCO_PARTNER_ADOPTION.V_OKR_USE_CASES_COCO_FINAL_Q3 v
+      JOIN MDM.MDM_INTERFACES.DIM_USE_CASE d ON v.USE_CASE_ID = d.USE_CASE_ID
+      WHERE d.ACCOUNT_SEGMENT IS NOT NULL
+      GROUP BY 1 ORDER BY coco_uc DESC NULLS LAST
