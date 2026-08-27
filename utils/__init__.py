@@ -65,6 +65,8 @@ def resolve_region_theaters(region: str) -> list:
         return ['EMEA']
     elif region == 'APJ':
         return ['APJ']
+    elif region == 'LATAM':
+        return ['LATAM']
     return None
 
 

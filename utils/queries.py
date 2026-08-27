@@ -89,6 +89,8 @@ def _theater_filter(region: str) -> str:
         return " AND THEATER_NAME = 'EMEA'"
     elif region == "APJ":
         return " AND THEATER_NAME = 'APJ'"
+    elif region == "LATAM":
+        return " AND REGION_NAME = 'LATAM'"
     return ""
 
 def _source_filter(source: str) -> str:

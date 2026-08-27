@@ -40,7 +40,7 @@ if "ask_ai_context" not in st.session_state:
 with st.sidebar:
     st.selectbox(
         "Region",
-        options=["Global", "NoAM", "EMEA", "APJ"],
+        options=["Global", "NoAM", "EMEA", "APJ", "LATAM"],
         key="_ui_region",
         help="Filter all pages by region"
     )
