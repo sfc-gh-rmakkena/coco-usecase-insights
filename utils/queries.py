@@ -664,6 +664,52 @@ def get_emea_rsi_adoption(_conn, start_date: str, end_date: str):
     """)
 
 @st.cache_data(ttl=timedelta(minutes=30))
+def get_latam_rsi_adoption(_conn, start_date: str, end_date: str):
+    """Per-partner CoCo adoption for the 5 LATAM RSIs, all restricted to REGION_NAME = 'LATAM'.
+    Viewnear | EgosBi | IVCISA | Seidor | Keyrus
+    """
+    date_filter = f"""(
+        (uc.USE_CASE_STAGE IN ('3 - Technical / Business Validation','4 - Use Case Won / Migration Plan')
+         AND uc.DECISION_DATE >= '{start_date}' AND uc.DECISION_DATE <= '{end_date}')
+        OR (uc.USE_CASE_STAGE IN ('5 - Implementation In Progress','6 - Implementation Complete','7 - Deployed')
+         AND uc.GO_LIVE_DATE >= '{start_date}' AND uc.GO_LIVE_DATE <= '{end_date}')
+    )"""
+    return _conn.query(f"""
+    SELECT
+        CASE
+            WHEN uc.PARTNER_NAME ILIKE '%Viewnear%'                        THEN 'Viewnear'
+            WHEN uc.PARTNER_NAME ILIKE '%EGOS BI%'                         THEN 'EgosBi'
+            WHEN uc.PARTNER_NAME ILIKE '%IVCISA%'                          THEN 'IVCISA'
+            WHEN uc.PARTNER_NAME ILIKE '%SEIDOR ANALYTICS%'                THEN 'Seidor'
+            WHEN uc.PARTNER_NAME ILIKE '%Keyrus Brasil%'                   THEN 'Keyrus'
+        END                                                         AS PARTNER_LABEL,
+        uc.REGION_NAME                                              AS COUNTRY,
+        COUNT(*)                                                    AS TOTAL_UCS,
+        SUM(CASE WHEN uc.IS_COCO THEN 1 ELSE 0 END)                AS COCO_UCS,
+        ROUND(SUM(CASE WHEN uc.IS_COCO THEN 1 ELSE 0 END) * 100.0
+              / NULLIF(COUNT(*), 0), 1)                             AS COCO_PCT,
+        SUM(CASE WHEN uc.USE_CASE_STAGE IN ('3 - Technical / Business Validation','4 - Use Case Won / Migration Plan') AND uc.IS_COCO THEN 1 ELSE 0 END) AS VALIDATION_COCO,
+        SUM(CASE WHEN uc.USE_CASE_STAGE = '5 - Implementation In Progress' AND uc.IS_COCO THEN 1 ELSE 0 END) AS IN_PROGRESS_COCO,
+        SUM(CASE WHEN uc.USE_CASE_STAGE IN ('6 - Implementation Complete','7 - Deployed') AND uc.IS_COCO THEN 1 ELSE 0 END) AS IMPL_COMPLETE_DEPLOYED_COCO,
+        SUM(CASE WHEN uc.USE_CASE_STAGE = '7 - Deployed' THEN 1 ELSE 0 END)       AS DEPLOYED_ALL,
+        SUM(CASE WHEN uc.USE_CASE_STAGE = '7 - Deployed' AND uc.IS_COCO THEN 1 ELSE 0 END) AS DEPLOYED_COCO,
+        COALESCE(SUM(uc.USE_CASE_EACV), 0)                                         AS TOTAL_EACV,
+        COALESCE(SUM(CASE WHEN uc.IS_COCO THEN uc.USE_CASE_EACV ELSE 0 END), 0)   AS COCO_EACV
+    FROM {DT_OKR} uc
+    WHERE {date_filter}
+      AND uc.REGION_NAME = 'LATAM'
+      AND (
+          uc.PARTNER_NAME ILIKE '%Viewnear%'
+          OR uc.PARTNER_NAME ILIKE '%EGOS BI%'
+          OR uc.PARTNER_NAME ILIKE '%IVCISA%'
+          OR uc.PARTNER_NAME ILIKE '%SEIDOR ANALYTICS%'
+          OR uc.PARTNER_NAME ILIKE '%Keyrus Brasil%'
+      )
+    GROUP BY PARTNER_LABEL, uc.REGION_NAME
+    ORDER BY PARTNER_LABEL
+    """)
+
+@st.cache_data(ttl=timedelta(minutes=30))
 def get_okr_coco_adoption(_conn, quarter_start, quarter_end, region=None, include_account_coco=True, confidence=None):
     tf = _theater_filter(region)
     coco_cte = _coco_accounts_cte(quarter_start, include_account_coco, confidence)

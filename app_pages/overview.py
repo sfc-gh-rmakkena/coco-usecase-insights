@@ -1,9 +1,9 @@
 import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
-from utils.queries import get_adoption_overview, get_adoption_by_partner, get_adoption_by_stage, get_adoption_by_region, get_by_technical_type, get_by_account_gvp, get_bulk_confidence_scores, get_partner_coco_coverage, get_all_uc_counts, get_all_uc_counts_by_theatre, get_partner_metrics_by_theatre, get_all_uc_counts_by_region, get_partner_metrics_by_region, get_apj_rsi_adoption, get_emea_rsi_adoption, get_gsi_adoption, get_noam_rsi_adoption
+from utils.queries import get_adoption_overview, get_adoption_by_partner, get_adoption_by_stage, get_adoption_by_region, get_by_technical_type, get_by_account_gvp, get_bulk_confidence_scores, get_partner_coco_coverage, get_all_uc_counts, get_all_uc_counts_by_theatre, get_partner_metrics_by_theatre, get_all_uc_counts_by_region, get_partner_metrics_by_region, get_apj_rsi_adoption, get_emea_rsi_adoption, get_latam_rsi_adoption, get_gsi_adoption, get_noam_rsi_adoption
 from utils import resolve_partner_filter, resolve_region_theaters, filter_out_partner_own_accounts, apply_coco_final
-from utils import APJ_RSI_REGION_MAP, EMEA_RSI_REGION_MAP
+from utils import APJ_RSI_REGION_MAP, EMEA_RSI_REGION_MAP, LATAM_RSI_REGION_MAP
 from utils import PARTNER_ALIASES as _PA_EARLY
 
 # Combined set of all managed partner names (GSI + NOAM RSI + APJ RSI + EMEA RSI)
@@ -18,7 +18,8 @@ _NOAM_RSI_PARTNER_NAMES = set(
 ) | {'LTI Mindtree', 'Kipi.ai'}
 _APJ_RSI_PARTNER_NAMES  = set(APJ_RSI_REGION_MAP.keys())
 _EMEA_RSI_PARTNER_NAMES = set(EMEA_RSI_REGION_MAP.keys())
-_ALL_MANAGED_PARTNERS   = _GSI_PARTNER_NAMES | _NOAM_RSI_PARTNER_NAMES | _APJ_RSI_PARTNER_NAMES | _EMEA_RSI_PARTNER_NAMES
+_LATAM_RSI_PARTNER_NAMES = set(LATAM_RSI_REGION_MAP.keys())
+_ALL_MANAGED_PARTNERS   = _GSI_PARTNER_NAMES | _NOAM_RSI_PARTNER_NAMES | _APJ_RSI_PARTNER_NAMES | _EMEA_RSI_PARTNER_NAMES | _LATAM_RSI_PARTNER_NAMES
 
 # NoAM theater list — needed by managed-bc builder and region breakdown
 _NOAM_THEATERS = ('AMSExpansion', 'USMajors', 'AMSAcquisition', 'USPubSec')
@@ -218,7 +219,7 @@ _selected_partner_names = set(resolve_partner_filter(selected_partners)) if sele
 
 def _build_managed_bc(bc):
     """Return a bulk_conf slice covering managed partners with geo restrictions applied.
-    GSI: global, NOAM RSI: NoAM theaters, APJ/EMEA RSI: country/region-scoped.
+    GSI: global, NOAM RSI: NoAM theaters, APJ/EMEA/LATAM RSI: country/region-scoped.
     Respects sidebar partner filter (_selected_partner_names)."""
     if bc is None or len(bc) == 0 or 'IS_COCO_FINAL' not in bc.columns:
         return pd.DataFrame()
@@ -235,6 +236,8 @@ def _build_managed_bc(bc):
         _emea = bc[bc['PARTNER_NAME'].isin(_pf(_EMEA_RSI_PARTNER_NAMES))].copy()
         _emea['_c'] = _emea['PARTNER_NAME'].map({k: v[1] for k, v in EMEA_RSI_REGION_MAP.items()})
         parts.append(_emea[_emea['REGION_NAME'] == _emea['_c']].drop(columns=['_c']))
+        _latam = bc[bc['PARTNER_NAME'].isin(_pf(_LATAM_RSI_PARTNER_NAMES))].copy()
+        parts.append(_latam[_latam['REGION_NAME'] == 'LATAM'])
     return pd.concat([p for p in parts if len(p) > 0], ignore_index=True) if parts else pd.DataFrame()
 
 if len(bulk_conf) > 0 and 'IS_COCO_FINAL' in bulk_conf.columns:
@@ -360,11 +363,13 @@ _gsi_total,  _gsi_coco,  _gsi_pct  = _group_stats(_gauge_bc, _GSI_PARTNER_NAMES)
 _noam_total, _noam_coco, _noam_pct = _group_stats(_gauge_bc, _NOAM_RSI_PARTNER_NAMES)
 _apj_total,  _apj_coco,  _apj_pct  = _group_stats(_gauge_bc, _APJ_RSI_PARTNER_NAMES)
 _emea_total, _emea_coco, _emea_pct = _group_stats(_gauge_bc, _EMEA_RSI_PARTNER_NAMES)
-_gc1, _gc2, _gc3, _gc4 = st.columns(4)
+_latam_total, _latam_coco, _latam_pct = _group_stats(_gauge_bc, _LATAM_RSI_PARTNER_NAMES)
+_gc1, _gc2, _gc3, _gc4, _gc5 = st.columns(5)
 _gc1.plotly_chart(_make_gauge("GSI",      _gsi_pct,  _gsi_total,  _gsi_coco,  75), use_container_width=True)
 _gc2.plotly_chart(_make_gauge("NOAM RSI", _noam_pct, _noam_total, _noam_coco, 75), use_container_width=True)
 _gc3.plotly_chart(_make_gauge("APJ RSI",  _apj_pct,  _apj_total,  _apj_coco,  50), use_container_width=True)
 _gc4.plotly_chart(_make_gauge("EMEA RSI", _emea_pct, _emea_total, _emea_coco, 50), use_container_width=True)
+_gc5.plotly_chart(_make_gauge("LATAM RSI", _latam_pct, _latam_total, _latam_coco, 50), use_container_width=True)
 
 st.divider()
 
@@ -1020,6 +1025,127 @@ with st.expander(":material/language: APJ RSI CoCo Adoption (50% Target)", expan
                 'Tokens Consumed': st.column_config.NumberColumn(format="%d"),
                 'Last 7d Tokens':  st.column_config.NumberColumn(format="%d"),
                 '7D Tokens WoW%':     st.column_config.NumberColumn(format="%+.1f%%"),
+            },
+            hide_index=True, use_container_width=True,
+        )
+
+# ─── LATAM RSI Section ───────────────────────────────────────────────────────
+with st.expander("🌎 LATAM RSI CoCo Adoption", expanded=False):
+    _latam_base = get_latam_rsi_adoption(conn, start_date, end_date)
+    if _selected_partner_names and 'PARTNER_LABEL' in _latam_base.columns:
+        _latam_canonical_sel = {v[0] for k, v in LATAM_RSI_REGION_MAP.items() if k in _selected_partner_names}
+        if _latam_canonical_sel:
+            _latam_base = _latam_base[_latam_base['PARTNER_LABEL'].isin(_latam_canonical_sel)]
+        else:
+            _latam_base = _latam_base.iloc[0:0]
+
+    _LATAM_SKELETON = pd.DataFrame([
+        {'PARTNER_LABEL': 'EgosBi',   'COUNTRY': 'LATAM (Mexico)'},
+        {'PARTNER_LABEL': 'IVCISA',   'COUNTRY': 'LATAM (CALA)'},
+        {'PARTNER_LABEL': 'Keyrus',   'COUNTRY': 'LATAM (Brazil)'},
+        {'PARTNER_LABEL': 'Seidor',   'COUNTRY': 'LATAM (CALA)'},
+        {'PARTNER_LABEL': 'Viewnear', 'COUNTRY': 'LATAM (Mexico)'},
+    ])
+
+    if len(_latam_base) > 0:
+        _latam_sql_agg = _latam_base.groupby('PARTNER_LABEL').agg(
+            TOTAL_UCS=('TOTAL_UCS', 'sum'),
+            COCO_UCS_SQL=('COCO_UCS', 'sum'),
+            VALIDATION_SQL=('VALIDATION_COCO', 'sum'),
+            IN_PROGRESS_SQL=('IN_PROGRESS_COCO', 'sum'),
+            IMPL_COMPLETE_DEPLOYED_SQL=('IMPL_COMPLETE_DEPLOYED_COCO', 'sum'),
+            DEPLOYED_ALL=('DEPLOYED_ALL', 'sum'),
+            DEPLOYED_COCO_SQL=('DEPLOYED_COCO', 'sum'),
+            TOTAL_EACV=('TOTAL_EACV', 'sum'),
+            COCO_EACV_SQL=('COCO_EACV', 'sum'),
+        ).reset_index()
+    else:
+        _latam_sql_agg = pd.DataFrame(columns=['PARTNER_LABEL','TOTAL_UCS','COCO_UCS_SQL','VALIDATION_SQL','IN_PROGRESS_SQL','IMPL_COMPLETE_DEPLOYED_SQL','DEPLOYED_ALL','DEPLOYED_COCO_SQL','TOTAL_EACV','COCO_EACV_SQL'])
+
+    _latam_df = _LATAM_SKELETON.merge(_latam_sql_agg, on='PARTNER_LABEL', how='left').fillna(0)
+    _latam_df[['TOTAL_UCS','COCO_UCS_SQL','VALIDATION_SQL','IN_PROGRESS_SQL','IMPL_COMPLETE_DEPLOYED_SQL','DEPLOYED_ALL','DEPLOYED_COCO_SQL']] = \
+        _latam_df[['TOTAL_UCS','COCO_UCS_SQL','VALIDATION_SQL','IN_PROGRESS_SQL','IMPL_COMPLETE_DEPLOYED_SQL','DEPLOYED_ALL','DEPLOYED_COCO_SQL']].astype(int)
+    if 'TOTAL_EACV' not in _latam_df.columns: _latam_df['TOTAL_EACV'] = 0.0
+    if 'COCO_EACV_SQL' not in _latam_df.columns: _latam_df['COCO_EACV_SQL'] = 0.0
+
+    if len(_managed_bc) > 0 and "IS_COCO_FINAL" in _managed_bc.columns:
+        _latam_rsi_names = list(LATAM_RSI_REGION_MAP.keys())
+        _latam_bc = _managed_bc[_managed_bc['PARTNER_NAME'].isin(_latam_rsi_names)].copy()
+        _latam_bc['_label'] = _latam_bc['PARTNER_NAME'].map({k: v[0] for k, v in LATAM_RSI_REGION_MAP.items()})
+        if 'REGION_NAME' in _latam_bc.columns:
+            _latam_bc = _latam_bc[_latam_bc['REGION_NAME'] == 'LATAM']
+        _latam_bc['_s3']  = _latam_bc['IS_COCO_FINAL'] & (_latam_bc['USE_CASE_STAGE'] == '3 - Technical / Business Validation')
+        _latam_bc['_s4']  = _latam_bc['IS_COCO_FINAL'] & (_latam_bc['USE_CASE_STAGE'] == '4 - Use Case Won / Migration Plan')
+        _latam_bc['_s5']  = _latam_bc['IS_COCO_FINAL'] & (_latam_bc['USE_CASE_STAGE'] == '5 - Implementation In Progress')
+        _latam_bc['_s6']  = _latam_bc['IS_COCO_FINAL'] & (_latam_bc['USE_CASE_STAGE'] == '6 - Implementation Complete')
+        _latam_bc['_s7']  = _latam_bc['IS_COCO_FINAL'] & (_latam_bc['USE_CASE_STAGE'] == '7 - Deployed')
+        _lbc_agg = (
+            _latam_bc.groupby('_label')
+            .agg(COCO_FINAL_UCS=('IS_COCO_FINAL', 'sum'),
+                 S3_COCO=('_s3','sum'), S4_COCO=('_s4','sum'), S5_COCO=('_s5','sum'),
+                 S6_COCO=('_s6','sum'), S7_COCO=('_s7','sum'),
+                 DEPLOYED_COCO=('_s7','sum'))
+            .reset_index().rename(columns={'_label': 'PARTNER_LABEL'})
+        )
+        _latam_df = _latam_df.merge(_lbc_agg, on='PARTNER_LABEL', how='left')
+        for _c in ['COCO_FINAL_UCS','S3_COCO','S4_COCO','S5_COCO','S6_COCO','S7_COCO','DEPLOYED_COCO']:
+            _latam_df[_c] = _latam_df[_c].fillna(0).astype(int)
+        _latam_bc_eacv = _latam_bc.assign(_coco_eacv=_latam_bc['USE_CASE_EACV'].where(_latam_bc['IS_COCO_FINAL'], 0)).groupby('_label').agg(COCO_EACV=('_coco_eacv', 'sum')).reset_index().rename(columns={'_label':'PARTNER_LABEL'})
+        _latam_df = _latam_df.merge(_latam_bc_eacv, on='PARTNER_LABEL', how='left')
+        _latam_df['COCO_EACV'] = _latam_df['COCO_EACV'].fillna(0)
+    else:
+        _latam_df['COCO_FINAL_UCS'] = _latam_df['COCO_UCS_SQL']
+        _latam_df['COCO_EACV']      = _latam_df['COCO_EACV_SQL']
+        for _c in ['S3_COCO','S4_COCO','S5_COCO','S6_COCO','S7_COCO']:
+            _latam_df[_c] = _latam_df.get(f'{_c}_SQL', pd.Series(0, index=_latam_df.index)).fillna(0).astype(int)
+        _latam_df['DEPLOYED_COCO'] = _latam_df['S7_COCO']
+
+    _latam_df['COCO_PCT'] = (
+        _latam_df['COCO_FINAL_UCS'] * 100.0 /
+        _latam_df['TOTAL_UCS'].replace(0, float('nan'))
+    ).round(1).fillna(0)
+
+    LATAM_TARGET = 50
+    _latam_df['Status'] = _latam_df['COCO_PCT'].apply(
+        lambda p: '✅ On target' if p >= LATAM_TARGET else (f'⚠️ {LATAM_TARGET-p:.0f}% to go' if p > 0 else '— No UCs')
+    )
+
+    _render_coco_funnel(
+        total=int(_latam_df['TOTAL_UCS'].sum()),
+        coco=int(_latam_df['COCO_FINAL_UCS'].sum()),
+        s3=int(_latam_df['S3_COCO'].sum()) if 'S3_COCO' in _latam_df.columns else 0,
+        s4=int(_latam_df['S4_COCO'].sum()) if 'S4_COCO' in _latam_df.columns else 0,
+        s5=int(_latam_df['S5_COCO'].sum()) if 'S5_COCO' in _latam_df.columns else 0,
+        s6=int(_latam_df['S6_COCO'].sum()) if 'S6_COCO' in _latam_df.columns else 0,
+        s7=int(_latam_df['S7_COCO'].sum()) if 'S7_COCO' in _latam_df.columns else 0,
+    )
+
+    with st.expander(":material/table_chart: Partner detail", expanded=False):
+        _latam_display = _latam_df[['PARTNER_LABEL','COUNTRY','TOTAL_UCS','COCO_FINAL_UCS','COCO_PCT','TOTAL_EACV','COCO_EACV','Status']].copy()
+        _latam_tok = _build_token_usage(_bc_managed, LATAM_RSI_REGION_MAP)
+        if len(_latam_tok) > 0:
+            _latam_display = _latam_display.merge(_latam_tok, on='PARTNER_LABEL', how='left')
+        _latam_display = _latam_display.sort_values('COCO_PCT', ascending=False)
+        _latam_display = _add_totals_row(
+            _latam_display.rename(columns={
+                'PARTNER_LABEL': 'Partner', 'COUNTRY': 'Country',
+                'TOTAL_UCS': 'Total UCs', 'COCO_FINAL_UCS': 'CoCo UCs',
+                'COCO_PCT': 'CoCo % vs 50% Target',
+                'TOTAL_EACV': 'Total EACV ($)', 'COCO_EACV': 'CoCo EACV ($)',
+            }),
+            scope_col='Country', pct_col='CoCo % vs 50% Target',
+        )
+        st.dataframe(
+            _latam_display,
+            column_config={
+                'CoCo % vs 50% Target': st.column_config.ProgressColumn(min_value=0, max_value=100, format="%.1f%%"),
+                'Total UCs':       st.column_config.NumberColumn(format="%d"),
+                'CoCo UCs':        st.column_config.NumberColumn(format="%d"),
+                'Total EACV ($)':  st.column_config.NumberColumn(format="$%.0f"),
+                'CoCo EACV ($)':   st.column_config.NumberColumn(format="$%.0f"),
+                'Tokens Consumed': st.column_config.NumberColumn(format="%d"),
+                'Last 7d Tokens':  st.column_config.NumberColumn(format="%d"),
+                '7D Tokens WoW%':  st.column_config.NumberColumn(format="%+.1f%%"),
             },
             hide_index=True, use_container_width=True,
         )
