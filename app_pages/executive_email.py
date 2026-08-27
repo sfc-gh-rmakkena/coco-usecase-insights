@@ -16,7 +16,7 @@ from utils.queries import (
     get_partner_velocity_data, get_account_coco_credits,
 )
 from utils.cortex_helpers import cortex_complete
-from utils import APJ_RSI_REGION_MAP, EMEA_RSI_REGION_MAP, PARTNER_ALIASES as _PA_EMAIL, apply_coco_final
+from utils import APJ_RSI_REGION_MAP, EMEA_RSI_REGION_MAP, LATAM_RSI_REGION_MAP, PARTNER_ALIASES as _PA_EMAIL, apply_coco_final
 
 # Restricted page. streamlit_app.py hides the nav entry for anyone not on the list;
 # this second check stops a direct page URL from rendering the report anyway. Note
@@ -28,11 +28,12 @@ if not st.session_state.get("exec_email_allowed", False):
     )
     st.stop()
 
-_NOAM_RSI_NAMES_EMAIL = frozenset(
+_NOAM_RSI_NAMES_EMAIL  = frozenset(
     p for p in _PA_EMAIL.get('--- NOAM RSIs ---', []) if not p.startswith('---')
 ) | {'LTI Mindtree', 'Kipi.ai'}
-_APJ_RSI_NAMES_EMAIL  = frozenset(APJ_RSI_REGION_MAP.keys())
-_EMEA_RSI_NAMES_EMAIL = frozenset(EMEA_RSI_REGION_MAP.keys())
+_APJ_RSI_NAMES_EMAIL   = frozenset(APJ_RSI_REGION_MAP.keys())
+_EMEA_RSI_NAMES_EMAIL  = frozenset(EMEA_RSI_REGION_MAP.keys())
+_LATAM_RSI_NAMES_EMAIL = frozenset(LATAM_RSI_REGION_MAP.keys())
 
 MANAGED_PARTNERS = list(
     # GSIs
@@ -41,6 +42,7 @@ MANAGED_PARTNERS = list(
     | _NOAM_RSI_NAMES_EMAIL
     | _APJ_RSI_NAMES_EMAIL
     | _EMEA_RSI_NAMES_EMAIL
+    | _LATAM_RSI_NAMES_EMAIL
 )
 
 # GSIs report globally (all theaters); NOAM RSIs report NoAM only.
@@ -86,15 +88,20 @@ _seen_emea = {}
 for k, v in EMEA_RSI_REGION_MAP.items():
     _seen_emea.setdefault(v[0], k)
 _HEATMAP_EMEA = [(label, key) for label, key in _seen_emea.items()]
+_seen_latam = {}
+for k, v in LATAM_RSI_REGION_MAP.items():
+    _seen_latam.setdefault(v[0], k)
+_HEATMAP_LATAM = [(label, key) for label, key in _seen_latam.items()]
 
-HEATMAP_PARTNERS = _HEATMAP_GSI + _HEATMAP_NOAM + _HEATMAP_APJ + _HEATMAP_EMEA
-# Group target thresholds for heatmap colouring (GSI/NOAM=75%, APJ/EMEA=50%)
+HEATMAP_PARTNERS = _HEATMAP_GSI + _HEATMAP_NOAM + _HEATMAP_APJ + _HEATMAP_EMEA + _HEATMAP_LATAM
+# Group target thresholds for heatmap colouring (GSI/NOAM=75%, APJ/EMEA/LATAM=50%)
 _HEATMAP_GSI_KEYS  = {k for _, k in _HEATMAP_GSI}
 _HEATMAP_NOAM_KEYS = {k for _, k in _HEATMAP_NOAM}
 _APJ_KEYS_HEATMAP  = {k for _, k in _HEATMAP_APJ}
 _EMEA_KEYS_HEATMAP = {k for _, k in _HEATMAP_EMEA}
+_LATAM_KEYS_HEATMAP = {k for _, k in _HEATMAP_LATAM}
 def _partner_target(data_key):
-    return 50 if (data_key in _APJ_KEYS_HEATMAP or data_key in _EMEA_KEYS_HEATMAP) else 75
+    return 50 if (data_key in _APJ_KEYS_HEATMAP or data_key in _EMEA_KEYS_HEATMAP or data_key in _LATAM_KEYS_HEATMAP) else 75
 
 
 def _fmt_tokens(n):
@@ -861,15 +868,19 @@ with st.spinner("Loading data..."):
         if 'REGION_NAME' in _emea_rsi_rows.columns and len(_emea_rsi_rows) > 0:
             _emea_rsi_rows['_c'] = _emea_rsi_rows['PARTNER_NAME'].map({k: v[1] for k, v in EMEA_RSI_REGION_MAP.items()})
             _emea_rsi_rows = _emea_rsi_rows[_emea_rsi_rows['REGION_NAME'] == _emea_rsi_rows['_c']].drop(columns=['_c'])
+        _latam_rsi_rows = managed_bulk_conf[managed_bulk_conf['PARTNER_NAME'].isin(_LATAM_RSI_NAMES_EMAIL)].copy()
+        if 'REGION_NAME' in _latam_rsi_rows.columns and len(_latam_rsi_rows) > 0:
+            _latam_rsi_rows = _latam_rsi_rows[_latam_rsi_rows['REGION_NAME'] == 'LATAM']
         # Merge aliases into canonical names
         _gsi_rows['PARTNER_NAME'] = _gsi_rows['PARTNER_NAME'].replace({'Ernst & Young (EY)': 'EY', 'IBM Consulting': 'IBM'})
         _noam_rsi_rows['PARTNER_NAME'] = _noam_rsi_rows['PARTNER_NAME'].replace({'Kipi.ai': 'kipi.ai', 'LTI Mindtree': 'LTM'})
         # Tag group for each row
         _gsi_rows['_GROUP'] = 'GSI'
         _noam_rsi_rows['_GROUP'] = 'NOAM RSI'
-        _apj_rsi_rows['_GROUP'] = 'APJ RSI'
-        _emea_rsi_rows['_GROUP'] = 'EMEA RSI'
-        managed_bulk_conf = pd.concat([_gsi_rows, _noam_rsi_rows, _apj_rsi_rows, _emea_rsi_rows], ignore_index=True)
+        _apj_rsi_rows['_GROUP']   = 'APJ RSI'
+        _emea_rsi_rows['_GROUP']  = 'EMEA RSI'
+        _latam_rsi_rows['_GROUP'] = 'LATAM RSI'
+        managed_bulk_conf = pd.concat([_gsi_rows, _noam_rsi_rows, _apj_rsi_rows, _emea_rsi_rows, _latam_rsi_rows], ignore_index=True)
 
     if len(managed_bulk_conf) > 0:
         managed_bulk_conf['IS_COCO_FINAL'] = apply_coco_final(managed_bulk_conf, _EMAIL_BANDS)
@@ -1427,10 +1438,11 @@ def _okr_row(grp_df, label, target_pct, group_tag=None):
     )
 
 if len(managed_bulk_conf) > 0 and '_GROUP' in managed_bulk_conf.columns:
-    regional_okr_ctx += _okr_row(managed_bulk_conf[managed_bulk_conf['_GROUP'] == 'GSI'],      'GSI (Global, all regions)', 75, 'GSI')
-    regional_okr_ctx += _okr_row(managed_bulk_conf[managed_bulk_conf['_GROUP'] == 'NOAM RSI'], 'NOAM RSI (NoAM only)',       75, 'NOAM RSI')
-    regional_okr_ctx += _okr_row(managed_bulk_conf[managed_bulk_conf['_GROUP'] == 'APJ RSI'],  'APJ RSI (APJ geo)',          50, 'APJ RSI')
-    regional_okr_ctx += _okr_row(managed_bulk_conf[managed_bulk_conf['_GROUP'] == 'EMEA RSI'], 'EMEA RSI (EMEA geo)',        50, 'EMEA RSI')
+    regional_okr_ctx += _okr_row(managed_bulk_conf[managed_bulk_conf['_GROUP'] == 'GSI'],       'GSI (Global, all regions)', 75, 'GSI')
+    regional_okr_ctx += _okr_row(managed_bulk_conf[managed_bulk_conf['_GROUP'] == 'NOAM RSI'],  'NOAM RSI (NoAM only)',       75, 'NOAM RSI')
+    regional_okr_ctx += _okr_row(managed_bulk_conf[managed_bulk_conf['_GROUP'] == 'APJ RSI'],   'APJ RSI (APJ geo)',          50, 'APJ RSI')
+    regional_okr_ctx += _okr_row(managed_bulk_conf[managed_bulk_conf['_GROUP'] == 'EMEA RSI'],  'EMEA RSI (EMEA geo)',        50, 'EMEA RSI')
+    regional_okr_ctx += _okr_row(managed_bulk_conf[managed_bulk_conf['_GROUP'] == 'LATAM RSI'], 'LATAM RSI (LATAM geo)',      50, 'LATAM RSI')
 
 # Quarter-progress trend — is the number of CoCo use cases still climbing, and how much
 # runway is left? Deliberately expressed as weeks remaining rather than calendar dates.
@@ -1817,9 +1829,9 @@ if len(managed_bulk_conf) > 0:
 
     _grp_targets = {'GSI': 75, 'NOAM RSI': 75, 'APJ RSI': 50, 'EMEA RSI': 50}
     _vel_lines   = []
-    # Canonical UNIQUE partner counts (aliases deduplicated): GSI=6, NOAM RSI=29, APJ RSI=5, EMEA RSI=4 → total 44
-    _CANONICAL_TOTAL = 44
-    _grp_sizes = {'GSI': 6, 'NOAM RSI': 29, 'APJ RSI': 5, 'EMEA RSI': 4}
+    # Canonical UNIQUE partner counts (aliases deduplicated): GSI=6, NOAM RSI=29, APJ RSI=5, EMEA RSI=4, LATAM RSI=5 → total 49
+    _CANONICAL_TOTAL = 49
+    _grp_sizes = {'GSI': 6, 'NOAM RSI': 29, 'APJ RSI': 5, 'EMEA RSI': 4, 'LATAM RSI': 5}
     _total_close = 0
     _close_names = []
     for _grp, _tgt in _grp_targets.items():
@@ -1866,7 +1878,7 @@ if len(managed_bulk_conf) > 0:
         f"  Partners within 1-2 UCs of threshold: {_total_close} ({', '.join(_close_names[:5])}{'...' if len(_close_names) > 5 else ''})\n"
         + '\n'.join(_vel_lines) + '\n'
         + f"  Trend: {_trend_str}\n"
-        + f"  NOTE: Total is {_CANONICAL_TOTAL} unique partners (GSI=6, NOAM RSI=29, APJ RSI=5, EMEA RSI=4). Use only these pre-computed figures. Do NOT fabricate partner names, counts, or percentages.\n"
+        + f"  NOTE: Total is {_CANONICAL_TOTAL} unique partners (GSI=6, NOAM RSI=29, APJ RSI=5, EMEA RSI=4, LATAM RSI=5). Use only these pre-computed figures. Do NOT fabricate partner names, counts, or percentages.\n"
     )
 
     # ── Narrative: EACV Conversion Opportunity ──────────────────────────────
@@ -2025,15 +2037,15 @@ recipients_input = st.text_area(
 default_prompt = f"""You are writing a polished executive briefing for Snowflake leadership on CoCo partner use case performance for Q3 FY27 (Aug–Oct 2026). This will be read by VPs and the CEO — keep it sharp, data-rich, and action-oriented.
 Do NOT include a title, heading, or subject line like "Cortex Code (CoCo) Partner Use Case Traction" at the top of the email. Start directly with the Note block.
 
-SCOPE: 4 partner groups — GSIs report GLOBAL numbers; NOAM RSIs report NoAM only; APJ RSIs report their respective APJ geo region; EMEA RSIs report their respective EMEA geo region.  All numbers in your output MUST come from the PRE-COMPUTED METRICS in the data context. Do NOT perform arithmetic, comparisons, or derivations on raw data — the metrics are final. Do not Fabricate any date 
+SCOPE: 5 partner groups — GSIs report GLOBAL numbers; NOAM RSIs report NoAM only; APJ RSIs report their respective APJ geo region; EMEA RSIs report their respective EMEA geo region; LATAM RSIs report LATAM geo.  All numbers in your output MUST come from the PRE-COMPUTED METRICS in the data context. Do NOT perform arithmetic, comparisons, or derivations on raw data — the metrics are final. Do not Fabricate any date 
 
 Follow this EXACT structure with 9 sections:
 
-## **Note: Q3 OKR — 6 GSIs global (all regions) | 32 NOAM RSIs: NoAM only | 5 APJ RSIs: APJ geo | 4 EMEA RSIs: EMEA geo.**
+## **Note: Q3 OKR — 6 GSIs global (all regions) | 32 NOAM RSIs: NoAM only | 5 APJ RSIs: APJ geo | 4 EMEA RSIs: EMEA geo | 5 LATAM RSIs: LATAM geo.**
 
 ## EXECUTIVE SUMMARY
 2-3 sentences maximum, then exactly 6 bullets.
-- Open with: "[X] CoCo use cases across 44 managed partners **(GSIs global + NOAM/APJ/EMEA RSIs geo-scoped)** representing $[Z]M in CoCo EACV, with [W] deployed in production."
+- Open with: "[X] CoCo use cases across 49 managed partners **(GSIs global + NOAM/APJ/EMEA/LATAM RSIs geo-scoped)** representing $[Z]M in CoCo EACV, with [W] deployed in production."
 - Second sentence: one crisp insight on the dominant pattern.
 - Bullet 1: "**Leading use case types:** [top 3 by count]"
 - Bullet 2: "**CoCo Adoption:** [X]% overall — GSIs: [GSI%] | NOAM RSIs: [NOAM%] | APJ RSIs: [APJ%] | EMEA RSIs: [EMEA%]"
@@ -2089,6 +2101,12 @@ Follow this EXACT structure with 9 sections:
 - Show ALL EMEA RSI partners. Sort by EACV descending. UCs are each partner's respective EMEA region.
 - The number of rows MUST equal the EXPECTED ROWS value stated for this group in the context. Include every partner listed, including any with 0 UCs. Do not omit, merge or summarise rows.
 - After table: one sentence . Give one senetence which RSI's are leading and  are lagging by theatre, based on last 4 weeks trend what RSI's are doing - type of engagements
+
+## PARTNER SCORECARD — LATAM RSI (LATAM geo-restricted, target 50%)
+| Partner | Total UCs | CoCo UCs | CoCo% | WoW Δ% | WoW Δ UCs | EACV | AI | DE | Analytics | Q3 Tokens | Q3 Credits | Last 7d Credits | 7D Credits WoW% |
+- Show ALL LATAM RSI partners. Sort by EACV descending. UCs are LATAM geo only.
+- The number of rows MUST equal the EXPECTED ROWS value stated for this group in the context. Include every partner listed, including any with 0 UCs. Do not omit, merge or summarise rows.
+- After table: one sentence. Give one sentence which RSI’s are leading and are lagging by theatre, based on last 4 weeks trend what RSI’s are doing - type of engagements
 
 ## DISCLAIMER
 "**Disclaimer:** Use case data sourced from SE comments (coco/cortex code mentions), #coco in Partner Comments, and AI-Cortex Code feature flag. Pipeline figures are being confirmed by the PDM team and are subject to change. Detailed stats: http://go/cocopse"

@@ -5,13 +5,13 @@ from datetime import datetime, date
 from utils.queries import get_okr_partner_summary, get_okr_stage_breakdown, get_okr_coco_adoption, get_partner_credit_consumption, get_usecase_confidence_scores, get_bulk_confidence_scores, get_coco_final_wow, get_coco_final_trend_4w, get_partner_coco_trend_4w, get_partner_weekly_credits_4w, get_partner_surface_trend_4w
 from utils.ask_ai import build_filter_context, build_credit_wow_context, build_uc_pattern_context
 from utils import resolve_partner_filter, resolve_region_theaters, PARTNER_RENAME_MAP, filter_out_partner_own_accounts, apply_coco_final
-from utils import APJ_RSI_REGION_MAP, EMEA_RSI_REGION_MAP, PARTNER_ALIASES as _PA_OKR
+from utils import APJ_RSI_REGION_MAP, EMEA_RSI_REGION_MAP, LATAM_RSI_REGION_MAP, PARTNER_ALIASES as _PA_OKR
 
 # Managed partner universe — same as Adoption Metrics default scope
 _GSI_OKR = {'Accenture','Capgemini Technologies LLC','Cognizant Technology Solutions US Corp',
             'Deloitte Consulting','EY','Ernst & Young (EY)','IBM','IBM Consulting'}
 _NOAM_OKR = set(p for p in _PA_OKR.get('--- NOAM RSIs ---', []) if not p.startswith('---')) | {'LTI Mindtree','Kipi.ai'}
-_ALL_MANAGED_OKR = _GSI_OKR | _NOAM_OKR | set(APJ_RSI_REGION_MAP.keys()) | set(EMEA_RSI_REGION_MAP.keys())
+_ALL_MANAGED_OKR = _GSI_OKR | _NOAM_OKR | set(APJ_RSI_REGION_MAP.keys()) | set(EMEA_RSI_REGION_MAP.keys()) | set(LATAM_RSI_REGION_MAP.keys())
 
 conn = st.session_state.conn
 region = st.session_state.get("selected_region", "Global")
@@ -28,7 +28,8 @@ TARGET_PCT = 75
 
 # Auto-set target based on region: EMEA/APJ → 50%, all others → 75%
 _apj_emea_regions = {'EMEA', 'APJ', 'Korea', 'Japan', 'ASEAN', 'ANZ', 'India',
-                     'CentralEMEA', 'SouthEMEA', 'NorthEMEA', 'UK', 'META', 'EMEACommercial'}
+                     'CentralEMEA', 'SouthEMEA', 'NorthEMEA', 'UK', 'META', 'EMEACommercial',
+                     'LATAM'}
 target = 50 if region in _apj_emea_regions else TARGET_PCT
 min_use_cases = 1
 
@@ -75,9 +76,12 @@ def _apply_managed_geo_filter(bc):
         _emea = bc[bc['PARTNER_NAME'].isin(set(EMEA_RSI_REGION_MAP.keys()))].copy()
         _emea['_c'] = _emea['PARTNER_NAME'].map({k: v[1] for k, v in EMEA_RSI_REGION_MAP.items()})
         parts.append(_emea[_emea['REGION_NAME'] == _emea['_c']].drop(columns=['_c']))
+        _latam = bc[bc['PARTNER_NAME'].isin(set(LATAM_RSI_REGION_MAP.keys()))].copy()
+        parts.append(_latam[_latam['REGION_NAME'] == 'LATAM'] if 'REGION_NAME' in _latam.columns else _latam)
     else:
         parts.append(bc[bc['PARTNER_NAME'].isin(set(APJ_RSI_REGION_MAP.keys()))])
         parts.append(bc[bc['PARTNER_NAME'].isin(set(EMEA_RSI_REGION_MAP.keys()))])
+        parts.append(bc[bc['PARTNER_NAME'].isin(set(LATAM_RSI_REGION_MAP.keys()))])
     return pd.concat([p for p in parts if len(p) > 0], ignore_index=True) if parts else bc
 
 # Compute CoCo using full confidence scoring when account-level is enabled
@@ -93,15 +97,18 @@ if include_account_coco:
             # Even in a custom partner selection, APJ/EMEA must stay country-scoped
             _apj_names  = set(APJ_RSI_REGION_MAP.keys())
             _emea_names = set(EMEA_RSI_REGION_MAP.keys())
+            _latam_names = set(LATAM_RSI_REGION_MAP.keys())
             if 'REGION_NAME' in bulk_conf.columns:
-                _non_rsi = bulk_conf[~bulk_conf['PARTNER_NAME'].isin(_apj_names | _emea_names)]
+                _non_rsi = bulk_conf[~bulk_conf['PARTNER_NAME'].isin(_apj_names | _emea_names | _latam_names)]
                 _apj  = bulk_conf[bulk_conf['PARTNER_NAME'].isin(_apj_names)].copy()
                 _apj['_c']  = _apj['PARTNER_NAME'].map({k: v[1] for k, v in APJ_RSI_REGION_MAP.items()})
                 _apj  = _apj[_apj['REGION_NAME'] == _apj['_c']].drop(columns=['_c'])
                 _emea = bulk_conf[bulk_conf['PARTNER_NAME'].isin(_emea_names)].copy()
                 _emea['_c'] = _emea['PARTNER_NAME'].map({k: v[1] for k, v in EMEA_RSI_REGION_MAP.items()})
                 _emea = _emea[_emea['REGION_NAME'] == _emea['_c']].drop(columns=['_c'])
-                bulk_conf = pd.concat([p for p in [_non_rsi, _apj, _emea] if len(p) > 0], ignore_index=True)
+                _latam = bulk_conf[bulk_conf['PARTNER_NAME'].isin(_latam_names)].copy()
+                _latam = _latam[_latam['REGION_NAME'] == 'LATAM']
+                bulk_conf = pd.concat([p for p in [_non_rsi, _apj, _emea, _latam] if len(p) > 0], ignore_index=True)
         # Apply sidebar region filter
         if region and region != 'Global':
             _theaters = resolve_region_theaters(region)
@@ -512,6 +519,8 @@ if selected_partner:
             _country = EMEA_RSI_REGION_MAP.get(_raw_partner, EMEA_RSI_REGION_MAP.get(selected_partner, (None, None)))[1]
             if _country:
                 partner_detail = partner_detail[partner_detail['REGION_NAME'] == _country]
+        elif _raw_partner in LATAM_RSI_REGION_MAP or selected_partner in LATAM_RSI_REGION_MAP:
+            partner_detail = partner_detail[partner_detail['REGION_NAME'] == 'LATAM']
 
     if len(partner_detail) > 0:
         # Override IS_COCO_ATTACHED using full confidence scoring (same as summary metrics)

@@ -139,10 +139,17 @@ PARTNER_ALIASES = {
         'KPC (Key Performance Consulting)',  # SouthEMEA (France)
         'KPC',                               # SouthEMEA (alias)
     ],
+    '--- LATAM RSIs ---': [
+        'Viewnear - Partner',                                   # Mexico
+        'EGOS BI SA DE CV',                                     # Mexico
+        'IVCISA',                                               # CALA
+        'SEIDOR ANALYTICS NORTH AMERICA CORP',                  # CALA
+        'Keyrus Brasil Serviços de Informatica Ltda.',          # Brazil
+    ],
 }
 
 # Group options to show at top of multiselect
-PARTNER_GROUPS = ['--- GSIs ---', '--- NOAM RSIs ---', '--- APJ RSIs ---', '--- EMEA RSIs ---']
+PARTNER_GROUPS = ['--- GSIs ---', '--- NOAM RSIs ---', '--- APJ RSIs ---', '--- EMEA RSIs ---', '--- LATAM RSIs ---']
 
 # Per-partner country restriction for APJ RSIs (REGION_NAME in DT_OKR / MDM)
 # Key = canonical DT_OKR PARTNER_NAME, Value = (display_label, REGION_NAME)
@@ -154,6 +161,15 @@ APJ_RSI_REGION_MAP = {
     'INFINITE LAMBDA (SINGAPORE) PTE. LTD.':   ('Infinite Lambda',   'ASEAN'),
     'Altis Consulting, ANZ':                    ('Altis',             'ANZ'),
     'PROLIM Global Corporation':                ('Prolim',            'India'),
+}
+
+# Per-partner geo restriction for LATAM RSIs (REGION_NAME in DT_OKR)
+LATAM_RSI_REGION_MAP = {
+    'Viewnear - Partner':                               ('Viewnear',  'LATAM'),
+    'EGOS BI SA DE CV':                                 ('EgosBi',    'LATAM'),
+    'IVCISA':                                           ('IVCISA',    'LATAM'),
+    'SEIDOR ANALYTICS NORTH AMERICA CORP':              ('Seidor',    'LATAM'),
+    'Keyrus Brasil Serviços de Informatica Ltda.':      ('Keyrus',    'LATAM'),
 }
 
 # Per-partner country restriction for EMEA RSIs (REGION_NAME in DT_OKR)

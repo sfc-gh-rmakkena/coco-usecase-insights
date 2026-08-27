@@ -20,6 +20,14 @@ _SHORT_FORMS = {
     "civica":      "CIVICA SOFTWARE, S.L.",
     "kubrick":     "Kubrick Group",
     "kpc":         "KPC (Key Performance Consulting)",
+    # LATAM RSIs
+    "viewnear":    "Viewnear - Partner",
+    "ivcisa":      "IVCISA",
+    "keyrus brasil": "Keyrus Brasil Servi\u00e7os de Informatica Ltda.",
+    "keyrus":      "Keyrus Brasil Servi\u00e7os de Informatica Ltda.",
+    "egos bi":     "EGOS BI SA DE CV",
+    "seidor latam": "SEIDOR ANALYTICS NORTH AMERICA CORP",
+    "seidor analytics": "SEIDOR ANALYTICS NORTH AMERICA CORP",
     "tcs":         "Tata Consultancy Services",
     "tata":        "Tata Consultancy Services",
     "hexaware":    "Hexaware Technologies",
@@ -95,6 +103,7 @@ _GSI_RE     = re.compile(r'\bgsis?\b|\bglobal\s+si\b|\bglobal\s+system\s+integra
 _NOAM_RE    = re.compile(r'\bnoam\s+rsi\b|\bnoam\s+si\b|\bregional\s+si\b|\bnoam\s+partner\b|\bnoam\s+rsis?\b', re.I)
 _APJ_RE     = re.compile(r'\bapj\s+rsi\b|\bapj\s+partner\b|\bapj\s+rsis?\b', re.I)
 _EMEA_RE    = re.compile(r'\bemea\s+rsi\b|\bemea\s+partner\b|\bemea\s+si\b|\bemea\s+rsis?\b', re.I)
+_LATAM_RE   = re.compile(r'\blatam\s+rsi\b|\blatam\s+partner\b|\blatam\s+si\b|\blatam\s+rsis?\b', re.I)
 
 # ── Global aggregation phrases ────────────────────────────────────────────────
 _GLOBAL_RE  = re.compile(r'\boverall\b|\ball\s+partners?\b|\bmanaged\s+partners?\b|\bevery\s+partner\b|\bhow\s+many\s+partners?\b|\btotal\s+partners?\b|\bacross\s+all\b|\bportfolio\b', re.I)
@@ -141,6 +150,8 @@ def _detect_group(text: str) -> str | None:
         return "APJ"
     if _EMEA_RE.search(text):
         return "EMEA"
+    if _LATAM_RE.search(text):
+        return "LATAM"
     return None
 
 
