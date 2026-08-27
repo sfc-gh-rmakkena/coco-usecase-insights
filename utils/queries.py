@@ -2209,7 +2209,7 @@ def save_okr_target_count(_conn, partners_at_target: int, total_partners: int) -
 
 
 # Mapping from _GROUP tag (added in executive_email.py) to REGION stored in snapshot
-_GROUP_TO_REGION = {'GSI': 'Global', 'NOAM RSI': 'NoAM', 'APJ RSI': 'APJ', 'EMEA RSI': 'EMEA'}
+_GROUP_TO_REGION = {'GSI': 'Global', 'NOAM RSI': 'NoAM', 'APJ RSI': 'APJ', 'EMEA RSI': 'EMEA', 'LATAM RSI': 'LATAM'}
 
 
 def save_coco_final_snapshot(_conn, bulk_conf_df, region='NoAM') -> bool:
@@ -2283,15 +2283,15 @@ def get_coco_final_wow(_conn, partners=None, gsi_global=False, gsi_names=frozens
 
     if gsi_global and gsi_names:
         gsi_list = "','".join(gsi_names)
-        # GSI=Global, NOAM RSI=NoAM, APJ RSI=APJ, EMEA RSI=EMEA, overall NULL=Global
+        # GSI=Global, NOAM RSI=NoAM, APJ RSI=APJ, EMEA RSI=EMEA, LATAM RSI=LATAM, overall NULL=Global
         region_filter = f"""AND (
             (PARTNER_NAME IN ('{gsi_list}') AND COALESCE(REGION,'Global') = 'Global')
-            OR (PARTNER_NAME NOT IN ('{gsi_list}') AND COALESCE(REGION,'NoAM') IN ('NoAM', 'APJ', 'EMEA'))
+            OR (PARTNER_NAME NOT IN ('{gsi_list}') AND COALESCE(REGION,'NoAM') IN ('NoAM', 'APJ', 'EMEA', 'LATAM'))
             OR (PARTNER_NAME IS NULL AND COALESCE(REGION,'Global') = 'Global')
         )"""
     else:
         # Non-exec-email callers (OKR pages): return all managed partners across all regions
-        region_filter = "AND COALESCE(REGION,'NoAM') IN ('NoAM', 'APJ', 'EMEA', 'Global')"
+        region_filter = "AND COALESCE(REGION,'NoAM') IN ('NoAM', 'APJ', 'EMEA', 'LATAM', 'Global')"
 
     query = f"""
     WITH deduped AS (
