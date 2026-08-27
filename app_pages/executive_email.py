@@ -1025,6 +1025,8 @@ managed_coco_eacv = q2['COCO_EACV'] or 0
 managed_total_partners = int(q2['ACTIVE_PARTNERS'])
 managed_coco_deployed = int(q2['COCO_DEPLOYED'])
 managed_coco_pct = round(managed_coco_ucs * 100.0 / managed_total_ucs, 1) if managed_total_ucs > 0 else 0
+# Pre-compute non-CoCo from bulk_conf so the narrative and OKR table use the same source
+_managed_non_coco_pipeline = int((~managed_bulk_conf['IS_COCO_FINAL']).sum()) if len(managed_bulk_conf) > 0 and 'IS_COCO_FINAL' in managed_bulk_conf.columns else (managed_total_ucs - managed_coco_ucs)
 managed_inactive_partners = len(MANAGED_PARTNERS) - managed_total_partners
 managed_inactive_names = [p for p in MANAGED_PARTNERS if p not in partner_data['PARTNER_NAME'].values]
 
@@ -1170,6 +1172,7 @@ _EXPECTED_GROUP_PARTNERS = {
     'NOAM RSI': _dedupe_roster(_NOAM_RSI_NAMES_EMAIL, {'Kipi.ai': 'kipi.ai', 'LTI Mindtree': 'LTM'}),
     'APJ RSI': _primary_names(APJ_RSI_REGION_MAP),
     'EMEA RSI': _primary_names(EMEA_RSI_REGION_MAP),
+    'LATAM RSI': _primary_names(LATAM_RSI_REGION_MAP),
 }
 
 
@@ -1211,18 +1214,20 @@ def _group_partners(group_tag):
         } for p in _missing])], ignore_index=True)
     return _agg.sort_values('TOTAL_EACV', ascending=False)
 
-_gsi_partners_df  = _group_partners('GSI')
-_noam_partners_df = _group_partners('NOAM RSI')
-_apj_partners_df  = _group_partners('APJ RSI')
-_emea_partners_df = _group_partners('EMEA RSI')
+_gsi_partners_df   = _group_partners('GSI')
+_noam_partners_df  = _group_partners('NOAM RSI')
+_apj_partners_df   = _group_partners('APJ RSI')
+_emea_partners_df  = _group_partners('EMEA RSI')
+_latam_partners_df = _group_partners('LATAM RSI')
 
-gsi_partner_ctx  = _build_group_ctx(_gsi_partners_df,  'GSI (Global)',    _credit_lookup, _wow_lkp)
-noam_partner_ctx = _build_group_ctx(_noam_partners_df, 'NOAM RSI',        _credit_lookup, _wow_lkp)
-apj_partner_ctx  = _build_group_ctx(_apj_partners_df,  'APJ RSI',         _credit_lookup, _wow_lkp)
-emea_partner_ctx = _build_group_ctx(_emea_partners_df, 'EMEA RSI',        _credit_lookup, _wow_lkp)
+gsi_partner_ctx   = _build_group_ctx(_gsi_partners_df,   'GSI (Global)',    _credit_lookup, _wow_lkp)
+noam_partner_ctx  = _build_group_ctx(_noam_partners_df,  'NOAM RSI',        _credit_lookup, _wow_lkp)
+apj_partner_ctx   = _build_group_ctx(_apj_partners_df,   'APJ RSI',         _credit_lookup, _wow_lkp)
+emea_partner_ctx  = _build_group_ctx(_emea_partners_df,  'EMEA RSI',        _credit_lookup, _wow_lkp)
+latam_partner_ctx = _build_group_ctx(_latam_partners_df, 'LATAM RSI',       _credit_lookup, _wow_lkp)
 
 # Combined context (kept for backward compatibility in data_context)
-partner_ctx = gsi_partner_ctx + noam_partner_ctx + apj_partner_ctx + emea_partner_ctx
+partner_ctx = gsi_partner_ctx + noam_partner_ctx + apj_partner_ctx + emea_partner_ctx + latam_partner_ctx
 
 stage_ctx = ""
 if len(managed_stage_data) > 0 and len(managed_bulk_conf) > 0:
@@ -1640,19 +1645,21 @@ else:
 
 
 data_context = f"""
-=== Q3 (Aug-Oct 2026) | MANAGED PARTNERS (GSI + NOAM RSI + APJ RSI + EMEA RSI) | Stages 3-7 ===
-NOTE: Q3 = Aug 1 – Oct 31, 2026. GSIs report globally; NOAM RSIs = NoAM theaters only; APJ/EMEA RSIs = their respective geo regions.
+=== Q3 (Aug-Oct 2026) | MANAGED PARTNERS (GSI + NOAM RSI + APJ RSI + EMEA RSI + LATAM RSI) | Stages 3-7 ===
+NOTE: Q3 = Aug 1 – Oct 31, 2026. GSIs report globally; NOAM RSIs = NoAM theaters only; APJ/EMEA/LATAM RSIs = their respective geo regions.
 
 GLOBAL REFERENCE (all partners, Q3, Stages 3-7, with account-level attribution): {int(go['COCO_USE_CASES'])} CoCo UCs | {int(go['TOTAL_PARTNERS'])} partners | ${go['TOTAL_EACV']/1_000_000:.1f}M EACV | {go['COCO_PCT']}% CoCo adoption
 
 MANAGED PARTNERS Q3 HEADLINE:
+  Total Partners in Scope: 49 (← USE THIS NUMBER for "X managed partners" — DO NOT use Active Partners count)
   CoCo Use Cases: {managed_coco_ucs} (THIS is the CoCo number for the opening sentence)
   Total Pipeline (CoCo + non-CoCo): {managed_total_ucs} use cases
   CoCo Adoption: {managed_coco_pct}%
-  Active Partners: {managed_total_partners}
+  Active Partners (have UCs): {managed_total_partners} of 49 (some partners have 0 UCs this quarter)
   Total EACV: ${managed_total_eacv/1_000_000:.1f}M
   CoCo EACV: ${managed_coco_eacv/1_000_000:.1f}M
   CoCo Deployed: {managed_coco_deployed}
+  Non-CoCo Convertible Pipeline: {_managed_non_coco_pipeline} (← USE THIS EXACT NUMBER for any mention of non-CoCo or convertible pipeline UCs in the narrative)
   Partners Meeting 75% Target: {partners_meeting_75} ({partners_meeting_list})
   Partners Below 50% Target: {partners_below_50}
 No Q3 Activity ({managed_inactive_partners} partners): {', '.join(managed_inactive_names)}
@@ -1678,6 +1685,7 @@ PARTNER SCORECARD BY GROUP (Q3, target 75% CoCo adoption):
 {noam_partner_ctx}
 {apj_partner_ctx}
 {emea_partner_ctx}
+{latam_partner_ctx}
 
 COCO ADOPTION WoW — OVERALL (from weekly snapshot table):
 {adoption_wow_ctx}
@@ -1694,7 +1702,7 @@ OKR PROGRESS — 6 GSIs WoW (CoCo engagement, all regions combined — LW=last w
 OKR PROGRESS — NoAM SIs WoW (CoCo engagement — LW=last week, PW=prior week):
 {noam_si_wow_ctx}
 
-OKR PROGRESS — REGIONAL BREAKDOWN (4 groups; GSI/NOAM goal=75%, APJ/EMEA goal=50%):
+OKR PROGRESS — REGIONAL BREAKDOWN (5 groups; GSI/NOAM goal=75%, APJ/EMEA/LATAM goal=50%):
 {regional_okr_ctx}
 
 QUARTER PROGRESS TREND (weeks left, and whether the count of CoCo use cases is still climbing):
@@ -2065,7 +2073,7 @@ Follow this EXACT structure with 9 sections:
 
 ## OKR PROGRESS — REGIONAL BREAKDOWN
 | Group | Scope | Total Partners | Total UCs | CoCo UCs | CoCo % | Partners Meeting Goal% |
-- Show 4 rows: GSI (Global), NOAM RSI, APJ RSI, EMEA RSI
+- Show 5 rows: GSI (Global), NOAM RSI, APJ RSI, EMEA RSI, LATAM RSI
 - Use "OKR PROGRESS — REGIONAL BREAKDOWN" data from context (each row has group name, total partners in scope, total UCs, CoCo UCs, CoCo %, partners meeting goal)
 - Total Partners = total partners in scope for that group (irrelevant of CoCo adoption)
 - Goal% is 75% for GSI and NOAM RSI, 50% for APJ RSI and EMEA RSI — reflect the correct target per row

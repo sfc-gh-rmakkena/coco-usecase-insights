@@ -89,6 +89,8 @@ def _theater_filter(region: str) -> str:
         return " AND THEATER_NAME = 'EMEA'"
     elif region == "APJ":
         return " AND THEATER_NAME = 'APJ'"
+    elif region == "LATAM":
+        return " AND REGION_NAME = 'LATAM'"
     return ""
 
 def _source_filter(source: str) -> str:
@@ -658,6 +660,52 @@ def get_emea_rsi_adoption(_conn, start_date: str, end_date: str):
           OR (uc.PARTNER_NAME ILIKE '%Civica%'  AND uc.REGION_NAME = 'SouthEMEA')
           OR (uc.PARTNER_NAME ILIKE '%Kubrick%' AND uc.REGION_NAME = 'UK')
           OR (uc.PARTNER_NAME ILIKE '%KPC%'     AND uc.REGION_NAME = 'SouthEMEA')
+      )
+    GROUP BY PARTNER_LABEL, uc.REGION_NAME
+    ORDER BY PARTNER_LABEL
+    """)
+
+@st.cache_data(ttl=timedelta(minutes=30))
+def get_latam_rsi_adoption(_conn, start_date: str, end_date: str):
+    """Per-partner CoCo adoption for the 5 LATAM RSIs, all restricted to REGION_NAME = 'LATAM'.
+    Viewnear | EgosBi | IVCISA | Seidor | Keyrus
+    """
+    date_filter = f"""(
+        (uc.USE_CASE_STAGE IN ('3 - Technical / Business Validation','4 - Use Case Won / Migration Plan')
+         AND uc.DECISION_DATE >= '{start_date}' AND uc.DECISION_DATE <= '{end_date}')
+        OR (uc.USE_CASE_STAGE IN ('5 - Implementation In Progress','6 - Implementation Complete','7 - Deployed')
+         AND uc.GO_LIVE_DATE >= '{start_date}' AND uc.GO_LIVE_DATE <= '{end_date}')
+    )"""
+    return _conn.query(f"""
+    SELECT
+        CASE
+            WHEN uc.PARTNER_NAME ILIKE '%Viewnear%'                        THEN 'Viewnear'
+            WHEN uc.PARTNER_NAME ILIKE '%EGOS BI%'                         THEN 'EgosBi'
+            WHEN uc.PARTNER_NAME ILIKE '%IVCISA%'                          THEN 'IVCISA'
+            WHEN uc.PARTNER_NAME ILIKE '%SEIDOR ANALYTICS%'                THEN 'Seidor'
+            WHEN uc.PARTNER_NAME ILIKE '%Keyrus Brasil%'                   THEN 'Keyrus'
+        END                                                         AS PARTNER_LABEL,
+        uc.REGION_NAME                                              AS COUNTRY,
+        COUNT(*)                                                    AS TOTAL_UCS,
+        SUM(CASE WHEN uc.IS_COCO THEN 1 ELSE 0 END)                AS COCO_UCS,
+        ROUND(SUM(CASE WHEN uc.IS_COCO THEN 1 ELSE 0 END) * 100.0
+              / NULLIF(COUNT(*), 0), 1)                             AS COCO_PCT,
+        SUM(CASE WHEN uc.USE_CASE_STAGE IN ('3 - Technical / Business Validation','4 - Use Case Won / Migration Plan') AND uc.IS_COCO THEN 1 ELSE 0 END) AS VALIDATION_COCO,
+        SUM(CASE WHEN uc.USE_CASE_STAGE = '5 - Implementation In Progress' AND uc.IS_COCO THEN 1 ELSE 0 END) AS IN_PROGRESS_COCO,
+        SUM(CASE WHEN uc.USE_CASE_STAGE IN ('6 - Implementation Complete','7 - Deployed') AND uc.IS_COCO THEN 1 ELSE 0 END) AS IMPL_COMPLETE_DEPLOYED_COCO,
+        SUM(CASE WHEN uc.USE_CASE_STAGE = '7 - Deployed' THEN 1 ELSE 0 END)       AS DEPLOYED_ALL,
+        SUM(CASE WHEN uc.USE_CASE_STAGE = '7 - Deployed' AND uc.IS_COCO THEN 1 ELSE 0 END) AS DEPLOYED_COCO,
+        COALESCE(SUM(uc.USE_CASE_EACV), 0)                                         AS TOTAL_EACV,
+        COALESCE(SUM(CASE WHEN uc.IS_COCO THEN uc.USE_CASE_EACV ELSE 0 END), 0)   AS COCO_EACV
+    FROM {DT_OKR} uc
+    WHERE {date_filter}
+      AND uc.REGION_NAME = 'LATAM'
+      AND (
+          uc.PARTNER_NAME ILIKE '%Viewnear%'
+          OR uc.PARTNER_NAME ILIKE '%EGOS BI%'
+          OR uc.PARTNER_NAME ILIKE '%IVCISA%'
+          OR uc.PARTNER_NAME ILIKE '%SEIDOR ANALYTICS%'
+          OR uc.PARTNER_NAME ILIKE '%Keyrus Brasil%'
       )
     GROUP BY PARTNER_LABEL, uc.REGION_NAME
     ORDER BY PARTNER_LABEL
@@ -2161,7 +2209,7 @@ def save_okr_target_count(_conn, partners_at_target: int, total_partners: int) -
 
 
 # Mapping from _GROUP tag (added in executive_email.py) to REGION stored in snapshot
-_GROUP_TO_REGION = {'GSI': 'Global', 'NOAM RSI': 'NoAM', 'APJ RSI': 'APJ', 'EMEA RSI': 'EMEA'}
+_GROUP_TO_REGION = {'GSI': 'Global', 'NOAM RSI': 'NoAM', 'APJ RSI': 'APJ', 'EMEA RSI': 'EMEA', 'LATAM RSI': 'LATAM'}
 
 
 def save_coco_final_snapshot(_conn, bulk_conf_df, region='NoAM') -> bool:
@@ -2235,15 +2283,15 @@ def get_coco_final_wow(_conn, partners=None, gsi_global=False, gsi_names=frozens
 
     if gsi_global and gsi_names:
         gsi_list = "','".join(gsi_names)
-        # GSI=Global, NOAM RSI=NoAM, APJ RSI=APJ, EMEA RSI=EMEA, overall NULL=Global
+        # GSI=Global, NOAM RSI=NoAM, APJ RSI=APJ, EMEA RSI=EMEA, LATAM RSI=LATAM, overall NULL=Global
         region_filter = f"""AND (
             (PARTNER_NAME IN ('{gsi_list}') AND COALESCE(REGION,'Global') = 'Global')
-            OR (PARTNER_NAME NOT IN ('{gsi_list}') AND COALESCE(REGION,'NoAM') IN ('NoAM', 'APJ', 'EMEA'))
+            OR (PARTNER_NAME NOT IN ('{gsi_list}') AND COALESCE(REGION,'NoAM') IN ('NoAM', 'APJ', 'EMEA', 'LATAM'))
             OR (PARTNER_NAME IS NULL AND COALESCE(REGION,'Global') = 'Global')
         )"""
     else:
         # Non-exec-email callers (OKR pages): return all managed partners across all regions
-        region_filter = "AND COALESCE(REGION,'NoAM') IN ('NoAM', 'APJ', 'EMEA', 'Global')"
+        region_filter = "AND COALESCE(REGION,'NoAM') IN ('NoAM', 'APJ', 'EMEA', 'LATAM', 'Global')"
 
     query = f"""
     WITH deduped AS (
