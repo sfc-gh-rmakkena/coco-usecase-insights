@@ -303,7 +303,7 @@ c6.metric("CoCo Partner Go-Lives",     f"{_coco_go_lives_pct:.1f}%",
 
 st.caption(
     "By default, partner metrics (Total Partner UC, Partner CoCo Usecases, Go-Lives) are scoped to "
-    "managed partners: **GSI · NOAM RSI · APJ RSI · EMEA RSI**"
+    "managed partners: **GSI · NOAM RSI · APJ RSI · EMEA RSI · LATAM RSI**"
 )
 
 # 4 gauges — one per partner group
@@ -411,8 +411,15 @@ def _build_partner_theatre_from_bulk(bc):
 def _build_partner_region_from_bulk(bc):
     """Derive per-region partner CoCo metrics from bulk_conf (IS_COCO_FINAL)."""
     _bc = bc.copy()
-    _bc['REGION'] = _bc['THEATER_NAME'].apply(
-        lambda t: 'NoAM' if t in _NOAM_THEATERS else ('EMEA' if t == 'EMEA' else ('APJ' if t == 'APJ' else 'Other'))
+    # LATAM RSI partners must be bucketed as 'LATAM' regardless of their THEATER_NAME
+    # (e.g. SEIDOR ANALYTICS has a NoAM theater but is LATAM-scoped)
+    _latam_partner_set = set(LATAM_RSI_REGION_MAP.keys())
+    _bc['REGION'] = _bc.apply(
+        lambda r: 'LATAM' if r['PARTNER_NAME'] in _latam_partner_set
+        else ('NoAM' if r['THEATER_NAME'] in _NOAM_THEATERS
+              else ('EMEA' if r['THEATER_NAME'] == 'EMEA'
+                    else ('APJ' if r['THEATER_NAME'] == 'APJ' else 'Other'))),
+        axis=1
     )
     _bc['_deployed_coco'] = _bc['IS_COCO_FINAL'] & (_bc['USE_CASE_STAGE'] == '7 - Deployed')
     _bc['_deployed_all'] = (_bc['USE_CASE_STAGE'] == '7 - Deployed')
@@ -450,7 +457,7 @@ _managed_bc = _bc_managed if len(bulk_conf) > 0 and 'IS_COCO_FINAL' in bulk_conf
 
 # ── Breakdown by Theatre ──────────────────────────────────────────────────────
 with st.expander(":material/table: Breakdown by Theatre", expanded=True):
-    st.caption("Partner CoCo UCs = IS_COCO_FINAL | Scoped to managed partners: GSI · NOAM RSI · APJ RSI · EMEA RSI")
+    st.caption("Partner CoCo UCs = IS_COCO_FINAL | Scoped to managed partners: GSI · NOAM RSI · APJ RSI · EMEA RSI · LATAM RSI")
     _theatre_mdm = get_all_uc_counts_by_theatre(conn, start_date, end_date)
     # Housekeeping theatres, not real go-to-market territories. Filtered here rather
     # than at render time so the TOTAL row excludes them too.
@@ -536,7 +543,7 @@ with st.expander(":material/table: Breakdown by Theatre", expanded=True):
 
 # ── Breakdown by Region ───────────────────────────────────────────────────────
 with st.expander(":material/public: Breakdown by Region", expanded=True):
-    st.caption("Partner CoCo UCs = IS_COCO_FINAL | Scoped to managed partners: GSI · NOAM RSI · APJ RSI · EMEA RSI")
+    st.caption("Partner CoCo UCs = IS_COCO_FINAL | Scoped to managed partners: GSI · NOAM RSI · APJ RSI · EMEA RSI · LATAM RSI")
     _region_mdm = get_all_uc_counts_by_region(conn, start_date, end_date)
     # 'Other' is the ELSE bucket holding non-territory theatres (AMSPartner,
     # APJPartner, EMEAPartner, AcctsToDelete). Dropped here rather than at render
