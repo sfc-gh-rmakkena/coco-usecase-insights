@@ -1030,7 +1030,7 @@ with st.expander(":material/language: APJ RSI CoCo Adoption (50% Target)", expan
         )
 
 # ─── LATAM RSI Section ───────────────────────────────────────────────────────
-with st.expander("🌎 LATAM RSI CoCo Adoption", expanded=False):
+with st.expander("🌎 LATAM RSI CoCo Adoption (50% Target)", expanded=True):
     _latam_base = get_latam_rsi_adoption(conn, start_date, end_date)
     if _selected_partner_names and 'PARTNER_LABEL' in _latam_base.columns:
         _latam_canonical_sel = {v[0] for k, v in LATAM_RSI_REGION_MAP.items() if k in _selected_partner_names}
