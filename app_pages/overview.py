@@ -565,7 +565,10 @@ with st.expander(":material/public: Breakdown by Region", expanded=True):
             if _r_has_tokens:
                 _rp_cols += ['LAST7_TOKENS', 'TOKENS_WOW_PCT']
             _rp = _region_partner.set_index("REGION")[_rp_cols]
-            _region_combined = _r.join(_rp, how="left").reset_index()
+            # Use outer join so LATAM rows (present in _rp but not in the SQL-based _r) are preserved
+            _region_combined = _r.join(_rp, how="outer").reset_index()
+            _region_combined[["ALL_USE_CASES", "ALL_GO_LIVES"]] = \
+                _region_combined[["ALL_USE_CASES", "ALL_GO_LIVES"]].fillna(0)
         else:
             _region_combined = _r.reset_index()
             _region_combined["TOTAL_PARTNER_UCS"] = 0
