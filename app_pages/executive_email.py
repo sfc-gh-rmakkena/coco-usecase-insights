@@ -1640,16 +1640,17 @@ else:
 
 
 data_context = f"""
-=== Q3 (Aug-Oct 2026) | MANAGED PARTNERS (GSI + NOAM RSI + APJ RSI + EMEA RSI) | Stages 3-7 ===
-NOTE: Q3 = Aug 1 – Oct 31, 2026. GSIs report globally; NOAM RSIs = NoAM theaters only; APJ/EMEA RSIs = their respective geo regions.
+=== Q3 (Aug-Oct 2026) | MANAGED PARTNERS (GSI + NOAM RSI + APJ RSI + EMEA RSI + LATAM RSI) | Stages 3-7 ===
+NOTE: Q3 = Aug 1 – Oct 31, 2026. GSIs report globally; NOAM RSIs = NoAM theaters only; APJ/EMEA/LATAM RSIs = their respective geo regions.
 
 GLOBAL REFERENCE (all partners, Q3, Stages 3-7, with account-level attribution): {int(go['COCO_USE_CASES'])} CoCo UCs | {int(go['TOTAL_PARTNERS'])} partners | ${go['TOTAL_EACV']/1_000_000:.1f}M EACV | {go['COCO_PCT']}% CoCo adoption
 
 MANAGED PARTNERS Q3 HEADLINE:
+  Total Partners in Scope: 49 (← USE THIS NUMBER for "X managed partners" — DO NOT use Active Partners count)
   CoCo Use Cases: {managed_coco_ucs} (THIS is the CoCo number for the opening sentence)
   Total Pipeline (CoCo + non-CoCo): {managed_total_ucs} use cases
   CoCo Adoption: {managed_coco_pct}%
-  Active Partners: {managed_total_partners}
+  Active Partners (have UCs): {managed_total_partners} of 49 (some partners have 0 UCs this quarter)
   Total EACV: ${managed_total_eacv/1_000_000:.1f}M
   CoCo EACV: ${managed_coco_eacv/1_000_000:.1f}M
   CoCo Deployed: {managed_coco_deployed}
