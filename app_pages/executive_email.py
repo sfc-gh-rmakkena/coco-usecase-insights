@@ -1025,6 +1025,8 @@ managed_coco_eacv = q2['COCO_EACV'] or 0
 managed_total_partners = int(q2['ACTIVE_PARTNERS'])
 managed_coco_deployed = int(q2['COCO_DEPLOYED'])
 managed_coco_pct = round(managed_coco_ucs * 100.0 / managed_total_ucs, 1) if managed_total_ucs > 0 else 0
+# Pre-compute non-CoCo from bulk_conf so the narrative and OKR table use the same source
+_managed_non_coco_pipeline = int((~managed_bulk_conf['IS_COCO_FINAL']).sum()) if len(managed_bulk_conf) > 0 and 'IS_COCO_FINAL' in managed_bulk_conf.columns else (managed_total_ucs - managed_coco_ucs)
 managed_inactive_partners = len(MANAGED_PARTNERS) - managed_total_partners
 managed_inactive_names = [p for p in MANAGED_PARTNERS if p not in partner_data['PARTNER_NAME'].values]
 
@@ -1657,6 +1659,7 @@ MANAGED PARTNERS Q3 HEADLINE:
   Total EACV: ${managed_total_eacv/1_000_000:.1f}M
   CoCo EACV: ${managed_coco_eacv/1_000_000:.1f}M
   CoCo Deployed: {managed_coco_deployed}
+  Non-CoCo Convertible Pipeline: {_managed_non_coco_pipeline} (← USE THIS EXACT NUMBER for any mention of non-CoCo or convertible pipeline UCs in the narrative)
   Partners Meeting 75% Target: {partners_meeting_75} ({partners_meeting_list})
   Partners Below 50% Target: {partners_below_50}
 No Q3 Activity ({managed_inactive_partners} partners): {', '.join(managed_inactive_names)}
