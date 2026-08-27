@@ -1170,6 +1170,7 @@ _EXPECTED_GROUP_PARTNERS = {
     'NOAM RSI': _dedupe_roster(_NOAM_RSI_NAMES_EMAIL, {'Kipi.ai': 'kipi.ai', 'LTI Mindtree': 'LTM'}),
     'APJ RSI': _primary_names(APJ_RSI_REGION_MAP),
     'EMEA RSI': _primary_names(EMEA_RSI_REGION_MAP),
+    'LATAM RSI': _primary_names(LATAM_RSI_REGION_MAP),
 }
 
 
@@ -1211,18 +1212,20 @@ def _group_partners(group_tag):
         } for p in _missing])], ignore_index=True)
     return _agg.sort_values('TOTAL_EACV', ascending=False)
 
-_gsi_partners_df  = _group_partners('GSI')
-_noam_partners_df = _group_partners('NOAM RSI')
-_apj_partners_df  = _group_partners('APJ RSI')
-_emea_partners_df = _group_partners('EMEA RSI')
+_gsi_partners_df   = _group_partners('GSI')
+_noam_partners_df  = _group_partners('NOAM RSI')
+_apj_partners_df   = _group_partners('APJ RSI')
+_emea_partners_df  = _group_partners('EMEA RSI')
+_latam_partners_df = _group_partners('LATAM RSI')
 
-gsi_partner_ctx  = _build_group_ctx(_gsi_partners_df,  'GSI (Global)',    _credit_lookup, _wow_lkp)
-noam_partner_ctx = _build_group_ctx(_noam_partners_df, 'NOAM RSI',        _credit_lookup, _wow_lkp)
-apj_partner_ctx  = _build_group_ctx(_apj_partners_df,  'APJ RSI',         _credit_lookup, _wow_lkp)
-emea_partner_ctx = _build_group_ctx(_emea_partners_df, 'EMEA RSI',        _credit_lookup, _wow_lkp)
+gsi_partner_ctx   = _build_group_ctx(_gsi_partners_df,   'GSI (Global)',    _credit_lookup, _wow_lkp)
+noam_partner_ctx  = _build_group_ctx(_noam_partners_df,  'NOAM RSI',        _credit_lookup, _wow_lkp)
+apj_partner_ctx   = _build_group_ctx(_apj_partners_df,   'APJ RSI',         _credit_lookup, _wow_lkp)
+emea_partner_ctx  = _build_group_ctx(_emea_partners_df,  'EMEA RSI',        _credit_lookup, _wow_lkp)
+latam_partner_ctx = _build_group_ctx(_latam_partners_df, 'LATAM RSI',       _credit_lookup, _wow_lkp)
 
 # Combined context (kept for backward compatibility in data_context)
-partner_ctx = gsi_partner_ctx + noam_partner_ctx + apj_partner_ctx + emea_partner_ctx
+partner_ctx = gsi_partner_ctx + noam_partner_ctx + apj_partner_ctx + emea_partner_ctx + latam_partner_ctx
 
 stage_ctx = ""
 if len(managed_stage_data) > 0 and len(managed_bulk_conf) > 0:
@@ -1679,6 +1682,7 @@ PARTNER SCORECARD BY GROUP (Q3, target 75% CoCo adoption):
 {noam_partner_ctx}
 {apj_partner_ctx}
 {emea_partner_ctx}
+{latam_partner_ctx}
 
 COCO ADOPTION WoW — OVERALL (from weekly snapshot table):
 {adoption_wow_ctx}
