@@ -1702,7 +1702,7 @@ OKR PROGRESS — 6 GSIs WoW (CoCo engagement, all regions combined — LW=last w
 OKR PROGRESS — NoAM SIs WoW (CoCo engagement — LW=last week, PW=prior week):
 {noam_si_wow_ctx}
 
-OKR PROGRESS — REGIONAL BREAKDOWN (4 groups; GSI/NOAM goal=75%, APJ/EMEA goal=50%):
+OKR PROGRESS — REGIONAL BREAKDOWN (5 groups; GSI/NOAM goal=75%, APJ/EMEA/LATAM goal=50%):
 {regional_okr_ctx}
 
 QUARTER PROGRESS TREND (weeks left, and whether the count of CoCo use cases is still climbing):
@@ -2073,7 +2073,7 @@ Follow this EXACT structure with 9 sections:
 
 ## OKR PROGRESS — REGIONAL BREAKDOWN
 | Group | Scope | Total Partners | Total UCs | CoCo UCs | CoCo % | Partners Meeting Goal% |
-- Show 4 rows: GSI (Global), NOAM RSI, APJ RSI, EMEA RSI
+- Show 5 rows: GSI (Global), NOAM RSI, APJ RSI, EMEA RSI, LATAM RSI
 - Use "OKR PROGRESS — REGIONAL BREAKDOWN" data from context (each row has group name, total partners in scope, total UCs, CoCo UCs, CoCo %, partners meeting goal)
 - Total Partners = total partners in scope for that group (irrelevant of CoCo adoption)
 - Goal% is 75% for GSI and NOAM RSI, 50% for APJ RSI and EMEA RSI — reflect the correct target per row
