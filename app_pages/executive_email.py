@@ -787,6 +787,10 @@ with st.spinner("Loading data..."):
 
     # Managed partner stage EACV breakdown — Q3 ONLY (Aug 1 - Oct 31, 2026)
     managed_partners_sql = "','".join(MANAGED_PARTNERS)
+    _noam_rsi_sql  = "','".join(sorted(_NOAM_RSI_NAMES_EMAIL))
+    _apj_rsi_sql   = "','".join(sorted(_APJ_RSI_NAMES_EMAIL))
+    _emea_rsi_sql  = "','".join(sorted(_EMEA_RSI_NAMES_EMAIL))
+    _latam_rsi_sql = "','".join(sorted(_LATAM_RSI_NAMES_EMAIL))
     Q3_START = '2026-08-01'
     Q3_END = '2026-10-31'
     Q2_START = Q3_START  # alias so existing references still work
@@ -837,12 +841,19 @@ with st.spinner("Loading data..."):
             (uc.USE_CASE_STAGE IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan') AND uc.DECISION_DATE >= '{Q3_START}' AND uc.DECISION_DATE <= '{Q3_END}')
             OR (uc.USE_CASE_STAGE IN ('5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed') AND uc.GO_LIVE_DATE >= '{Q3_START}' AND uc.GO_LIVE_DATE <= '{Q3_END}')
         )
-        -- GSIs: all theaters (global); NOAM RSIs: NoAM only; APJ/EMEA RSIs: their respective regions
+        -- Group-specific geo rules (matches managed_bulk_conf filtering exactly)
         AND (
+            -- GSIs: all theaters globally
             uc.PARTNER_NAME IN ('Accenture','Capgemini Technologies LLC','Cognizant Technology Solutions US Corp',
                                 'Deloitte Consulting','EY','Ernst & Young (EY)','IBM','IBM Consulting')
-            OR uc.THEATER_NAME IN ('AMSExpansion','USMajors','AMSAcquisition','USPubSec')
-            OR uc.REGION_NAME IN ('Japan','Korea','ASEAN','ANZ','India','CentralEMEA','SouthEMEA','UK')
+            -- NOAM RSIs: NoAM theaters ONLY (never APJ/EMEA regions)
+            OR (uc.PARTNER_NAME IN ('{_noam_rsi_sql}') AND uc.THEATER_NAME IN ('AMSExpansion','USMajors','AMSAcquisition','USPubSec'))
+            -- APJ RSIs: their APJ regions only
+            OR (uc.PARTNER_NAME IN ('{_apj_rsi_sql}') AND uc.REGION_NAME IN ('Japan','Korea','ASEAN','ANZ','India'))
+            -- EMEA RSIs: their EMEA regions only
+            OR (uc.PARTNER_NAME IN ('{_emea_rsi_sql}') AND uc.REGION_NAME IN ('CentralEMEA','SouthEMEA','UK'))
+            -- LATAM RSIs: LATAM region only
+            OR (uc.PARTNER_NAME IN ('{_latam_rsi_sql}') AND uc.REGION_NAME = 'LATAM')
         )
         GROUP BY STAGE_GROUP
         ORDER BY STAGE_GROUP

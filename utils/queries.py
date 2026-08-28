@@ -93,6 +93,14 @@ def _theater_filter(region: str) -> str:
         return " AND REGION_NAME = 'LATAM'"
     return ""
 
+def _subregion_filter(subregions) -> str:
+    """Additional REGION_NAME filter applied after the theater filter.
+    subregions: list/tuple of REGION_NAME values, or empty/None for no restriction."""
+    if not subregions:
+        return ""
+    escaped = "','".join(str(s).replace("'", "''") for s in subregions)
+    return f" AND uc.REGION_NAME IN ('{escaped}')"
+
 def _source_filter(source: str) -> str:
     if source == "PSE Confirmed":
         return " AND COCO_MENTION_SOURCE = 'PARTNER_COMMENTS'"
@@ -360,9 +368,10 @@ def get_partner_metrics_by_region(_conn, start_date, end_date, include_account_c
     """)
 
 
-def get_adoption_overview(_conn, start_date, end_date, region=None, partners=None, include_account_coco=True, confidence=None):
+def get_adoption_overview(_conn, start_date, end_date, region=None, partners=None, include_account_coco=True, confidence=None, subregions=None):
     """Get adoption metrics from DT_OKR_USE_CASES for the Overview page."""
     tf = _theater_filter(region)
+    srf = _subregion_filter(subregions)
     coco_cte = _coco_accounts_cte(start_date, include_account_coco, confidence)
     is_coco = _is_coco_expanded()
     partner_filter = ""
@@ -398,7 +407,7 @@ def get_adoption_overview(_conn, start_date, end_date, region=None, partners=Non
     FROM {DT_OKR} uc
     LEFT JOIN coco_active_accounts caa ON UPPER(uc.ACCOUNT_NAME) = caa.ACCOUNT_NAME_UPPER
     WHERE {date_filter}
-    {tf}{partner_filter}
+    {tf}{srf}{partner_filter}
     """
     return _conn.query(query)
 
@@ -712,8 +721,9 @@ def get_latam_rsi_adoption(_conn, start_date: str, end_date: str):
     """)
 
 @st.cache_data(ttl=timedelta(minutes=30))
-def get_okr_coco_adoption(_conn, quarter_start, quarter_end, region=None, include_account_coco=True, confidence=None):
+def get_okr_coco_adoption(_conn, quarter_start, quarter_end, region=None, include_account_coco=True, confidence=None, subregions=None):
     tf = _theater_filter(region)
+    srf = _subregion_filter(subregions)
     coco_cte = _coco_accounts_cte(quarter_start, include_account_coco, confidence)
     is_coco = _is_coco_expanded()
     query = f"""
@@ -744,14 +754,15 @@ def get_okr_coco_adoption(_conn, quarter_start, quarter_end, region=None, includ
         (uc.USE_CASE_STAGE IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan') AND uc.DECISION_DATE >= '{quarter_start}' AND uc.DECISION_DATE <= '{quarter_end}')
         OR (uc.USE_CASE_STAGE IN ('5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed') AND uc.GO_LIVE_DATE >= '{quarter_start}' AND uc.GO_LIVE_DATE <= '{quarter_end}')
     )
-    {tf}
+    {tf}{srf}
     ORDER BY uc.PARTNER_NAME, IS_COCO_ATTACHED DESC, uc.USE_CASE_EACV DESC NULLS LAST
     """
     return _conn.query(query)
 
 @st.cache_data(ttl=timedelta(minutes=30))
-def get_okr_partner_summary(_conn, quarter_start, quarter_end, region=None, include_account_coco=True, confidence=None):
+def get_okr_partner_summary(_conn, quarter_start, quarter_end, region=None, include_account_coco=True, confidence=None, subregions=None):
     tf = _theater_filter(region)
+    srf = _subregion_filter(subregions)
     coco_cte = _coco_accounts_cte(quarter_start, include_account_coco, confidence)
     is_coco = _is_coco_expanded()
     query = f"""
@@ -771,7 +782,7 @@ def get_okr_partner_summary(_conn, quarter_start, quarter_end, region=None, incl
         (uc.USE_CASE_STAGE IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan') AND uc.DECISION_DATE >= '{quarter_start}' AND uc.DECISION_DATE <= '{quarter_end}')
         OR (uc.USE_CASE_STAGE IN ('5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed') AND uc.GO_LIVE_DATE >= '{quarter_start}' AND uc.GO_LIVE_DATE <= '{quarter_end}')
     )
-    {tf}
+    {tf}{srf}
     GROUP BY uc.PARTNER_NAME
     HAVING COUNT(*) >= 1
     ORDER BY total_use_cases DESC
@@ -1132,8 +1143,9 @@ def get_partner_coco_coverage(_conn, region=None, start_date=None, end_date=None
     return _conn.query(query)
 
 @st.cache_data(ttl=timedelta(minutes=30))
-def get_okr_stage_breakdown(_conn, region=None, start_date=None, end_date=None, include_account_coco=True, confidence=None):
+def get_okr_stage_breakdown(_conn, region=None, start_date=None, end_date=None, include_account_coco=True, confidence=None, subregions=None):
     tf = _theater_filter(region)
+    srf = _subregion_filter(subregions)
     effective_start = start_date or '2025-11-20'
     coco_cte = _coco_accounts_cte(effective_start, include_account_coco, confidence)
     is_coco = _is_coco_expanded()
@@ -1160,7 +1172,7 @@ def get_okr_stage_breakdown(_conn, region=None, start_date=None, end_date=None, 
     FROM {DT_OKR} uc
     LEFT JOIN coco_active_accounts caa ON UPPER(uc.ACCOUNT_NAME) = caa.ACCOUNT_NAME_UPPER
     WHERE {date_filter}
-    {tf}
+    {tf}{srf}
     GROUP BY uc.PARTNER_NAME, uc.USE_CASE_STAGE
     ORDER BY uc.PARTNER_NAME, uc.USE_CASE_STAGE
     """
