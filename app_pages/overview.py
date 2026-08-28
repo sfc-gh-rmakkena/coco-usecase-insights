@@ -29,6 +29,7 @@ from utils.ask_ai import build_filter_context
 conn = st.session_state.conn
 region = st.session_state.get("selected_region", "Global")
 selected_partners = st.session_state.get("selected_partners", [])
+selected_subregions = st.session_state.get("selected_subregions", []) or []
 start_date = str(st.session_state.get("okr_start_date", "2026-05-01"))
 end_date = str(st.session_state.get("okr_end_date", "2026-07-31"))
 # Resolved theater tuple for the selected region — passed to SQL queries so they respect the region filter
@@ -150,7 +151,7 @@ import pandas as pd
 # Get base stats (total counts, EACV, stage info) — always use IS_COCO only for base
 stats = get_adoption_overview(conn, start_date=start_date, end_date=end_date, region=region,
     partners=resolve_partner_filter(selected_partners) if selected_partners else None,
-    include_account_coco=False, confidence=None)
+    include_account_coco=False, confidence=None, subregions=selected_subregions or None)
 if len(stats) == 0:
     st.warning("No data available.")
     st.stop()

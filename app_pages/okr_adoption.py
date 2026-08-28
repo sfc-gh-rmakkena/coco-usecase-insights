@@ -16,6 +16,7 @@ _ALL_MANAGED_OKR = _GSI_OKR | _NOAM_OKR | set(APJ_RSI_REGION_MAP.keys()) | set(E
 conn = st.session_state.conn
 region = st.session_state.get("selected_region", "Global")
 selected_partners = st.session_state.get("selected_partners", [])
+selected_subregions = st.session_state.get("selected_subregions", []) or []
 start_date = st.session_state.get("okr_start_date", date(2026, 5, 1))
 end_date = st.session_state.get("okr_end_date", date(2026, 7, 31))
 include_account_coco = st.session_state.get("include_account_coco", "Yes") == "Yes"
@@ -39,8 +40,8 @@ q_start = str(start_date)
 q_end = str(end_date)
 
 # Get base summary, stage breakdown and WoW adoption delta (same as Coverage page)
-base_summary = get_okr_partner_summary(conn, q_start, q_end, region=region, include_account_coco=False, confidence=None)
-stage_breakdown = get_okr_stage_breakdown(conn, region=region, start_date=q_start, end_date=q_end, include_account_coco=False, confidence=None)
+base_summary = get_okr_partner_summary(conn, q_start, q_end, region=region, include_account_coco=False, confidence=None, subregions=selected_subregions or None)
+stage_breakdown = get_okr_stage_breakdown(conn, region=region, start_date=q_start, end_date=q_end, include_account_coco=False, confidence=None, subregions=selected_subregions or None)
 adoption_wow = get_coco_final_wow(conn)
 credit_data = get_partner_credit_consumption(conn, base_summary['PARTNER_NAME'].tolist(), q_start)
 
@@ -502,7 +503,7 @@ partner_list = filtered_sorted['PARTNER_NAME'].tolist()
 selected_partner = st.selectbox("Select Partner", partner_list, key="okr_partner_select")
 
 if selected_partner:
-    detail = get_okr_coco_adoption(conn, q_start, q_end, region=region, include_account_coco=include_account_coco, confidence=confidence)
+    detail = get_okr_coco_adoption(conn, q_start, q_end, region=region, include_account_coco=include_account_coco, confidence=confidence, subregions=selected_subregions or None)
     detail = detail.copy()
     detail['PARTNER_NAME'] = detail['PARTNER_NAME'].replace(PARTNER_RENAME_MAP)
     partner_detail = detail[detail['PARTNER_NAME'] == selected_partner]
