@@ -114,11 +114,20 @@ _COCO_COUNT_RE  = re.compile(r'\bcoco\s+uc\b|\bcoco\s+use\s+case\b|\bcoco\s+coun
 # Delivery surface, an ACCOUNT-level split of CoCo usage. Checked before
 # credits/tokens/coco_count so "credits by CLI" resolves as a surface split
 # rather than a single blended credit number.
+# Deliberately NARROW. Words that are ordinary partner-domain vocabulary must not
+# appear here, or unrelated questions get answered with account-grain surface data:
+#   "channel"   -> "channel partner" is standard partner terminology
+#   "interface" -> generic English
+#   bare "ui"   -> too short to be safe; require an explicit CoCo/web qualifier
+# "surface" only counts when it is about a CoCo/delivery surface, not any surface.
 _SURFACE_RE = re.compile(
-    r'\bcli\b|\bcommand\s+line\b|\bterminal\b'
-    r'|\bdesktop\b|\bcoco\s+desktop\b'
-    r'|\bui\b|\bweb\s+ui\b|\bsnowsight\b'
-    r'|\bsurfaces?\b|\binterfaces?\b|\bchannels?\b',
+    r'\bcoco\s+cli\b|\bcli\b(?!\s*ent)'          # cli, but not "client"/"clients"
+    r'|\bcommand\s+line\b|\bterminal\b'
+    r'|\bcoco\s+desktop\b|\bdesktop\s+app\b|\bdesktop\b'
+    r'|\bweb\s+ui\b|\bcoco\s+ui\b|\bsnowsight\b'
+    r'|\b(?:coco|delivery|usage|product)\s+surfaces?\b'
+    r'|\bby\s+surfaces?\b|\bper\s+surfaces?\b|\bacross\s+surfaces?\b'
+    r'|\bui\s+(?:vs\.?|versus|and)\b|\b(?:vs\.?|versus|and)\s+ui\b',
     re.I,
 )
 

@@ -824,7 +824,14 @@ def build_filter_context() -> str:
     lines = ["\nSIDEBAR FILTERS (apply ONLY for adoption/CoCo% questions, NOT for credit/token questions):"]
 
     theaters = resolve_region_theaters(region)
-    if theaters:
+    if region == 'LATAM':
+        # LATAM is a REGION_NAME, not a THEATER_NAME — there are zero rows with
+        # THEATER_NAME='LATAM'. LATAM RSIs sit under AMSAcquisition and are scoped
+        # by REGION_NAME, so emitting a theatre filter here matches nothing.
+        lines.append("- Region: LATAM → filter: REGION_NAME = 'LATAM' "
+                     "(LATAM is a region under the AMSAcquisition theatre, NOT a theatre; "
+                     "never filter THEATER_NAME = 'LATAM')")
+    elif theaters:
         lines.append(f"- Region: {region} → filter: THEATER_NAME IN ({', '.join(repr(t) for t in theaters)})")
     else:
         lines.append(f"- Region: Global (no theater filter needed)")

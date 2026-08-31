@@ -29,10 +29,11 @@ QUARTERS = {
 
 # ── Group → raw partner names (from PARTNER_ALIASES) ─────────────────────────
 _GROUP_KEY_MAP = {
-    "GSI":  "--- GSIs ---",
-    "NOAM": "--- NOAM RSIs ---",
-    "APJ":  "--- APJ RSIs ---",
-    "EMEA": "--- EMEA RSIs ---",
+    "GSI":   "--- GSIs ---",
+    "NOAM":  "--- NOAM RSIs ---",
+    "APJ":   "--- APJ RSIs ---",
+    "EMEA":  "--- EMEA RSIs ---",
+    "LATAM": "--- LATAM RSIs ---",
 }
 GROUP_RAW_NAMES = {
     group: set(PARTNER_ALIASES.get(key, []))
@@ -45,8 +46,14 @@ GROUP_CANONICAL = {
     for group, raw in GROUP_RAW_NAMES.items()
 }
 
-GROUP_TARGETS = {"GSI": 75, "NOAM": 75, "APJ": 50, "EMEA": 50}
+GROUP_TARGETS = {"GSI": 75, "NOAM": 75, "APJ": 50, "EMEA": 50, "LATAM": 50}
 DEFAULT_TARGET = 50
+
+# LATAM RSIs are GEO-RESTRICTED: only use cases in REGION_NAME = 'LATAM' count
+# toward them, per LATAM_RSI_REGION_MAP and get_latam_rsi_adoption(). A LATAM RSI
+# can carry a NoAM theatre (e.g. SEIDOR sits in AMSAcquisition) so the partner
+# name alone is not sufficient scoping.
+GROUP_REGION_RESTRICTION = {"LATAM": "LATAM"}
 
 
 # ── Quarter bulk cache ────────────────────────────────────────────────────────
@@ -79,7 +86,12 @@ def _filter_entity(df: pd.DataFrame, partner: str = None, group: str = None,
     if partner:
         return df[df["PARTNER_NAME"] == partner]
     if group and group in GROUP_CANONICAL:
-        return df[df["PARTNER_NAME"].isin(GROUP_CANONICAL[group])]
+        out = df[df["PARTNER_NAME"].isin(GROUP_CANONICAL[group])]
+        # Honour the per-group geo restriction (LATAM RSIs are LATAM-region only).
+        _region = GROUP_REGION_RESTRICTION.get(group)
+        if _region and "REGION_NAME" in out.columns:
+            out = out[out["REGION_NAME"] == _region]
+        return out
     return df
 
 
