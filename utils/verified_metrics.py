@@ -72,7 +72,10 @@ def get_quarter_bulk(conn, quarter: str) -> pd.DataFrame:
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def _filter_entity(df: pd.DataFrame, partner: str = None, group: str = None) -> pd.DataFrame:
+def _filter_entity(df: pd.DataFrame, partner: str = None, group: str = None,
+                  theatre: str = None) -> pd.DataFrame:
+    if theatre and "THEATER_NAME" in df.columns:
+        df = df[df["THEATER_NAME"] == theatre]
     if partner:
         return df[df["PARTNER_NAME"] == partner]
     if group and group in GROUP_CANONICAL:
@@ -411,23 +414,122 @@ def resolve_theatre(df: pd.DataFrame, partner=None, group=None) -> dict:
     return {"by_theatre": by_t, "text": f"Theatre breakdown:\n{lines}"}
 
 
-def resolve_region(df: pd.DataFrame, partner=None, group=None) -> dict:
-    sub = _filter_entity(df, partner, group)
+def resolve_region(df: pd.DataFrame, partner=None, group=None, theatre=None) -> dict:
+    """Break down by REGION_NAME — the level below theatre. Its meaning depends on
+    the theatre (industry for USMajors, country for APJ, ...), so label it."""
+    from utils.intent_classifier import THEATRE_SUBREGION_LABEL
+
+    sub = _filter_entity(df, partner, group, theatre)
     col = next((c for c in ["REGION_NAME", "THEATER_NAME"] if c in sub.columns), None)
     if col is None or len(sub) == 0:
-        return {"text": "Region data not available."}
+        scope = f" for {theatre}" if theatre else ""
+        return {"text": f"Region data not available{scope}."}
 
     by_r = sub.groupby(col).agg(
         TOTAL=("USE_CASE_ID", "count"),
         COCO=("IS_COCO_FINAL", "sum"),
     ).reset_index()
     by_r["COCO_PCT"] = (by_r["COCO"] * 100.0 / by_r["TOTAL"].replace(0, float("nan"))).round(1).fillna(0)
+    by_r = by_r.sort_values("TOTAL", ascending=False)
 
     lines = "\n".join(
         f"  {r[col]}: {int(r['COCO'])}/{int(r['TOTAL'])} CoCo ({r['COCO_PCT']:.1f}%)"
         for _, r in by_r.iterrows()
     )
+    if theatre and col == "REGION_NAME":
+        label  = THEATRE_SUBREGION_LABEL.get(theatre, "sub-region")
+        total  = len(sub)
+        coco   = int(sub["IS_COCO_FINAL"].sum())
+        pct    = (coco * 100.0 / total) if total else 0.0
+        header = (
+            f"{theatre} breakdown by {label} (REGION_NAME is {label} within {theatre})\n"
+            f"{theatre} overall: {coco}/{total} CoCo ({pct:.1f}%)\nBy {label}:"
+        )
+        return {"by_region": by_r, "theatre": theatre,
+                "text": f"{header}\n{lines}"}
     return {"by_region": by_r, "text": f"Region breakdown:\n{lines}"}
+
+
+# ── Surface (CLI / Desktop / UI) ──────────────────────────────────────────────
+# CRITICAL: these are ACCOUNT-level metrics carried on every use-case row for that
+# account. Summing them across UC rows over-counts by the number of use cases per
+# account (~1.9x on Q3 data), so we always dedupe to one row per account first.
+_SURFACES = [
+    ("CLI",     "CLI_CREDITS",     "CLI_TOKENS",     "CLI_REQUESTS"),
+    ("Desktop", "DESKTOP_CREDITS", "DESKTOP_TOKENS", "DESKTOP_REQUESTS"),
+    ("UI",      "UI_CREDITS",      "UI_TOKENS",      "UI_REQUESTS"),
+]
+
+
+def _scope_label(partner=None, group=None, theatre=None) -> str:
+    """Human-readable scope for a verified block. Without this the LLM cannot tell
+    that partner-filtered data is partner-specific, and wrongly disclaims it."""
+    parts = []
+    if partner:
+        parts.append(partner)
+    elif group:
+        parts.append(f"{group} partners")
+    if theatre:
+        parts.append(theatre)
+    return " / ".join(parts) if parts else "all managed partners"
+
+
+def resolve_surface(df: pd.DataFrame, partner=None, group=None, theatre=None) -> dict:
+    """CoCo usage split by delivery surface, plus account-level surface adoption.
+
+    Surface adoption is defined at the ACCOUNT grain: of the customer accounts
+    attached to a CoCo use case, what share are active on each surface. An
+    adoption % per surface at use-case grain does not exist — use cases are not
+    attributed to a surface.
+    """
+    sub = _filter_entity(df, partner, group, theatre)
+    if len(sub) == 0 or "ACCOUNT_NAME_UPPER" not in sub.columns:
+        return {"text": "Surface (CLI/Desktop/UI) data not available."}
+
+    coco = sub[sub["IS_COCO_FINAL"]]
+    if len(coco) == 0:
+        return {"text": "No CoCo use cases in scope, so no surface usage to report."}
+
+    # One row per account — this dedup is what keeps the totals correct.
+    acct = coco.drop_duplicates(["ACCOUNT_NAME_UPPER"])
+    total_accts = len(acct)
+
+    rows = []
+    for name, c_col, t_col, r_col in _SURFACES:
+        credits = _to_float(acct, c_col).to_numpy()
+        tokens  = _to_float(acct, t_col).to_numpy()
+        reqs    = _to_float(acct, r_col).to_numpy()
+        active  = int(((credits > 0) | (reqs > 0)).sum())
+        rows.append({
+            "SURFACE":       name,
+            "CREDITS":       float(credits.sum()),
+            "TOKENS":        float(tokens.sum()),
+            "REQUESTS":      float(reqs.sum()),
+            "ACCTS_ACTIVE":  active,
+            "ADOPTION_PCT":  round(active * 100.0 / total_accts, 1) if total_accts else 0.0,
+        })
+
+    by_s = pd.DataFrame(rows).sort_values("CREDITS", ascending=False)
+    total_credits = by_s["CREDITS"].sum()
+
+    lines = "\n".join(
+        f"  {r['SURFACE']}: {_fmt_num(r['CREDITS'], ',.0f')} credits "
+        f"({(r['CREDITS'] * 100.0 / total_credits if total_credits else 0):.1f}% of surface credits) | "
+        f"{_fmt_tokens(r['TOKENS'])} tokens | {_fmt_num(r['REQUESTS'], ',.0f')} requests | "
+        f"active on {int(r['ACCTS_ACTIVE'])}/{total_accts} CoCo accounts ({r['ADOPTION_PCT']:.1f}% surface adoption)"
+        for _, r in by_s.iterrows()
+    )
+    header = (
+        f"Scope: {_scope_label(partner, group, theatre)}. This data IS specific to that scope — "
+        f"it is already filtered, so answer the question directly for it.\n"
+        f"Surface breakdown (CLI / Desktop / UI) across {total_accts} CoCo-attached accounts "
+        f"in scope.\n"
+        "Surface adoption = share of those accounts active on that surface (account grain, "
+        "deduplicated). Accounts can be active on more than one surface, so shares sum to "
+        "more than 100%. Use cases are not attributed to a surface, so there is no "
+        "use-case-level adoption % per surface.\nBy surface:"
+    )
+    return {"by_surface": by_s, "text": f"{header}\n{lines}"}
 
 
 def resolve_attribution(df: pd.DataFrame, partner=None, group=None) -> dict:
@@ -655,6 +757,7 @@ _RESOLVERS = {
     "stage":       resolve_stage,
     "theatre":     resolve_theatre,
     "region":      resolve_region,
+    "surface":     resolve_surface,
     "attribution": resolve_attribution,
     "confidence":  resolve_confidence,
     "uc_analysis": resolve_uc_analysis,
@@ -672,6 +775,7 @@ def get_verified_answer(conn, question: str, intent: dict) -> dict | None:
     quarter = intent.get("quarter", "q3")
     partner = intent.get("partner")
     group   = intent.get("group")
+    theatre = intent.get("theatre")
 
     if metric not in _RESOLVERS and metric != "wow" and metric != "stalled":
         return None
@@ -686,8 +790,16 @@ def get_verified_answer(conn, question: str, intent: dict) -> dict | None:
             elif metric == "wow":
                 bulk = get_quarter_bulk(conn, q)
                 results[q] = resolve_wow(conn, bulk, partner, group)
+            elif metric == "region":
+                # resolve_region needs the theatre to label the sub-region level
+                bulk = get_quarter_bulk(conn, q)
+                results[q] = resolve_region(bulk, partner, group, theatre)
             else:
                 bulk = get_quarter_bulk(conn, q)
+                # A named theatre scopes every other metric (it is a filter, and
+                # dropping it silently answered a different question entirely).
+                if theatre and len(bulk) > 0 and "THEATER_NAME" in bulk.columns:
+                    bulk = bulk[bulk["THEATER_NAME"] == theatre]
                 results[q] = _RESOLVERS[metric](bulk, partner, group)
         except Exception as e:
             results[q] = {"text": f"Data fetch error for {QUARTERS[q]['label']}: {e}"}
@@ -712,6 +824,9 @@ def get_verified_answer(conn, question: str, intent: dict) -> dict | None:
     # Ask LLM to write clean prose around the verified numbers
     from utils.cortex_helpers import cortex_complete
     is_uc_analysis = metric == "uc_analysis"
+    # A breakdown must be reported in full — a 2-4 sentence budget makes the model
+    # silently drop rows, which reads as "that sub-region has no use cases".
+    is_breakdown = metric in ("region", "theatre", "stage", "surface")
     prompt = (
         "You are a concise data assistant for the CoCo (Cortex Code) partner adoption dashboard.\n\n"
         f"The following data is EXACT and verified — do not modify or contradict it:\n"
@@ -726,6 +841,18 @@ def get_verified_answer(conn, question: str, intent: dict) -> dict | None:
             "Be clear that credits are attributed at the customer-account level and the named "
             "use case is the one at that account — not a direct causal link. "
             "Keep the answer to 4-6 sentences."
+        )
+    elif is_breakdown:
+        prompt += (
+            "The verified block is ALREADY FILTERED to the scope stated in it. Never claim you "
+            "lack data for that scope — if the block names a scope, the numbers ARE for that scope. "
+            "Report EVERY row in the breakdown above — do not omit, merge, or summarise away "
+            "any row, even low-volume ones. Keep each row's exact counts and percentage. "
+            "If the verified block names what the breakdown level means (e.g. 'breakdown by industry', "
+            "'breakdown by geography'), say so explicitly in your first sentence. "
+            "Lead with the scoped overall figure if one is given, then list every row, then add "
+            "one sentence naming the highest and lowest performer. "
+            "Do not say 'approximately'. Use ONLY the verified numbers above."
         )
     else:
         prompt += (

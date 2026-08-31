@@ -58,8 +58,69 @@ _WOW_RE         = re.compile(r'\bwow\b|\bweek\s+over\s+week\b|\bweek-over-week\b
 _STAGE_RE       = re.compile(r'\bstage\s*\d\b|\bdeployed\b|\bgo.live\b|\bimplementation\b|\bvalidation\b|\bstage\s+breakdown\b|\bfunnel\b|\bstage\s+7\b|\bstage\s+5\b', re.I)
 _THEATRE_RE     = re.compile(r'\btheatre\b|\btheater\b|\busmajors\b|\bmajors\b|\bamse\b|\bamsexpansion\b|\bamsa\b|\bacquisition\b|\bpubsec\b|\bpublic\s+sector\b', re.I)
 _REGION_RE      = re.compile(r'\bregion\b|\bnoam\b|\bapj\b|\bemea\b|\bamericas\b', re.I)
+
+# ── Theatre scope ─────────────────────────────────────────────────────────────
+# Spoken forms → canonical THEATER_NAME in DT_OKR_USE_CASES. A named theatre is
+# a SCOPE (a filter), not a breakdown dimension — grouping by THEATER_NAME to
+# answer "US Majors breakdown" returns every theatre and silently drops the scope.
+_THEATRE_CANON = {
+    "usmajors":         "USMajors",
+    "us majors":        "USMajors",
+    "us major":         "USMajors",
+    "majors":           "USMajors",
+    "uspubsec":         "USPubSec",
+    "us pubsec":        "USPubSec",
+    "pubsec":           "USPubSec",
+    "public sector":    "USPubSec",
+    "amsexpansion":     "AMSExpansion",
+    "ams expansion":    "AMSExpansion",
+    "us expansion":     "AMSExpansion",
+    "amse":             "AMSExpansion",
+    "amsacquisition":   "AMSAcquisition",
+    "ams acquisition":  "AMSAcquisition",
+    "us acquisition":   "AMSAcquisition",
+    "amsa":             "AMSAcquisition",
+    "emea":             "EMEA",
+    "apj":              "APJ",
+}
+# NOTE: bare "expansion" / "acquisition" are deliberately absent — they are
+# ordinary English ("customer acquisition credits") and scoping on them would
+# silently filter the answer to a theatre the user never asked for.
+
+# What REGION_NAME actually means inside each theatre — used to label the answer.
+THEATRE_SUBREGION_LABEL = {
+    "USMajors":       "industry",
+    "USPubSec":       "government tier",
+    "APJ":            "country",
+    "EMEA":           "sub-geography",
+    "AMSExpansion":   "geography",
+    "AMSAcquisition": "segment x geography",
+}
+
+# "break this down further" phrasings — these ask for the level BELOW theatre.
+_DRILLDOWN_RE = re.compile(
+    r'\bbreak\s?down\b|\bbreaking\s+down\b|\bbroken\s+down\b'
+    r'|\bsub[\s-]?regions?\b|\bsub[\s-]?geo\w*\b'
+    r'|\bdrill[\s-]?down\b|\bnext\s+level\b|\bone\s+level\b|\blevel\s+below\b'
+    r'|\bsplit\s+(it\s+)?by\b|\bgroup(ed)?\s+by\b'
+    r'|\bby\s+(industry|vertical|country|segment|sub[\s-]?region)\b'
+    r'|\bmore\s+(granular|detail|breakdown)\b|\bfurther\s+breakdown\b|\bdeeper\b',
+    re.I,
+)
 _TARGET_RE      = re.compile(r'\btarget\b|\bgoal\b|\b50%\b|\b75%\b|\bmeet(ing)?\b|\bgap\b|\bneed\s+to\s+hit\b|\bpartners\s+meeting\b|\bpartners\s+above\b|\bpartners\s+below\b|\babove\s+target\b|\bbelow\s+target\b|\bhitting\s+target\b|\bat\s+target\b', re.I)
 _COCO_COUNT_RE  = re.compile(r'\bcoco\s+uc\b|\bcoco\s+use\s+case\b|\bcoco\s+count\b|\bhow\s+many\s+coco\b|\bis_coco_final\b|\bcoco\s+attach(ed)?\b|\bcoco\s+adoption\b|\badoption\s+rate\b|\badoption\s*%|\bcoco\s*%|\bcoco\s+percentage\b|\bhow\s+many\s+use\s+case\b|\btotal\s+uc\b|\btotal\s+use\s+case\b', re.I)
+
+# ── Surface (CLI / Desktop / UI) ───────────────────────────────────────────────
+# Delivery surface, an ACCOUNT-level split of CoCo usage. Checked before
+# credits/tokens/coco_count so "credits by CLI" resolves as a surface split
+# rather than a single blended credit number.
+_SURFACE_RE = re.compile(
+    r'\bcli\b|\bcommand\s+line\b|\bterminal\b'
+    r'|\bdesktop\b|\bcoco\s+desktop\b'
+    r'|\bui\b|\bweb\s+ui\b|\bsnowsight\b'
+    r'|\bsurfaces?\b|\binterfaces?\b|\bchannels?\b',
+    re.I,
+)
 
 # ── Use-case analysis — partner-scoped deep-dive with account/credit context ──
 # Intercepts "why" + partner + metric, "which use case is driving", "analyse the UCs"
@@ -155,12 +216,105 @@ def _detect_group(text: str) -> str | None:
     return None
 
 
+# ── Cross-tab detection ───────────────────────────────────────────────────────
+# The programmatic resolvers each group by exactly ONE dimension. A question that
+# asks for a second dimension ("non-CoCo in stage 3 BY WORKLOAD") cannot be
+# answered by them, and intercepting it produces a block with no workload data —
+# so the LLM correctly reports it doesn't know. Such questions must reach the
+# Cortex Agent, which has the full semantic model and can write any GROUP BY.
+_DIM_SYNONYMS = {
+    "workload":     "workload",
+    "domain":       "workload",
+    "technical use case": "workload",
+    "uc type":      "workload",
+    "use case type": "workload",
+    "type":         "workload",
+    "industry":     "region",
+    "vertical":     "region",
+    "country":      "region",
+    "sub region":   "region",
+    "sub-region":   "region",
+    "subregion":    "region",
+    "region":       "region",
+    "theatre":      "theatre",
+    "theater":      "theatre",
+    "stage":        "stage",
+    "partner":      "partner",
+    "cli":          "surface",
+    "command line": "surface",
+    "terminal":     "surface",
+    "desktop":      "surface",
+    "ui":           "surface",
+    "web ui":       "surface",
+    "snowsight":    "surface",
+    "surface":      "surface",
+    "interface":    "surface",
+    "channel":      "surface",
+    "confidence":   "confidence",
+    "confidence band": "confidence",
+    "source":       "attribution",
+    "attribution":  "attribution",
+    "account":      "account",
+    "customer":     "account",
+    "quarter":      "time",
+    "month":        "time",
+    "week":         "time",
+}
+
+# Only an explicit group-by phrasing counts — "by X", "per X", "grouped by X",
+# "split by X", "broken down by X". A bare mention of a dimension does not.
+_BY_DIM_RE = re.compile(
+    r'\b(?:by|per|grouped\s+by|group\s+by|split\s+by|broken\s+down\s+by|'
+    r'breakdown\s+by|break\s+down\s+by|across)\s+'
+    r'(technical\s+use\s+case|use\s+case\s+type|confidence\s+band|sub[\s-]?region|'
+    r'workload|domain|uc\s+type|industry|vertical|country|region|theatre|theater|'
+    r'stage|partner|confidence|source|attribution|account|customer|quarter|month|week|type|'
+    r'cli|command\s+line|terminal|desktop|web\s+ui|snowsight|surface|interface|channel|ui)\b',
+    re.I,
+)
+
+# Which single dimension each metric's resolver actually groups by.
+_RESOLVER_DIM = {
+    "stage":       "stage",
+    "theatre":     "theatre",
+    "region":      "region",
+    "surface":     "surface",
+    "attribution": "attribution",
+    "confidence":  "confidence",
+}
+
+
+def _requested_dims(text: str) -> set:
+    """Canonical dimensions the question explicitly asks to group by."""
+    dims = set()
+    for raw in _BY_DIM_RE.findall(text or ""):
+        key = re.sub(r'[\s-]+', ' ', raw.strip().lower())
+        canon = _DIM_SYNONYMS.get(key)
+        if canon:
+            dims.add(canon)
+    return dims
+
+
+def _detect_theatre(text: str) -> str | None:
+    """Longest-match lookup of a named sales theatre, returning its canonical
+    THEATER_NAME. Longest-match so "us expansion" wins over "expansion"."""
+    t = text.lower()
+    best, best_len = None, 0
+    for spoken, canonical in _THEATRE_CANON.items():
+        if len(spoken) > best_len and re.search(rf'\b{re.escape(spoken)}\b', t):
+            best, best_len = canonical, len(spoken)
+    return best
+
+
 def _detect_metric(text: str) -> str | None:
     # Order: specific → general. Credits before tokens (both are "token" adjacent).
     # UC analysis must be checked FIRST — it covers WHY/driver questions that
     # would otherwise fall into credits/tokens/coco_count and lose the deep context.
     if _UC_ANALYSIS_RE.search(text):
         return "uc_analysis"
+    # Surface before credits/tokens: "credits by CLI" is a surface split.
+    if _SURFACE_RE.search(text):
+        return "surface"
     if _CREDIT_RE.search(text):
         return "credits"
     if _TOKEN_RE.search(text):
@@ -198,6 +352,7 @@ def detect_intent(question: str, chat_history: list = None) -> dict:
         quarter  : str          — q1/q2/q3/ytd/both (defaults to "q3")
         partner  : str | None   — canonical partner name if mentioned
         group    : str | None   — GSI/NOAM/APJ/EMEA if mentioned
+        theatre  : str | None   — canonical THEATER_NAME to scope to, if named
         global_  : bool         — true for portfolio-wide aggregation phrases
         confidence: "high"|"low"
     """
@@ -208,6 +363,21 @@ def detect_intent(question: str, chat_history: list = None) -> dict:
     quarter = _detect_quarter(q)
     metric  = _detect_metric(q)
     global_ = bool(_GLOBAL_RE.search(q))
+
+    # ── Theatre scope + drill-down ────────────────────────────────────────────
+    # A named theatre is a FILTER, not a group-by. "EMEA RSI" is a partner group,
+    # not the EMEA theatre, so group detection wins.
+    theatre   = None if group else _detect_theatre(q)
+    drilldown = bool(_DRILLDOWN_RE.search(q))
+
+    if theatre:
+        # "US Majors sub-region breakdown" → group by REGION_NAME within USMajors
+        # (which is industry for USMajors, country for APJ, and so on).
+        if drilldown and metric in (None, "theatre", "region", "coco_count"):
+            metric = "region"
+        # "how is US Majors doing" → a scoped count, not a list of every theatre
+        elif metric == "theatre":
+            metric = "coco_count"
 
     # Carry entity forward from recent chat history when pronouns are used
     if chat_history and not partner and not group:
@@ -222,23 +392,25 @@ def detect_intent(question: str, chat_history: list = None) -> dict:
             if partner or group:
                 break
 
-    has_entity = bool(partner or group or global_)
+    has_entity = bool(partner or group or global_ or theatre)
     has_metric = bool(metric)
 
-    # Row-level questions always fall through — EXCEPT uc_analysis which has its
-    # own programmatic path that handles per-UC and per-account detail.
-    if _ROW_LEVEL_RE.search(q) and metric != "uc_analysis":
+    # Row-level questions always fall through — EXCEPT uc_analysis, which has its
+    # own programmatic path, and a theatre drill-down, which is an aggregate
+    # ("show me the US Majors breakdown" wants grouped totals, not a UC list).
+    _is_theatre_drilldown = bool(theatre and drilldown and metric == "region")
+    if _ROW_LEVEL_RE.search(q) and metric != "uc_analysis" and not _is_theatre_drilldown:
         return {
             "metric": metric, "quarter": quarter or "q3",
-            "partner": partner, "group": group, "global_": global_,
-            "confidence": "low",
+            "partner": partner, "group": group, "theatre": theatre,
+            "global_": global_, "confidence": "low",
         }
 
     # High confidence: clear metric AND (known entity OR quarter-explicit OR global aggregation)
     # Exception: tokens/credits need a specific entity — too broad otherwise
     # Dimension metrics (theatre/region/stage) are self-describing — no entity needed
-    _DIMENSION_METRICS = {"theatre", "region", "stage", "attribution", "confidence"}
-    if metric in ("tokens", "credits") and not (partner or group):
+    _DIMENSION_METRICS = {"theatre", "region", "stage", "attribution", "confidence", "surface"}
+    if metric in ("tokens", "credits") and not (partner or group or theatre):
         confidence = "low"
     elif metric == "uc_analysis" and not (partner or group):
         confidence = "low"  # need a specific partner to do UC analysis
@@ -252,11 +424,21 @@ def detect_intent(question: str, chat_history: list = None) -> dict:
     else:
         confidence = "low"
 
+    # ── Cross-tab guard ───────────────────────────────────────────────────────
+    # If the question asks to group by a dimension this resolver cannot express,
+    # fall through to the Cortex Agent rather than answering a different question.
+    # "partner" is exempt — the count/eacv resolvers already emit per-partner rows.
+    if confidence == "high" and metric != "uc_analysis":
+        unmet = _requested_dims(q) - {_RESOLVER_DIM.get(metric), "partner"}
+        if unmet:
+            confidence = "low"
+
     return {
         "metric":     metric,
         "quarter":    quarter or "q3",
         "partner":    partner,
         "group":      group,
+        "theatre":    theatre,
         "global_":    global_,
         "confidence": confidence,
     }
