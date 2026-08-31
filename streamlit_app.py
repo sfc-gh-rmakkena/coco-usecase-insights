@@ -2,6 +2,7 @@ import streamlit as st
 from utils.queries import get_distinct_partners, get_distinct_subregions
 from utils import PARTNER_GROUPS
 from utils.ask_ai import ask_ai, ask_ai_agent
+from utils.config import get_env
 from datetime import date, timedelta
 
 st.set_page_config(
@@ -214,6 +215,11 @@ _okr_pages = [
 if st.session_state.exec_email_allowed:
     _okr_pages.append(
         st.Page("app_pages/executive_email.py", title="Executive Email", icon=":material/mail:")
+    )
+# PSE Email — DEV only
+if get_env() == "dev":
+    _okr_pages.append(
+        st.Page("app_pages/pse_email.py", title="PSE Email", icon=":material/forward_to_inbox:")
     )
 
 page = st.navigation({

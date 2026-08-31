@@ -731,6 +731,7 @@ def get_okr_coco_adoption(_conn, quarter_start, quarter_end, region=None, includ
     SELECT 
         uc.PARTNER_NAME,
         uc.USE_CASE_ID,
+        uc.USE_CASE_NUMBER,
         uc.USE_CASE_NAME,
         uc.ACCOUNT_NAME,
         uc.USE_CASE_STAGE,
