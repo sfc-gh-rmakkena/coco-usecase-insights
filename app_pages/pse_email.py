@@ -349,25 +349,21 @@ def _build_email_html(partner, coco_count, total_ucs, coco_pct, non_coco_count,
   CoCo Adoption &mdash; Q3 FY27 Use Case Confirmation
 </h2>
 
+<p style="margin:0 0 16px 0;font-size:14px;color:#374151;line-height:1.7;">
+  As your Snowflake Partner SE, I&rsquo;ve reviewed your active use cases and identified
+  opportunities where Cortex Code (CoCo) can directly accelerate delivery. The use cases
+  below map to specific CoCo skills your team can leverage today &mdash; from SQL generation
+  and code migration to agentic workflows and ML pipelines. I&rsquo;d like to connect you
+  with your account delivery team to discuss how they can leverage these skills and share
+  best practices.
+</p>
+
 {summary_table}
 
-<p style="margin:0 0 8px 0;">Quick ask on Cortex Code (CoCo) attribution for <strong>Q3 FY27</strong>
-({_h(q_start)} to {_h(q_end)}). Here is where the joint number stands right now:</p>
+<p style="margin:0 0 8px 0;">Here is where the joint CoCo number stands right now for <strong>Q3 FY27</strong>
+({_h(q_start)} to {_h(q_end)}):</p>
 
 {metrics_html}
-
-<p style="margin:0 0 10px 0;">
-  We are <strong>{_h(coco_pct)}%</strong> against a <strong>{_h(target)}%</strong> target for Q3 FY27.
-  <strong>{_h(gap_needed)} more</strong> of the use cases below would close that gap.
-</p>
-
-<p style="margin:0 0 10px 0;">
-  The <strong>{_h(non_coco_count)} use cases</strong> below
-  (<strong>${eacv_m:.2f}M</strong> EACV) have no CoCo signal on record.
-  In most cases that means the work happened and simply was not tagged.
-  <strong>Could you confirm which of these used CoCo?</strong>
-</p>
-
 
 {uc_sections_html}
 
