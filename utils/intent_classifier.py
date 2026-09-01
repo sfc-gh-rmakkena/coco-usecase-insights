@@ -359,6 +359,9 @@ def detect_intent(question: str, chat_history: list = None) -> dict:
     Returns:
         metric   : str | None   — which metric category to resolve
         quarter  : str          — q1/q2/q3/ytd/both (defaults to "q3")
+        quarter_explicit : bool — True only when the question actually named a
+                                  period. When False the caller uses the sidebar
+                                  date range instead of the "q3" fallback.
         partner  : str | None   — canonical partner name if mentioned
         group    : str | None   — GSI/NOAM/APJ/EMEA if mentioned
         theatre  : str | None   — canonical THEATER_NAME to scope to, if named
@@ -411,6 +414,7 @@ def detect_intent(question: str, chat_history: list = None) -> dict:
     if _ROW_LEVEL_RE.search(q) and metric != "uc_analysis" and not _is_theatre_drilldown:
         return {
             "metric": metric, "quarter": quarter or "q3",
+            "quarter_explicit": bool(quarter),
             "partner": partner, "group": group, "theatre": theatre,
             "global_": global_, "confidence": "low",
         }
@@ -445,6 +449,7 @@ def detect_intent(question: str, chat_history: list = None) -> dict:
     return {
         "metric":     metric,
         "quarter":    quarter or "q3",
+        "quarter_explicit": bool(quarter),
         "partner":    partner,
         "group":      group,
         "theatre":    theatre,

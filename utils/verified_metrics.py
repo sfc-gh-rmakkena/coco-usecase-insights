@@ -9,14 +9,20 @@ Entry point: get_verified_answer(conn, question, intent)
 """
 import pandas as pd
 import streamlit as st
+import time
+from collections import namedtuple
 
 from utils import (
     apply_coco_final,
     PARTNER_ALIASES,
     PARTNER_RENAME_MAP,
     resolve_partner_filter,
+    resolve_region_theaters,
     PARTNER_GROUPS,
     filter_out_partner_own_accounts,
+    APJ_RSI_REGION_MAP,
+    EMEA_RSI_REGION_MAP,
+    LATAM_RSI_REGION_MAP,
 )
 
 # ── Quarter date boundaries ───────────────────────────────────────────────────
@@ -56,25 +62,214 @@ DEFAULT_TARGET = 50
 GROUP_REGION_RESTRICTION = {"LATAM": "LATAM"}
 
 
-# ── Quarter bulk cache ────────────────────────────────────────────────────────
+# ── Sidebar filter snapshot ───────────────────────────────────────────────────
+# The intercept used to ignore the sidebar entirely: it always fetched all managed
+# partners over hardcoded quarter dates with bands=["High"]. A question asked while
+# filtered to one partner was answered with portfolio-wide numbers (measured 898/431
+# vs Accenture's own 93/43 — a 9.7x overstatement) with nothing in the answer to
+# reveal it. Everything below exists to make the intercept see what the user sees.
 
-def get_quarter_bulk(conn, quarter: str) -> pd.DataFrame:
+FilterScope = namedtuple("FilterScope", [
+    "partners",       # tuple of raw partner names to query; () = all managed
+    "selected",       # tuple of canonical selected names; () = no partner filter
+    "start_date",     # 'YYYY-MM-DD'
+    "end_date",       # 'YYYY-MM-DD'
+    "region",         # 'Global' | theatre name | 'LATAM'
+    "bands",          # tuple of confidence bands, e.g. ('High',)
+    "account_coco",   # bool — False means keyword-only IS_COCO
+])
+
+
+def _ss_get(key, default):
+    """Read session_state defensively.
+
+    verified_metrics is imported transitively by app_pages/overview.py (via
+    utils.ask_ai) and directly by headless harnesses such as
+    scripts/eval_exec_email.py, so this must never raise when there is no
+    Streamlit runtime.
     """
-    Return apply_coco_final(bulk_conf) for the given quarter.
-    Cached in st.session_state so the heavy query runs at most once per session.
+    try:
+        return st.session_state.get(key, default)
+    except Exception:
+        return default
+
+
+def _sidebar_scope(quarter: str = None, quarter_explicit: bool = False) -> FilterScope:
+    """Snapshot the sidebar filters into a hashable scope.
+
+    Date precedence: a quarter named in the question wins; otherwise the sidebar
+    range is used. Previously `quarter` defaulted to 'q3' unconditionally, so a
+    sidebar set to Feb-Apr was silently answered with Aug-Oct numbers.
     """
-    cache_key = f"_vmet_bulk_{quarter}"
-    if cache_key not in st.session_state:
-        from utils.queries import get_bulk_confidence_scores
-        q = QUARTERS[quarter]
-        partners = tuple(resolve_partner_filter(list(PARTNER_GROUPS)))
-        bulk = get_bulk_confidence_scores(conn, partners, q["start"], q["end"])
-        if len(bulk) > 0:
-            bulk = bulk.copy()
-            bulk["PARTNER_NAME"] = bulk["PARTNER_NAME"].replace(PARTNER_RENAME_MAP)
-            bulk["IS_COCO_FINAL"] = apply_coco_final(bulk, ["High"])
-        st.session_state[cache_key] = bulk
-    return st.session_state[cache_key]
+    if quarter_explicit and quarter in QUARTERS:
+        start, end = QUARTERS[quarter]["start"], QUARTERS[quarter]["end"]
+    else:
+        _s = _ss_get("okr_start_date", None)
+        _e = _ss_get("okr_end_date", None)
+        if _s and _e:
+            start, end = str(_s), str(_e)
+        else:
+            q = QUARTERS[quarter if quarter in QUARTERS else "q3"]
+            start, end = q["start"], q["end"]
+
+    selected_groups = _ss_get("selected_partners", []) or []
+    if selected_groups:
+        selected = tuple(sorted(resolve_partner_filter(list(selected_groups))))
+        partners = selected
+    else:
+        selected = ()
+        partners = tuple(sorted(resolve_partner_filter(list(PARTNER_GROUPS))))
+
+    bands = _ss_get("confidence_filter", ["High"]) or ["High", "Medium", "Low"]
+
+    return FilterScope(
+        partners=partners,
+        selected=selected,
+        start_date=start,
+        end_date=end,
+        region=_ss_get("selected_region", "Global") or "Global",
+        bands=tuple(bands),
+        account_coco=(_ss_get("include_account_coco", "Yes") == "Yes"),
+    )
+
+
+# ── Managed partner universe (mirrors app_pages/overview.py) ──────────────────
+# These sets are duplicated from app_pages/overview.py:11-25 deliberately. The
+# dashboard's theatre table and gauges come from _build_managed_bc() there, not
+# from the simpler top-KPI path, and matching its numbers requires the same
+# per-group geo restrictions. overview.py is dashboard code and is left untouched,
+# so the definitions are mirrored here rather than refactored.
+_GSI_NAMES = {
+    'Accenture', 'Capgemini Technologies LLC',
+    'Cognizant Technology Solutions US Corp', 'Deloitte Consulting',
+    'EY', 'Ernst & Young (EY)', 'IBM', 'IBM Consulting',
+}
+_NOAM_NAMES = set(
+    p for p in PARTNER_ALIASES.get('--- NOAM RSIs ---', []) if not p.startswith('---')
+) | {'LTI Mindtree', 'Kipi.ai'}
+_APJ_NAMES = set(APJ_RSI_REGION_MAP.keys())
+_EMEA_NAMES = set(EMEA_RSI_REGION_MAP.keys())
+_LATAM_NAMES = set(LATAM_RSI_REGION_MAP.keys())
+_NOAM_THEATERS = ('AMSExpansion', 'USMajors', 'AMSAcquisition', 'USPubSec')
+
+
+def _apply_region(df: pd.DataFrame, region: str) -> pd.DataFrame:
+    """Apply the sidebar region/theatre filter.
+
+    LATAM is special-cased: it is a REGION_NAME under the AMSAcquisition theatre,
+    not a theatre. resolve_region_theaters('LATAM') returns ['LATAM'], and
+    THEATER_NAME = 'LATAM' matches zero rows, so reusing it here would silently
+    return an empty frame. The shared helper is left alone because five dashboard
+    pages depend on it.
+    """
+    if not region or region == 'Global' or len(df) == 0:
+        return df
+    if region == 'LATAM':
+        return df[df['REGION_NAME'] == 'LATAM'] if 'REGION_NAME' in df.columns else df
+    theaters = resolve_region_theaters(region)
+    if theaters and 'THEATER_NAME' in df.columns:
+        return df[df['THEATER_NAME'].isin(theaters)]
+    return df
+
+
+def _build_managed_scope(bc: pd.DataFrame, selected: tuple = ()) -> pd.DataFrame:
+    """Managed-partner universe with per-group geo restrictions.
+
+    Mirrors _build_managed_bc() in app_pages/overview.py:221-242 so the intercept
+    and the dashboard count the same rows: GSI is global, NOAM RSIs are limited to
+    NoAM theatres, and APJ/EMEA/LATAM RSIs are region-scoped (a LATAM RSI such as
+    SEIDOR carries a NoAM theatre, so the partner name alone is not enough).
+    """
+    if bc is None or len(bc) == 0:
+        return bc if bc is not None else pd.DataFrame()
+    sel = set(selected)
+
+    def _pf(names):
+        return (names & sel) if sel else names
+
+    parts = [
+        bc[bc['PARTNER_NAME'].isin(_pf(_GSI_NAMES))],
+        bc[bc['PARTNER_NAME'].isin(_pf(_NOAM_NAMES)) & bc['THEATER_NAME'].isin(_NOAM_THEATERS)],
+    ]
+    if 'REGION_NAME' in bc.columns:
+        for names, region_map in ((_APJ_NAMES, APJ_RSI_REGION_MAP),
+                                  (_EMEA_NAMES, EMEA_RSI_REGION_MAP)):
+            sub = bc[bc['PARTNER_NAME'].isin(_pf(names))].copy()
+            sub['_c'] = sub['PARTNER_NAME'].map({k: v[1] for k, v in region_map.items()})
+            parts.append(sub[sub['REGION_NAME'] == sub['_c']].drop(columns=['_c']))
+        latam = bc[bc['PARTNER_NAME'].isin(_pf(_LATAM_NAMES))]
+        parts.append(latam[latam['REGION_NAME'] == 'LATAM'])
+
+    parts = [p for p in parts if len(p) > 0]
+    return pd.concat(parts, ignore_index=True) if parts else bc.iloc[0:0]
+
+
+def _fetch_scoped_bulk(conn, scope: FilterScope) -> pd.DataFrame:
+    """Fetch and scope the confidence-scored frame per the sidebar filters.
+
+    Mirrors app_pages/overview.py:165-179 for the query and CoCo definition, then
+    applies the managed-universe geo restrictions and the partner-own-account
+    exclusion the dashboard applies centrally.
+    """
+    from utils.queries import get_bulk_confidence_scores
+    bulk = get_bulk_confidence_scores(conn, scope.partners, scope.start_date, scope.end_date)
+    if len(bulk) == 0:
+        return bulk
+    bulk = bulk.copy()
+    bulk["PARTNER_NAME"] = bulk["PARTNER_NAME"].replace(PARTNER_RENAME_MAP)
+    if scope.account_coco:
+        bands = list(scope.bands) if scope.bands else ["High", "Medium", "Low"]
+        bulk["IS_COCO_FINAL"] = apply_coco_final(bulk, bands)
+    else:
+        # Account Level CoCo = No -> keyword/flag only, no confidence contribution.
+        bulk["IS_COCO_FINAL"] = (bulk["IS_COCO"] == True)  # noqa: E712
+    bulk = _apply_region(bulk, scope.region)
+    bulk = _build_managed_scope(bulk, scope.selected)
+    if len(bulk) > 0:
+        bulk = filter_out_partner_own_accounts(bulk)
+    return bulk
+
+
+# ── Quarter bulk cache ────────────────────────────────────────────────────────
+# Bounded and time-limited. Keyed on the whole filter scope, not just the quarter.
+_BULK_CACHE_MAX = 6
+_BULK_CACHE_TTL_SECONDS = 1800  # 30 min, matching the st.cache_data TTL in queries.py
+_BULK_CACHE_INDEX = "_vmet_bulk_index"
+
+def get_quarter_bulk(conn, quarter: str, quarter_explicit: bool = False) -> pd.DataFrame:
+    """Return the sidebar-scoped, confidence-scored frame for the active scope.
+
+    The cache key is derived from the full filter scope. The previous key was
+    `_vmet_bulk_{quarter}`, which was filter-independent and had no TTL: changing a
+    sidebar filter kept serving the frame fetched at the start of the session, and a
+    long chat kept answering from data captured before intervening dynamic-table
+    refreshes. Both produced wrong answers that looked right.
+    """
+    scope = _sidebar_scope(quarter, quarter_explicit)
+    return _get_scoped_bulk(conn, scope)
+
+
+def _get_scoped_bulk(conn, scope: FilterScope) -> pd.DataFrame:
+    key = f"_vmet_bulk_{hash(scope)}"
+    now = time.time()
+    entry = _ss_get(key, None)
+    if entry is not None and (now - entry[0]) < _BULK_CACHE_TTL_SECONDS:
+        return entry[1]
+
+    bulk = _fetch_scoped_bulk(conn, scope)
+    try:
+        st.session_state[key] = (now, bulk)
+        order = st.session_state.get(_BULK_CACHE_INDEX, [])
+        order = [k for k in order if k != key] + [key]
+        # Bound the cache: one frame per filter combination would otherwise grow
+        # unchecked as the user explores filters.
+        while len(order) > _BULK_CACHE_MAX:
+            st.session_state.pop(order.pop(0), None)
+        st.session_state[_BULK_CACHE_INDEX] = order
+    except Exception:
+        pass  # no Streamlit runtime (headless import) — skip caching
+    return bulk
+
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -486,6 +681,39 @@ def _scope_label(partner=None, group=None, theatre=None) -> str:
     return " / ".join(parts) if parts else "all managed partners"
 
 
+def _period_label(scope: FilterScope, quarter: str, quarter_explicit: bool) -> str:
+    """Truthful period label. Previously the block always printed the quarter label
+    (e.g. 'Q3 FY27') even when the answer used a different sidebar date range."""
+    if quarter_explicit and quarter in QUARTERS:
+        return QUARTERS[quarter]["label"]
+    return f"{scope.start_date} to {scope.end_date}"
+
+
+def _scope_block(scope: FilterScope, partner=None, group=None, theatre=None,
+                 quarter: str = "q3", quarter_explicit: bool = False) -> str:
+    """Declare the exact scope the numbers were computed under.
+
+    Two reasons this is mandatory rather than cosmetic: it stops the model
+    disclaiming correctly-scoped data as if it were generic, and it makes any
+    future filter bug visible in the answer instead of silent.
+    """
+    lines = [f"Scope: {_scope_label(partner, group, theatre)}",
+             f"Period: {_period_label(scope, quarter, quarter_explicit)}"]
+    if scope.region and scope.region != "Global":
+        lines.append(f"Region filter: {scope.region}")
+    else:
+        lines.append("Region filter: Global (no region restriction)")
+    if scope.selected and not (partner or group):
+        lines.append(f"Sidebar partner selection applied: {len(scope.selected)} partners")
+    elif partner or group:
+        lines.append("Entity named in the question overrides the sidebar partner selection")
+    else:
+        lines.append("Partners: all managed")
+    lines.append(f"CoCo definition: {'IS_COCO or confidence band in ' + str(list(scope.bands)) if scope.account_coco else 'IS_COCO keyword/flag only (Account Level CoCo = No)'}")
+    lines.append("These numbers ARE already filtered to the scope above — answer directly for it.")
+    return "\n".join(lines)
+
+
 def resolve_surface(df: pd.DataFrame, partner=None, group=None, theatre=None) -> dict:
     """CoCo usage split by delivery surface, plus account-level surface adoption.
 
@@ -785,6 +1013,7 @@ def get_verified_answer(conn, question: str, intent: dict) -> dict | None:
     """
     metric  = intent.get("metric")
     quarter = intent.get("quarter", "q3")
+    quarter_explicit = intent.get("quarter_explicit", False)
     partner = intent.get("partner")
     group   = intent.get("group")
     theatre = intent.get("theatre")
@@ -792,22 +1021,33 @@ def get_verified_answer(conn, question: str, intent: dict) -> dict | None:
     if metric not in _RESOLVERS and metric != "wow" and metric != "stalled":
         return None
 
+    # A named partner/group in the question overrides the sidebar partner selection,
+    # matching the rule the agent path already states (ask_ai.py build_filter_context).
+    # Otherwise the sidebar selection stands.
+    scope = _sidebar_scope(quarter, quarter_explicit)
+    if partner or group:
+        scope = scope._replace(selected=())
+
     quarters_to_run = ["q2", "q3"] if quarter == "both" else [quarter]
     results = {}
 
     for q in quarters_to_run:
+        # A quarter comparison is explicit by definition, so use that quarter's
+        # bounds rather than the sidebar range for each leg.
+        q_scope = scope if quarter != "both" else scope._replace(
+            start_date=QUARTERS[q]["start"], end_date=QUARTERS[q]["end"])
         try:
             if metric == "stalled":
                 results[q] = resolve_stalled(conn, partner, group, q)
             elif metric == "wow":
-                bulk = get_quarter_bulk(conn, q)
+                bulk = _get_scoped_bulk(conn, q_scope)
                 results[q] = resolve_wow(conn, bulk, partner, group)
             elif metric == "region":
                 # resolve_region needs the theatre to label the sub-region level
-                bulk = get_quarter_bulk(conn, q)
+                bulk = _get_scoped_bulk(conn, q_scope)
                 results[q] = resolve_region(bulk, partner, group, theatre)
             else:
-                bulk = get_quarter_bulk(conn, q)
+                bulk = _get_scoped_bulk(conn, q_scope)
                 # A named theatre scopes every other metric (it is a filter, and
                 # dropping it silently answered a different question entirely).
                 if theatre and len(bulk) > 0 and "THEATER_NAME" in bulk.columns:
@@ -817,9 +1057,11 @@ def get_verified_answer(conn, question: str, intent: dict) -> dict | None:
             results[q] = {"text": f"Data fetch error for {QUARTERS[q]['label']}: {e}"}
 
     # Build verified context block
+    _scope_hdr = _scope_block(scope, partner, group, theatre, quarter, quarter_explicit)
     if quarter == "both":
         verified_block = (
             "[VERIFIED DATA]\n"
+            f"{_scope_hdr}\n\n"
             f"--- {QUARTERS['q2']['label']} ---\n{results['q2'].get('text', 'N/A')}\n\n"
             f"--- {QUARTERS['q3']['label']} ---\n{results['q3'].get('text', 'N/A')}\n"
             "[END VERIFIED DATA]"
@@ -827,7 +1069,8 @@ def get_verified_answer(conn, question: str, intent: dict) -> dict | None:
         raw_result = f"{results['q2'].get('text','')}\n\n{results['q3'].get('text','')}"
     else:
         verified_block = (
-            f"[VERIFIED DATA — {QUARTERS[quarter]['label']}]\n"
+            f"[VERIFIED DATA — {_period_label(scope, quarter, quarter_explicit)}]\n"
+            f"{_scope_hdr}\n\n"
             f"{results[quarter].get('text', 'N/A')}\n"
             "[END VERIFIED DATA]"
         )
@@ -843,6 +1086,10 @@ def get_verified_answer(conn, question: str, intent: dict) -> dict | None:
         "You are a concise data assistant for the CoCo (Cortex Code) partner adoption dashboard.\n\n"
         f"The following data is EXACT and verified — do not modify or contradict it:\n"
         f"{verified_block}\n\n"
+        "The block states the Scope, Period and filters the numbers were computed under. "
+        "The numbers ARE already filtered to that scope, so never claim you lack data for it. "
+        "State the period and any non-default filter in your answer so the reader knows what "
+        "the numbers cover.\n\n"
         f"User question: {question}\n\n"
     )
     if is_uc_analysis:
