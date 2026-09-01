@@ -27,11 +27,17 @@ MANAGED_PARTNERS = list(
 )
 
 from utils.queries import get_okr_coco_adoption, get_usecase_confidence_scores
-from utils.cortex_helpers import cortex_complete, run_cortex_agent
+from utils.cortex_helpers import cortex_complete, run_cortex_agent, run_with_skill
 from utils.config import get_env
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
+
+_SKILL_URI = (
+    "snow://skill_catalog/"
+    "USER$DSHAVKANI.SKILL_SHARING_89F4D7DE.PSE_UC_PORTFOLIO_ANALYSIS"
+)
+
 
 def _theater_label(theater: str) -> str:
     t = (theater or "").upper()
@@ -45,6 +51,7 @@ def _theater_label(theater: str) -> str:
 
 
 def _parse_skill_suggestions(response_text: str, df: pd.DataFrame) -> dict:
+    """Parse 'UC-XXXXXX: suggestion' lines from LLM/skill response into {USE_CASE_ID: text}."""
     suggestions = {}
     id_to_num = dict(zip(df["USE_CASE_ID"], df.get("USE_CASE_NUMBER", df["USE_CASE_ID"])))
     num_to_id = {v: k for k, v in id_to_num.items()}
@@ -62,7 +69,12 @@ def _parse_skill_suggestions(response_text: str, df: pd.DataFrame) -> dict:
 
 
 def _batch_skill_suggestions(conn, df: pd.DataFrame, partner: str) -> dict:
-    """Batched call to PSE_UC_PORTFOLIO_ANALYSIS via COCO_AGENT. Falls back to cortex_complete."""
+    """
+    Calls PSE_UC_PORTFOLIO_ANALYSIS via the CORTEX_EXTENSION skill invocation
+    (POST /api/v2/cortex/agent:run, agentless, skill in tools array).
+    Falls back to run_cortex_agent then cortex_complete.
+    Returns {USE_CASE_ID: suggestion_text}.
+    """
     if len(df) == 0:
         return {}
 
@@ -77,34 +89,67 @@ def _batch_skill_suggestions(conn, df: pd.DataFrame, partner: str) -> dict:
         eacv_str = f"${eacv/1_000_000:.2f}M" if eacv >= 1_000_000 else f"${eacv/1000:.0f}K"
         uc_lines.append(f"- {uc_num}: {name} | {account} | {stage} | {tech} | {eacv_str}")
 
-    uc_list = "\n".join(uc_lines)
+    uc_list   = "\n".join(uc_lines)
     first_num = uc_lines[0].split(":")[0].lstrip("- ").strip() if uc_lines else "UC-XXXXX"
 
-    prompt = f"""You are a Snowflake Partner SE using the PSE_UC_PORTFOLIO_ANALYSIS skill \
-(snow://skill_catalog/USER$DSHAVKANI.SKILL_SHARING_89F4D7DE.PSE_UC_PORTFOLIO_ANALYSIS) \
-to suggest how Cortex Code (CoCo) can be leveraged for each use case below.
+    prompt = f"""Use the PSE_UC_PORTFOLIO_ANALYSIS skill to map Cortex Code (CoCo) skill names \
+to each use case based on its TECHNICAL_USE_CASE category.
 
-For each use case, write ONE specific sentence for the "USED / WILL USE COCO" field. \
-Be concrete — mention specific Cortex Code capabilities like SQL generation/migration, \
-Python/code conversion, Snowflake Intelligence for agentic workflows, Cortex Search, \
-Cortex Analyst, or Snowpark notebooks as appropriate to the workload type.
+For each use case return the relevant CoCo skill tag names as a comma-separated list. \
+Use ONLY official Cortex Code skill names such as: cortex-agent, machine-learning, \
+snowflake-notebooks, cortex-ai-functions, dbt-data-modeling, dynamic-tables, iceberg, \
+openflow, snowpark-python, snowpipe-streaming, semantic-view, dashboard, migration-guide, \
+snowconvert-assessment, agent-optimization, developing-with-streamlit, data-governance, \
+lineage, trust-center, data-cleanrooms, storage-lifecycle-policy.
+
+Mapping guide (use TECHNICAL_USE_CASE to choose tags):
+- AI: Conversational Assistants → cortex-agent
+- AI: Machine Learning → machine-learning, snowflake-notebooks
+- AI: Cortex AI Functions → cortex-ai-functions
+- AI: Snowflake Intelligence & Agents → agent-optimization, cortex-agent
+- DE: Ingestion → openflow, snowpark-python, snowpipe-streaming
+- DE: Transformation → dbt-data-modeling, dynamic-tables, snowpark-python
+- DE: Interoperable Storage → iceberg
+- Analytics: Business Intelligence → dashboard, semantic-view
+- Analytics: Applied Analytics → dashboard, semantic-view
+- Analytics: Lakehouse Analytics → iceberg, snowflake-notebooks
+- Analytics: Interactive Analytics → dashboard, semantic-view
+- Platform: Storage → iceberg, storage-lifecycle-policy
+- Platform: Compliance/Security/Governance → data-governance, lineage, trust-center
+- Apps & Collab: Build → developing-with-streamlit
+- Apps & Collab: External Collaboration → data-cleanrooms
+- Migration (any) → migration-guide, snowconvert-assessment
 
 Format your response EXACTLY as one line per use case:
-{first_num}: [1-sentence CoCo suggestion]
+{first_num}: skill-tag-1, skill-tag-2, skill-tag-3
 
 Use cases for partner {partner}:
 {uc_list}
 
-Return ONLY the UC lines, nothing else."""
+Return ONLY the UC lines (UC-XXXXXX: tag1, tag2), nothing else."""
 
+    # 1. Primary: COCO_AGENT — now has PSE_COCO_MAPPER skill configured, so it will
+    #    invoke PSE_UC_PORTFOLIO_ANALYSIS internally for the CoCo mapping logic
     try:
         result = run_cortex_agent(prompt)
-        response_text = result.get("answer", "")
-        if response_text:
-            return _parse_skill_suggestions(response_text, df)
+        if result.get("answer") and not result.get("error"):
+            parsed = _parse_skill_suggestions(result["answer"], df)
+            if parsed:
+                return parsed
     except Exception:
         pass
 
+    # 2. Fallback: direct CORTEX_EXTENSION skill invocation (agentless)
+    try:
+        result = run_with_skill(prompt, _SKILL_URI)
+        if result.get("answer") and not result.get("error"):
+            parsed = _parse_skill_suggestions(result["answer"], df)
+            if parsed:
+                return parsed
+    except Exception:
+        pass
+
+    # 3. Last resort: direct LLM complete
     try:
         response_text = cortex_complete(conn, "claude-sonnet-4-5", prompt, max_tokens=2048)
         if response_text:
@@ -115,6 +160,12 @@ Return ONLY the UC lines, nothing else."""
     return {}
 
 
+
+
+
+
+
+
 def _h(text) -> str:
     """HTML-escape a value."""
     return html_lib.escape(str(text or ""))
@@ -122,7 +173,8 @@ def _h(text) -> str:
 
 def _build_email_html(partner, coco_count, total_ucs, coco_pct, non_coco_count,
                        non_coco_eacv, target, gap_needed, q_start, q_end,
-                       non_coco_df: pd.DataFrame, skill_suggestions: dict) -> str:
+                       non_coco_df: pd.DataFrame,
+                       skill_suggestions: dict = None) -> str:
     """Return a full HTML email matching the IBM CoCo confirmation layout from the screenshot."""
     ref_id  = "REF-" + "".join(random.choices(string.ascii_uppercase + string.digits, k=8))
     eacv_m  = non_coco_eacv / 1_000_000
@@ -161,11 +213,77 @@ def _build_email_html(partner, coco_count, total_ucs, coco_pct, non_coco_count,
   </tr>
 </table>"""
 
-    # ── UC sections grouped by theater ────────────────────────────────────────
+    # ── UC sections grouped by theater then POC / Implementation ─────────────
     theater_groups: dict = {}
     for _, row in non_coco_df.sort_values("USE_CASE_EACV", ascending=False).iterrows():
         label = _theater_label(row.get("THEATER_NAME", ""))
         theater_groups.setdefault(label, []).append(row)
+
+    def _stage_num(stage_str):
+        m = re.match(r"^(\d+)", str(stage_str or ""))
+        return int(m.group(1)) if m else 99
+
+    def _uc_html(row):
+        uc_id    = row.get("USE_CASE_ID", "")
+        uc_num   = row.get("USE_CASE_NUMBER", uc_id)
+        name     = row.get("USE_CASE_NAME", "")
+        account  = row.get("ACCOUNT_NAME", "")
+        stage    = row.get("USE_CASE_STAGE", "")
+        tech     = row.get("TECHNICAL_USE_CASE", "")
+        desc     = row.get("USE_CASE_DESCRIPTION", "") or ""
+        # Truncate long descriptions to keep the email readable
+        if len(desc) > 400:
+            desc = desc[:397].rsplit(" ", 1)[0] + "…"
+        eacv     = row.get("USE_CASE_EACV", 0)
+        eacv_str = f"${eacv/1_000_000:.2f}M" if eacv >= 1_000_000 else f"${eacv/1000:.0f}K"
+        sm = re.match(r"^(\d+)\s*-\s*(.+)$", stage)
+        stage_disp = f"{sm.group(1)} - {sm.group(2)}" if sm else stage
+        desc_html = (f'<p style="margin:0 0 8px 0;font-size:13px;color:#374151;">{_h(desc)}</p>'
+                     if desc.strip() else "")
+
+        # Render skill tags — white bg, blue border (Option A style)
+        raw_skill = _skill.get(uc_id, "")
+        if raw_skill and raw_skill.strip():
+            tags = [t.strip() for t in raw_skill.split(",") if t.strip()]
+            tag_html = " ".join(
+                f'<span style="display:inline-block;background:#fff;border:1.5px solid #29b5e8;'
+                f'border-radius:4px;padding:3px 8px;font-size:10px;font-family:monospace;'
+                f'color:#0369a1;font-weight:600;margin:2px 3px 2px 0;">{_h(t)}</span>'
+                for t in tags
+            )
+        else:
+            tag_html = '<span style="color:#9ca3af;font-style:italic;font-size:11px;">Mapping skills&hellip;</span>'
+
+        return f"""
+<div style="border-bottom:1px solid #f3f4f6;padding-bottom:16px;margin-bottom:16px;">
+  <p style="margin:0 0 2px 0;font-size:14px;font-weight:600;color:#111;">
+    &bull; <span style="font-family:monospace;color:#29b5e8;font-weight:700;">{_h(uc_num)}</span> &mdash; {_h(name)}
+  </p>
+  <p style="margin:0 0 6px 0;font-size:12px;color:#6b7280;">
+    {_h(account)} &middot; {_h(stage_disp)} &middot; {_h(eacv_str)} &middot; {_h(tech)}
+  </p>
+  {desc_html}
+  <!-- Skills-Led Card (Option A): CoCo skills box is the visual anchor -->
+  <div style="background:linear-gradient(135deg,#f0f9ff 0%,#e0f2fe 100%);
+              border:1.5px solid #29b5e8;border-radius:8px;padding:10px 14px;margin-bottom:8px;">
+    <span style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;
+                 color:#0369a1;display:block;margin-bottom:6px;">&#9889; Cortex Code Skills Available for This Use Case</span>
+    {tag_html}
+  </div>
+  <div style="background:#f9fafb;border:1px dashed #d1d5db;border-radius:6px;padding:8px 14px;">
+    <span style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;
+                 color:#374151;display:block;margin-bottom:3px;">Partner: How is / will CoCo be used?</span>
+    <span style="color:#9ca3af;font-style:italic;font-size:12px;">&lt;click here and type&gt;</span>
+  </div>
+</div>"""
+
+    _skill = skill_suggestions or {}
+
+    _bucket_label_style = (
+        "font-size:12px;font-weight:700;color:#1a1a1a;letter-spacing:0.03em;"
+        "margin:20px 0 10px 0;padding:8px 12px;"
+        "background:#f1f5f9;border-left:4px solid #29b5e8;border-radius:0 4px 4px 0;"
+    )
 
     uc_sections_html = ""
     for label in ["AMS", "EMEA", "APJ", "Other"]:
@@ -174,48 +292,31 @@ def _build_email_html(partner, coco_count, total_ucs, coco_pct, non_coco_count,
             continue
         t_eacv = sum(r.get("USE_CASE_EACV", 0) for r in ucs) / 1_000_000
         n_word = "USE CASE" if len(ucs) == 1 else "USE CASES"
+
+        # Split into POC (stage 3) and Implementation (stage 4+), each sorted by EACV desc
+        poc_ucs  = sorted([r for r in ucs if _stage_num(r.get("USE_CASE_STAGE","")) == 3],
+                          key=lambda r: r.get("USE_CASE_EACV", 0), reverse=True)
+        impl_ucs = sorted([r for r in ucs if _stage_num(r.get("USE_CASE_STAGE","")) >= 4],
+                          key=lambda r: r.get("USE_CASE_EACV", 0), reverse=True)
+
         uc_sections_html += f"""
 <p style="font-size:11px;font-weight:700;color:#9ca3af;letter-spacing:0.07em;
           text-transform:uppercase;margin:28px 0 10px 0;">
   {_h(label)} &middot; {_h(len(ucs))} {n_word} &middot; ${t_eacv:.2f}M EACV
 </p>"""
 
-        for row in ucs:
-            uc_id    = row.get("USE_CASE_ID", "")
-            uc_num   = row.get("USE_CASE_NUMBER", uc_id)
-            name     = row.get("USE_CASE_NAME", "")
-            account  = row.get("ACCOUNT_NAME", "")
-            stage    = row.get("USE_CASE_STAGE", "")
-            tech     = row.get("TECHNICAL_USE_CASE", "")
-            eacv     = row.get("USE_CASE_EACV", 0)
-            eacv_str = f"${eacv/1_000_000:.2f}M" if eacv >= 1_000_000 else f"${eacv/1000:.0f}K"
-            skill    = skill_suggestions.get(uc_id, "")
+        if poc_ucs:
+            poc_eacv = sum(r.get("USE_CASE_EACV", 0) for r in poc_ucs) / 1_000_000
+            uc_sections_html += f'<p style="{_bucket_label_style}">POC &middot; {len(poc_ucs)} use {"case" if len(poc_ucs)==1 else "cases"} &middot; ${poc_eacv:.2f}M EACV</p>'
+            for row in poc_ucs:
+                uc_sections_html += _uc_html(row)
 
-            # Stage: keep "5 - Implementation In Progress" format
-            sm = re.match(r"^(\d+)\s*-\s*(.+)$", stage)
-            stage_disp = f"{sm.group(1)} - {sm.group(2)}" if sm else stage
+        if impl_ucs:
+            impl_eacv = sum(r.get("USE_CASE_EACV", 0) for r in impl_ucs) / 1_000_000
+            uc_sections_html += f'<p style="{_bucket_label_style}">Implementation &middot; {len(impl_ucs)} use {"case" if len(impl_ucs)==1 else "cases"} &middot; ${impl_eacv:.2f}M EACV</p>'
+            for row in impl_ucs:
+                uc_sections_html += _uc_html(row)
 
-            # USED / WILL USE COCO content
-            if skill:
-                coco_content = _h(skill)
-            else:
-                coco_content = '<span style="color:#2563eb;">click here and type</span>'
-
-            uc_sections_html += f"""
-<div style="margin-bottom:18px;">
-  <p style="margin:0 0 3px 0;font-size:14px;">
-    &bull; <strong>{_h(uc_num)}</strong> &mdash; {_h(name)}
-  </p>
-  <p style="margin:0 0 6px 0;font-size:12px;color:#6b7280;">
-    {_h(account)} &middot; {_h(stage_disp)} &middot; {_h(eacv_str)}
-  </p>
-  <p style="margin:0 0 8px 0;font-size:13px;color:#374151;">{_h(tech)}</p>
-  <div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;
-              padding:10px 14px;font-size:13px;line-height:1.5;">
-    <strong style="font-size:11px;text-transform:uppercase;letter-spacing:0.05em;
-                   color:#374151;">USED / WILL USE COCO:</strong>&nbsp;{coco_content}
-  </div>
-</div>"""
 
     # ── Assemble full HTML ────────────────────────────────────────────────────
     summary_table = f"""

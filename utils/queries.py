@@ -733,6 +733,7 @@ def get_okr_coco_adoption(_conn, quarter_start, quarter_end, region=None, includ
         uc.USE_CASE_ID,
         uc.USE_CASE_NUMBER,
         uc.USE_CASE_NAME,
+        mdm.USE_CASE_DESCRIPTION,
         uc.ACCOUNT_NAME,
         uc.USE_CASE_STAGE,
         uc.USE_CASE_EACV,
@@ -751,6 +752,7 @@ def get_okr_coco_adoption(_conn, quarter_start, quarter_end, region=None, includ
         ), ' | ') AS ATTRIBUTION_FLAGS
     FROM {DT_OKR} uc
     LEFT JOIN coco_active_accounts caa ON UPPER(uc.ACCOUNT_NAME) = caa.ACCOUNT_NAME_UPPER
+    LEFT JOIN MDM.MDM_INTERFACES.DIM_USE_CASE mdm ON uc.USE_CASE_ID = mdm.USE_CASE_ID
     WHERE (
         (uc.USE_CASE_STAGE IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan') AND uc.DECISION_DATE >= '{quarter_start}' AND uc.DECISION_DATE <= '{quarter_end}')
         OR (uc.USE_CASE_STAGE IN ('5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed') AND uc.GO_LIVE_DATE >= '{quarter_start}' AND uc.GO_LIVE_DATE <= '{quarter_end}')

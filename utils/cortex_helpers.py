@@ -322,3 +322,129 @@ def run_cortex_agent(question: str, agent_fqn: str = "TEMP.COCO_PARTNER_ADOPTION
     except Exception as e:
         return {"answer": f"Agent call failed (local path): {e}", "sql": None, "sql_result": None,
                 "error": True}
+
+
+def run_with_skill(question: str, skill_uri: str) -> dict:
+    """Call the agentless Cortex Agent endpoint with a CORTEX_EXTENSION skill.
+
+    Uses POST /api/v2/cortex/agent:run (no pre-existing agent object required).
+    The skill is passed in the tools array as type=CORTEX_EXTENSION so the agent
+    actually executes it rather than just receiving it as prompt context.
+
+    Args:
+        question: The user question / prompt to send.
+        skill_uri: Fully-qualified Cortex Extension URI, e.g.
+                   'snow://skill_catalog/USER$DSHAVKANI.SKILL_SHARING_89F4D7DE.PSE_UC_PORTFOLIO_ANALYSIS'
+
+    Returns:
+        dict with 'answer' key (text response), same shape as run_cortex_agent.
+    """
+    import json
+
+    # Parse 'snow://skill_catalog/<fqn>' → just the FQN part
+    fqn = skill_uri.replace("snow://skill_catalog/", "").strip("/")
+    # Skill name = last component of FQN (e.g. 'PSE_UC_PORTFOLIO_ANALYSIS')
+    skill_name = fqn.split(".")[-1]
+
+    messages = [{"role": "user", "content": [{"type": "text", "text": question}]}]
+    payload = {
+        "messages": messages,
+        "tools": [
+            {
+                "tool_spec": {
+                    "type": "CORTEX_EXTENSION",
+                    "name": skill_name,
+                    "path": fqn,
+                }
+            }
+        ],
+    }
+
+    # ── Path 1: Snowflake SiS ─────────────────────────────────────────────────
+    try:
+        import _snowflake
+        resp = _snowflake.send_snow_api_request(
+            "POST",
+            "/api/v2/cortex/agent:run",
+            {},
+            {},
+            payload,
+            None,
+            60000,
+        )
+        raw = resp.get("content", "") if isinstance(resp, dict) else str(resp)
+        answer_parts = []
+        for line in (raw if isinstance(raw, list) else raw.splitlines()):
+            try:
+                item = line if isinstance(line, dict) else json.loads(line)
+                for c in item.get("data", {}).get("content", []):
+                    if c.get("type") == "text":
+                        answer_parts.append(c.get("text", ""))
+                if item.get("event") == "response":
+                    for c in item.get("data", {}).get("content", []):
+                        if c.get("type") == "text":
+                            answer_parts.append(c.get("text", ""))
+            except Exception:
+                continue
+        answer = "".join(answer_parts).strip()
+        if answer:
+            return {"answer": answer}
+    except ImportError:
+        pass
+    except Exception:
+        pass
+
+    # ── Path 2: Local development via requests ────────────────────────────────
+    try:
+        import requests
+        conn_raw = st.connection("snowflake")._instance
+        token = conn_raw.rest.token
+        host  = conn_raw.host
+
+        url = f"https://{host}/api/v2/cortex/agent:run"
+        headers = {
+            "Authorization": f'Snowflake Token="{token}"',
+            "Content-Type":  "application/json",
+            "Accept":        "text/event-stream",
+        }
+
+        import warnings
+        warnings.filterwarnings("ignore", message="Unverified HTTPS request")
+        response = requests.post(url, headers=headers, json=payload,
+                                 stream=True, verify=False, timeout=120)
+
+        if response.status_code != 200:
+            return {"answer": f"Skill API error {response.status_code}: {response.text[:400]}",
+                    "error": True}
+
+        answer_parts = []
+        event_type   = None
+        for line in response.iter_lines():
+            if not line:
+                continue
+            decoded = line.decode("utf-8") if isinstance(line, bytes) else line
+            if decoded.startswith("event: "):
+                event_type = decoded[7:].strip()
+                continue
+            if not decoded.startswith("data: "):
+                continue
+            raw_json = decoded[6:].strip()
+            if raw_json == "[DONE]":
+                break
+            try:
+                data = json.loads(raw_json)
+            except json.JSONDecodeError:
+                continue
+            if event_type == "response":
+                for item in data.get("content", []):
+                    if item.get("type") == "text":
+                        answer_parts.append(item.get("text", ""))
+            elif event_type in ("response.text", "response.text.delta"):
+                answer_parts.append(data.get("text", ""))
+
+        answer = "".join(answer_parts).strip()
+        return {"answer": answer} if answer else {"answer": "", "error": True}
+
+    except Exception as e:
+        return {"answer": f"Skill call failed: {e}", "error": True}
+
