@@ -5,170 +5,33 @@ import random
 import re
 import string
 from datetime import date
-import html as html_lib
 
 from utils import (
     APJ_RSI_REGION_MAP, EMEA_RSI_REGION_MAP, LATAM_RSI_REGION_MAP,
-    PARTNER_RENAME_MAP, PARTNER_ALIASES as _PA,
-)
-
-# Build the managed partner list the same way executive_email.py does
-_NOAM_RSI = frozenset(
-    p for p in _PA.get('--- NOAM RSIs ---', []) if not p.startswith('---')
-) | {'LTI Mindtree', 'Kipi.ai'}
-
-MANAGED_PARTNERS = list(
-    {'Accenture', 'Capgemini Technologies LLC', 'Cognizant Technology Solutions US Corp',
-     'Deloitte Consulting', 'EY', 'Ernst & Young (EY)', 'IBM', 'IBM Consulting'}
-    | _NOAM_RSI
-    | frozenset(APJ_RSI_REGION_MAP.keys())
-    | frozenset(EMEA_RSI_REGION_MAP.keys())
-    | frozenset(LATAM_RSI_REGION_MAP.keys())
+    PARTNER_RENAME_MAP,
 )
 
 from utils.queries import get_okr_coco_adoption, get_usecase_confidence_scores
-from utils.cortex_helpers import cortex_complete, run_cortex_agent, run_with_skill
 from utils.config import get_env
-
-
-# ── Helpers ────────────────────────────────────────────────────────────────────
-
-_SKILL_URI = (
-    "snow://skill_catalog/"
-    "USER$DSHAVKANI.SKILL_SHARING_89F4D7DE.PSE_UC_PORTFOLIO_ANALYSIS"
+from utils.coco_skill_map import (
+    MIGRATION_KEYWORDS, SPARK_KEYWORDS, TECH_UC_SKILL_MAP,
+    detect_migration, map_coco_skills, theater_label as _theater_label,
+    h as _h, MANAGED_PARTNERS,
 )
 
 
-def _theater_label(theater: str) -> str:
-    t = (theater or "").upper()
-    if any(x in t for x in ("AMS", "USM", "USPUB", "MAJORS", "EXPANSION", "ACQUISITION")):
-        return "AMS"
-    if any(x in t for x in ("EMEA", "UK", "CENTRAL", "SOUTH", "NORTH")):
-        return "EMEA"
-    if any(x in t for x in ("APJ", "JAPAN", "KOREA", "ASEAN", "ANZ", "INDIA")):
-        return "APJ"
-    return "AMS"
-
-
-def _parse_skill_suggestions(response_text: str, df: pd.DataFrame) -> dict:
-    """Parse 'UC-XXXXXX: suggestion' lines from LLM/skill response into {USE_CASE_ID: text}."""
-    suggestions = {}
-    id_to_num = dict(zip(df["USE_CASE_ID"], df.get("USE_CASE_NUMBER", df["USE_CASE_ID"])))
-    num_to_id = {v: k for k, v in id_to_num.items()}
-    for line in response_text.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        m = re.match(r"[-•]?\s*(UC-\w+)\s*[:\-]\s*(.+)", line)
-        if m:
-            uc_num, suggestion = m.group(1).strip(), m.group(2).strip()
-            uc_id = num_to_id.get(uc_num)
-            if uc_id:
-                suggestions[uc_id] = suggestion
-    return suggestions
-
-
 def _batch_skill_suggestions(conn, df: pd.DataFrame, partner: str) -> dict:
-    """
-    Calls PSE_UC_PORTFOLIO_ANALYSIS via the CORTEX_EXTENSION skill invocation
-    (POST /api/v2/cortex/agent:run, agentless, skill in tools array).
-    Falls back to run_cortex_agent then cortex_complete.
-    Returns {USE_CASE_ID: suggestion_text}.
-    """
-    if len(df) == 0:
-        return {}
-
-    uc_lines = []
+    """Deterministic CoCo skill mapping per UC. Returns {USE_CASE_ID: "tag1, tag2"}."""
+    out = {}
     for _, row in df.iterrows():
-        uc_num   = row.get("USE_CASE_NUMBER", row.get("USE_CASE_ID", ""))
-        name     = row.get("USE_CASE_NAME", "")
-        account  = row.get("ACCOUNT_NAME", "")
-        stage    = row.get("USE_CASE_STAGE", "")
-        tech     = row.get("TECHNICAL_USE_CASE", "")
-        eacv     = row.get("USE_CASE_EACV", 0)
-        eacv_str = f"${eacv/1_000_000:.2f}M" if eacv >= 1_000_000 else f"${eacv/1000:.0f}K"
-        uc_lines.append(f"- {uc_num}: {name} | {account} | {stage} | {tech} | {eacv_str}")
-
-    uc_list   = "\n".join(uc_lines)
-    first_num = uc_lines[0].split(":")[0].lstrip("- ").strip() if uc_lines else "UC-XXXXX"
-
-    prompt = f"""Use the PSE_UC_PORTFOLIO_ANALYSIS skill to map Cortex Code (CoCo) skill names \
-to each use case based on its TECHNICAL_USE_CASE category.
-
-For each use case return the relevant CoCo skill tag names as a comma-separated list. \
-Use ONLY official Cortex Code skill names such as: cortex-agent, machine-learning, \
-snowflake-notebooks, cortex-ai-functions, dbt-data-modeling, dynamic-tables, iceberg, \
-openflow, snowpark-python, snowpipe-streaming, semantic-view, dashboard, migration-guide, \
-snowconvert-assessment, agent-optimization, developing-with-streamlit, data-governance, \
-lineage, trust-center, data-cleanrooms, storage-lifecycle-policy.
-
-Mapping guide (use TECHNICAL_USE_CASE to choose tags):
-- AI: Conversational Assistants → cortex-agent
-- AI: Machine Learning → machine-learning, snowflake-notebooks
-- AI: Cortex AI Functions → cortex-ai-functions
-- AI: Snowflake Intelligence & Agents → agent-optimization, cortex-agent
-- DE: Ingestion → openflow, snowpark-python, snowpipe-streaming
-- DE: Transformation → dbt-data-modeling, dynamic-tables, snowpark-python
-- DE: Interoperable Storage → iceberg
-- Analytics: Business Intelligence → dashboard, semantic-view
-- Analytics: Applied Analytics → dashboard, semantic-view
-- Analytics: Lakehouse Analytics → iceberg, snowflake-notebooks
-- Analytics: Interactive Analytics → dashboard, semantic-view
-- Platform: Storage → iceberg, storage-lifecycle-policy
-- Platform: Compliance/Security/Governance → data-governance, lineage, trust-center
-- Apps & Collab: Build → developing-with-streamlit
-- Apps & Collab: External Collaboration → data-cleanrooms
-- Migration (any) → migration-guide, snowconvert-assessment
-
-Format your response EXACTLY as one line per use case:
-{first_num}: skill-tag-1, skill-tag-2, skill-tag-3
-
-Use cases for partner {partner}:
-{uc_list}
-
-Return ONLY the UC lines (UC-XXXXXX: tag1, tag2), nothing else."""
-
-    # 1. Primary: COCO_AGENT — now has PSE_COCO_MAPPER skill configured, so it will
-    #    invoke PSE_UC_PORTFOLIO_ANALYSIS internally for the CoCo mapping logic
-    try:
-        result = run_cortex_agent(prompt)
-        if result.get("answer") and not result.get("error"):
-            parsed = _parse_skill_suggestions(result["answer"], df)
-            if parsed:
-                return parsed
-    except Exception:
-        pass
-
-    # 2. Fallback: direct CORTEX_EXTENSION skill invocation (agentless)
-    try:
-        result = run_with_skill(prompt, _SKILL_URI)
-        if result.get("answer") and not result.get("error"):
-            parsed = _parse_skill_suggestions(result["answer"], df)
-            if parsed:
-                return parsed
-    except Exception:
-        pass
-
-    # 3. Last resort: direct LLM complete
-    try:
-        response_text = cortex_complete(conn, "claude-sonnet-4-5", prompt, max_tokens=2048)
-        if response_text:
-            return _parse_skill_suggestions(response_text, df)
-    except Exception:
-        pass
-
-    return {}
-
-
-
-
-
-
-
-
-def _h(text) -> str:
-    """HTML-escape a value."""
-    return html_lib.escape(str(text or ""))
+        uc_id   = row.get("USE_CASE_ID", "")
+        name    = row.get("USE_CASE_NAME", "") or ""
+        tech_uc = row.get("TECHNICAL_USE_CASE", "") or ""
+        is_mig, signals = detect_migration(name, tech_uc)
+        tags = map_coco_skills(tech_uc, is_mig, signals)
+        if tags:
+            out[uc_id] = ", ".join(tags)
+    return out
 
 
 def _build_email_html(partner, coco_count, total_ucs, coco_pct, non_coco_count,

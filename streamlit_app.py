@@ -221,6 +221,10 @@ if get_env() == "dev":
     _okr_pages.append(
         st.Page("app_pages/pse_email.py", title="PSE Email", icon=":material/forward_to_inbox:")
     )
+    _okr_pages.append(
+        st.Page("app_pages/pse_email_explained.py", title="PSE Email (Explained)",
+                icon=":material/rule:")
+    )
 
 page = st.navigation({
     "Overview": [
