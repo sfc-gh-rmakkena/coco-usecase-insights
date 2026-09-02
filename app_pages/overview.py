@@ -2,7 +2,7 @@ import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
 from utils.queries import get_adoption_overview, get_adoption_by_partner, get_adoption_by_stage, get_adoption_by_region, get_by_technical_type, get_by_account_gvp, get_bulk_confidence_scores, get_partner_coco_coverage, get_all_uc_counts, get_all_uc_counts_by_theatre, get_partner_metrics_by_theatre, get_all_uc_counts_by_region, get_partner_metrics_by_region, get_apj_rsi_adoption, get_emea_rsi_adoption, get_latam_rsi_adoption, get_gsi_adoption, get_noam_rsi_adoption
-from utils import resolve_partner_filter, resolve_region_theaters, filter_out_partner_own_accounts, apply_coco_final
+from utils import resolve_partner_filter, resolve_region_theaters, filter_out_partner_own_accounts, apply_coco_final, new_coco_wow, NEW_COCO_WOW_HELP
 from utils import APJ_RSI_REGION_MAP, EMEA_RSI_REGION_MAP, LATAM_RSI_REGION_MAP
 from utils import PARTNER_ALIASES as _PA_EARLY
 
@@ -241,6 +241,7 @@ def _build_managed_bc(bc):
         parts.append(_latam[_latam['REGION_NAME'] == 'LATAM'])
     return pd.concat([p for p in parts if len(p) > 0], ignore_index=True) if parts else pd.DataFrame()
 
+_bc_managed = pd.DataFrame()
 if len(bulk_conf) > 0 and 'IS_COCO_FINAL' in bulk_conf.columns:
     _bc_managed = _build_managed_bc(bulk_conf)
     _partner_total       = len(_bc_managed)
@@ -300,6 +301,29 @@ c5.metric("Total Partner Go-Lives",    f"{_go_lives_pct:.1f}%",
 c6.metric("CoCo Partner Go-Lives",     f"{_coco_go_lives_pct:.1f}%",
           f"{_go_live_coco} of {coco_count} CoCo UCs",
           help="IS_COCO_FINAL Stage 7 as % of total IS_COCO_FINAL UCs — deployment rate within CoCo")
+
+# WoW movement in newly created CoCo use cases — last completed Mon-Sun week vs the
+# week before, counted by CREATED_DATE on the managed-partner slice.
+_new_wow = new_coco_wow(_bc_managed if len(_bc_managed) > 0 else bulk_conf)
+if _new_wow['LAST_WK_START'] is not None:
+    n1, n2, n3 = st.columns(3)
+    _npct = _new_wow['WOW_PCT']
+    n1.metric("New CoCo UCs (last full week)", f"{_new_wow['LAST_WK_NEW_COCO']:,}",
+              f"{_npct:+.1f}% WoW" if _npct is not None else "WoW n/a (prior week 0)",
+              help=NEW_COCO_WOW_HELP)
+    n2.metric("New CoCo UCs (prior week)", f"{_new_wow['PRIOR_WK_NEW_COCO']:,}",
+              f"{_new_wow['WOW_DELTA']:+d} UCs")
+    _nlt, _npt = _new_wow['LAST_WK_NEW_TOTAL'], _new_wow['PRIOR_WK_NEW_TOTAL']
+    n3.metric("CoCo share of new UCs",
+              f"{_new_wow['LAST_WK_NEW_COCO']*100.0/_nlt:.0f}%" if _nlt else "n/a",
+              f"{_new_wow['PRIOR_WK_NEW_COCO']*100.0/_npt:.0f}% prior week" if _npt else None,
+              help="CoCo-attached share of all newly created partner use cases in the week")
+    st.caption(
+        f"New-use-case weeks compared: {_new_wow['LAST_WK_START']} vs {_new_wow['PRIOR_WK_START']} "
+        "(completed Mon-Sun weeks, counted by CREATED_DATE). Scoped to the managed-partner slice, "
+        "so counts can differ from the OKR page. Counts new use cases already at Stage 3+; weekly "
+        "volumes are small, so read the counts alongside the percentage."
+    )
 
 
 st.caption(

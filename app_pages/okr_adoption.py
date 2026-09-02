@@ -4,7 +4,7 @@ import plotly.graph_objects as go
 from datetime import datetime, date
 from utils.queries import get_okr_partner_summary, get_okr_stage_breakdown, get_okr_coco_adoption, get_partner_credit_consumption, get_usecase_confidence_scores, get_bulk_confidence_scores, get_coco_final_wow, get_coco_final_trend_4w, get_partner_coco_trend_4w, get_partner_weekly_credits_4w, get_partner_surface_trend_4w
 from utils.ask_ai import build_filter_context, build_credit_wow_context, build_uc_pattern_context
-from utils import resolve_partner_filter, resolve_region_theaters, PARTNER_RENAME_MAP, filter_out_partner_own_accounts, apply_coco_final
+from utils import resolve_partner_filter, resolve_region_theaters, PARTNER_RENAME_MAP, filter_out_partner_own_accounts, apply_coco_final, new_coco_wow, NEW_COCO_WOW_HELP
 from utils import APJ_RSI_REGION_MAP, EMEA_RSI_REGION_MAP, LATAM_RSI_REGION_MAP, PARTNER_ALIASES as _PA_OKR
 
 # Managed partner universe — same as Adoption Metrics default scope
@@ -86,6 +86,7 @@ def _apply_managed_geo_filter(bc):
     return pd.concat([p for p in parts if len(p) > 0], ignore_index=True) if parts else bc
 
 # Compute CoCo using full confidence scoring when account-level is enabled
+_new_wow = new_coco_wow(pd.DataFrame())  # neutral default when scoring is unavailable
 if include_account_coco:
     bulk_conf = get_bulk_confidence_scores(conn, base_summary['PARTNER_NAME'].tolist(), q_start, q_end)
     if len(bulk_conf) > 0:
@@ -203,6 +204,16 @@ if include_account_coco:
         _partner_usage['CREDITS_WOW_PCT'] = ((_l7c - _p7c) * 100.0 / _p7c.replace(0, float('nan'))).round(1)
         _partner_usage['TOKENS_WOW_PCT']  = ((_l7t - _p7t) * 100.0 / _p7t.replace(0, float('nan'))).round(1)
         summary = summary.merge(_partner_usage, on='PARTNER_NAME', how='left')
+
+        # WoW movement in newly created CoCo use cases (last completed ISO week vs
+        # the week before). Derived from the same filtered bulk_conf as everything
+        # else on this page, so it inherits region/stage/confidence selections.
+        _new_wow = new_coco_wow(bulk_conf)
+        if len(_new_wow['BY_PARTNER']) > 0:
+            summary = summary.merge(
+                _new_wow['BY_PARTNER'][['PARTNER_NAME', 'LAST_WK_NEW_COCO', 'NEW_COCO_WOW_PCT']],
+                on='PARTNER_NAME', how='left')
+            summary['LAST_WK_NEW_COCO'] = summary['LAST_WK_NEW_COCO'].fillna(0).astype(int)
     else:
         # Rename aliases in base_summary and re-aggregate so merged partners show as one row
         base_summary = base_summary.copy()
@@ -278,6 +289,25 @@ c4.metric("Overall CoCo %", f"{overall_pct}%", wow_coco_pct_delta if wow_coco_pc
 c5.metric("CoCo Use Cases", f"{int(overall_coco)}/{int(overall_total)}", wow_coco_ucs_delta,
     help=f"Total IS_COCO_FINAL use cases vs total tracked")
 c6.metric("Total EACV", f"${filtered['TOTAL_EACV'].sum()/1_000_000:.1f}M")
+
+if _new_wow['LAST_WK_START'] is not None:
+    _fp = filtered['PARTNER_NAME'].tolist()
+    _bp = _new_wow['BY_PARTNER']
+    _bp = _bp[_bp['PARTNER_NAME'].isin(_fp)] if len(_bp) > 0 else _bp
+    _lw = int(_bp['LAST_WK_NEW_COCO'].sum()) if len(_bp) > 0 else 0
+    _pw = int(_bp['PRIOR_WK_NEW_COCO'].sum()) if len(_bp) > 0 else 0
+    _pc = round((_lw - _pw) * 100.0 / _pw, 1) if _pw > 0 else None
+    n1, n2 = st.columns(2)
+    n1.metric("New CoCo UCs (last full week)", f"{_lw:,}",
+              f"{_pc:+.1f}% WoW" if _pc is not None else "WoW n/a (prior week 0)",
+              help=NEW_COCO_WOW_HELP)
+    n2.metric("New CoCo UCs (prior week)", f"{_pw:,}", f"{_lw - _pw:+d} UCs")
+    st.caption(
+        f"New-use-case weeks compared: {_new_wow['LAST_WK_START']} vs {_new_wow['PRIOR_WK_START']} "
+        "(completed Mon-Sun weeks, counted by CREATED_DATE). Scoped to the partners tracked on "
+        "this page, so counts can differ from Adoption Metrics, which uses the managed-partner "
+        "slice. Counts new use cases already at Stage 3+; volumes are small, so read counts with the %."
+    )
 
 st.divider()
 
@@ -368,6 +398,11 @@ display_df['GAP'] = filtered_sorted.apply(
 )
 display_df['COCO_PCT'] = filtered_sorted['COCO_PCT']
 
+# Carry the new-CoCo WoW columns through (display_df is an explicit column subset)
+for _nc in ('LAST_WK_NEW_COCO', 'NEW_COCO_WOW_PCT'):
+    if _nc in filtered_sorted.columns:
+        display_df[_nc] = filtered_sorted[_nc]
+
 # Merge attribution
 if len(attribution_data) > 0:
     display_df = display_df.merge(attribution_data, on='PARTNER_NAME', how='left')
@@ -386,6 +421,7 @@ else:
 
 # Merge Q2 Credits / Tokens (Coverage page approach)
 _display_cols = ['PARTNER_NAME', 'TOTAL_USE_CASES', 'COCO_USE_CASES', 'COCO_PCT', 'WOW_COCO_PCT', 'WOW_COCO_UCS',
+                 'LAST_WK_NEW_COCO', 'NEW_COCO_WOW_PCT',
                  'NON_COCO_USE_CASES', 'TOTAL_EACV', 'COCO_EACV', 'SE_COMMENTS', 'PSE_COMMENTS', 'FEATURE_FLAG']
 _col_cfg = {
     'PARTNER_NAME':      st.column_config.TextColumn("Partner", width="medium"),
@@ -394,6 +430,8 @@ _col_cfg = {
     'COCO_PCT':          st.column_config.ProgressColumn("CoCo %", min_value=0, max_value=100, format="%.1f%%"),
     'WOW_COCO_PCT':      st.column_config.NumberColumn("WoW Δ%", format="%+.1f%%", help="Week-over-week change in CoCo adoption %"),
     'WOW_COCO_UCS':      st.column_config.NumberColumn("WoW Δ UCs", format="%+d", help="Week-over-week change in CoCo use case count"),
+    'LAST_WK_NEW_COCO':  st.column_config.NumberColumn("New CoCo UCs", format="%d", help="CoCo use cases created during the last completed Mon-Sun week"),
+    'NEW_COCO_WOW_PCT':  st.column_config.NumberColumn("New CoCo WoW%", format="%+.1f%%", help=NEW_COCO_WOW_HELP),
     'NON_COCO_USE_CASES':st.column_config.NumberColumn("Non-CoCo", format="%d"),
     'TOTAL_EACV':        st.column_config.TextColumn("Total EACV"),
     'COCO_EACV':         st.column_config.TextColumn("CoCo EACV"),

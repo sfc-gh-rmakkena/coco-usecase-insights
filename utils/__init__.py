@@ -300,3 +300,97 @@ def apply_coco_final(df, bands=("High",)):
                if "CONFIDENCE_BAND" in df.columns else False)
 
     return base & ~(partner_only & ~has_tokens & ~band_ok)
+
+
+def last_two_iso_weeks():
+    """(last_week_start, last_week_end, prior_week_start, prior_week_end) as dates.
+
+    Both windows are COMPLETED Monday-Sunday weeks. The week in progress is excluded
+    on purpose: new-use-case creation runs only 4-20 per week in the OKR population,
+    so a partial week reads as a collapse (measured -100% on a Wednesday) rather than
+    a real decline.
+    """
+    from datetime import date, timedelta as _td
+
+    today = date.today()
+    this_week_start = today - _td(days=today.weekday())   # Monday of current week
+    last_start = this_week_start - _td(days=7)
+    prior_start = this_week_start - _td(days=14)
+    return last_start, last_start + _td(days=6), prior_start, prior_start + _td(days=6)
+
+
+def new_coco_wow(df, coco_col="IS_COCO_FINAL", created_col="CREATED_DATE"):
+    """Week-over-week movement in NEWLY CREATED CoCo use cases.
+
+    Compares the last completed ISO week against the one before it, counting use
+    cases by CREATED_DATE. Returns a dict of overall figures plus a per-partner
+    frame. WOW_PCT is None when the prior week was zero (undefined, not infinite).
+
+    Caveat worth surfacing in the UI: the source population is stages 3-7 only, so a
+    use case appears here the week it was created ONLY if it had already advanced to
+    Technical/Business Validation. This is "newly created and already qualified",
+    not all new pipeline.
+    """
+    import pandas as pd
+
+    empty = {
+        "LAST_WK_NEW_COCO": 0, "PRIOR_WK_NEW_COCO": 0,
+        "LAST_WK_NEW_TOTAL": 0, "PRIOR_WK_NEW_TOTAL": 0,
+        "WOW_PCT": None, "WOW_DELTA": 0,
+        "LAST_WK_START": None, "PRIOR_WK_START": None,
+        "BY_PARTNER": pd.DataFrame(columns=[
+            "PARTNER_NAME", "LAST_WK_NEW_COCO", "PRIOR_WK_NEW_COCO",
+            "NEW_COCO_WOW_PCT", "NEW_COCO_WOW_DELTA"]),
+    }
+    if df is None or len(df) == 0 or created_col not in df.columns or coco_col not in df.columns:
+        return empty
+
+    ls, le, ps, pe = last_two_iso_weeks()
+    created = pd.to_datetime(df[created_col], errors="coerce")
+    if created.notna().sum() == 0:
+        return empty
+    created = created.dt.date
+
+    in_last = (created >= ls) & (created <= le)
+    in_prior = (created >= ps) & (created <= pe)
+    is_coco = df[coco_col].fillna(False).astype(bool)
+
+    last_coco = int((in_last & is_coco).sum())
+    prior_coco = int((in_prior & is_coco).sum())
+    wow_pct = round((last_coco - prior_coco) * 100.0 / prior_coco, 1) if prior_coco > 0 else None
+
+    by_partner = pd.DataFrame()
+    if "PARTNER_NAME" in df.columns:
+        _w = pd.DataFrame({
+            "PARTNER_NAME": df["PARTNER_NAME"],
+            "LAST_WK_NEW_COCO": (in_last & is_coco).astype(int),
+            "PRIOR_WK_NEW_COCO": (in_prior & is_coco).astype(int),
+        })
+        by_partner = _w.groupby("PARTNER_NAME", as_index=False).sum()
+        by_partner["NEW_COCO_WOW_DELTA"] = (
+            by_partner["LAST_WK_NEW_COCO"] - by_partner["PRIOR_WK_NEW_COCO"])
+        by_partner["NEW_COCO_WOW_PCT"] = (
+            by_partner["NEW_COCO_WOW_DELTA"] * 100.0
+            / by_partner["PRIOR_WK_NEW_COCO"].replace(0, float("nan"))
+        ).round(1)
+
+    return {
+        "LAST_WK_NEW_COCO": last_coco,
+        "PRIOR_WK_NEW_COCO": prior_coco,
+        "LAST_WK_NEW_TOTAL": int(in_last.sum()),
+        "PRIOR_WK_NEW_TOTAL": int(in_prior.sum()),
+        "WOW_PCT": wow_pct,
+        "WOW_DELTA": last_coco - prior_coco,
+        "LAST_WK_START": ls,
+        "PRIOR_WK_START": ps,
+        "BY_PARTNER": by_partner,
+    }
+
+
+NEW_COCO_WOW_HELP = (
+    "Newly created CoCo use cases: last completed Mon-Sun week vs the week before, "
+    "counted by CREATED_DATE. Population is stages 3-7, so a use case counts only if "
+    "it had already reached Technical/Business Validation — this is new-and-qualified, "
+    "not all new pipeline. Blank means the prior week was zero."
+)
+

@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 from utils.queries import get_partner_coco_coverage, get_okr_stage_breakdown, get_partner_credit_consumption, get_bulk_confidence_scores, get_coco_final_wow
-from utils import apply_coco_final
+from utils import apply_coco_final, new_coco_wow, NEW_COCO_WOW_HELP
 from utils.cortex_helpers import cortex_complete
 from utils.ask_ai import build_filter_context, build_credit_wow_context, build_uc_pattern_context
 from utils import resolve_partner_filter, resolve_region_theaters, PARTNER_RENAME_MAP, filter_out_partner_own_accounts
@@ -44,6 +44,7 @@ if len(coverage) == 0:
 
 # Recompute CoCo counts using full confidence scoring — same logic as OKR Adoption page
 bulk_conf = pd.DataFrame()
+_new_wow = new_coco_wow(pd.DataFrame())  # neutral default when scoring is unavailable
 if include_account_coco and len(coverage) > 0:
     bulk_conf = get_bulk_confidence_scores(conn, coverage['PARTNER_NAME'].tolist(), str(start_date), str(end_date))
     if len(bulk_conf) > 0:
@@ -125,6 +126,16 @@ if include_account_coco and len(coverage) > 0:
         ).fillna(0)
         stage_breakdown = stage_from_conf
 
+        # Week-over-week movement in newly created CoCo use cases (last completed
+        # ISO week vs the week before). Derived from bulk_conf so it honours every
+        # sidebar filter and the IS_COCO_FINAL definition already applied above.
+        _new_wow = new_coco_wow(bulk_conf)
+        if len(_new_wow['BY_PARTNER']) > 0:
+            coverage = coverage.merge(
+                _new_wow['BY_PARTNER'][['PARTNER_NAME', 'LAST_WK_NEW_COCO', 'NEW_COCO_WOW_PCT']],
+                on='PARTNER_NAME', how='left')
+            coverage['LAST_WK_NEW_COCO'] = coverage['LAST_WK_NEW_COCO'].fillna(0).astype(int)
+
 # Inject context for Ask AI — include partner-level credits/tokens if available
 _ctx_lines = [
     f"Current page: OKR CoCo Coverage. Region: {region}. Period: {start_date} to {end_date}.",
@@ -176,6 +187,27 @@ with tab_summary:
     c3.metric("CoCo Use Cases", f"{total_coco_ucs:,}", wow_coco_ucs_delta)
     c4.metric("Overall CoCo %", f"{overall_pct}%", wow_coco_pct_delta if wow_coco_pct_delta else f"Target: {TARGET_PCT}%")
     c5.metric(f"Meeting {TARGET_PCT}%", f"{meeting_target}/{total_partners}", f"{round(meeting_target*100/total_partners)}%" if total_partners else "0%")
+
+    if _new_wow['LAST_WK_START'] is not None:
+        n1, n2, n3 = st.columns(3)
+        _pct = _new_wow['WOW_PCT']
+        n1.metric(
+            "New CoCo UCs (last full week)", f"{_new_wow['LAST_WK_NEW_COCO']:,}",
+            f"{_pct:+.1f}% WoW" if _pct is not None else "WoW n/a (prior week 0)",
+            help=NEW_COCO_WOW_HELP,
+        )
+        n2.metric("New CoCo UCs (prior week)", f"{_new_wow['PRIOR_WK_NEW_COCO']:,}",
+                  f"{_new_wow['WOW_DELTA']:+d} UCs")
+        _lt, _pt = _new_wow['LAST_WK_NEW_TOTAL'], _new_wow['PRIOR_WK_NEW_TOTAL']
+        n3.metric("CoCo share of new UCs",
+                  f"{_new_wow['LAST_WK_NEW_COCO']*100.0/_lt:.0f}%" if _lt else "n/a",
+                  f"{_new_wow['PRIOR_WK_NEW_COCO']*100.0/_pt:.0f}% prior week" if _pt else None,
+                  help="CoCo-attached share of all newly created use cases in the week")
+        st.caption(
+            f"New-use-case weeks compared: {_new_wow['LAST_WK_START']} vs {_new_wow['PRIOR_WK_START']} "
+            "(completed Mon-Sun weeks). Weekly volumes here are small (typically 4-20), "
+            "so read the absolute counts alongside the percentage."
+        )
 
     st.divider()
 
@@ -417,7 +449,7 @@ with tab_summary:
         display['WOW_COCO_PCT'] = None
         display['WOW_COCO_UCS'] = None
 
-    _display_cols = ['PARTNER_NAME', 'TOTAL_PARTNER_UCS', 'COCO_UCS', 'COCO_PCT', 'WOW_COCO_PCT', 'WOW_COCO_UCS', 'SE_COMMENTS', 'PSE_COMMENTS', 'FEATURE_FLAG', 'MEETS_TARGET', 'GAP']
+    _display_cols = ['PARTNER_NAME', 'TOTAL_PARTNER_UCS', 'COCO_UCS', 'COCO_PCT', 'WOW_COCO_PCT', 'WOW_COCO_UCS', 'LAST_WK_NEW_COCO', 'NEW_COCO_WOW_PCT', 'SE_COMMENTS', 'PSE_COMMENTS', 'FEATURE_FLAG', 'MEETS_TARGET', 'GAP']
     _col_cfg = {
         'PARTNER_NAME': st.column_config.TextColumn("Partner", width="medium"),
         'TOTAL_PARTNER_UCS': st.column_config.NumberColumn("Total UCs", format="%d"),
@@ -425,6 +457,8 @@ with tab_summary:
         'COCO_PCT': st.column_config.ProgressColumn("CoCo %", min_value=0, max_value=100, format="%.1f%%"),
         'WOW_COCO_PCT': st.column_config.NumberColumn("WoW Δ%", format="%+.1f%%", help="Week-over-week change in CoCo adoption % (available after 2nd weekly snapshot)"),
         'WOW_COCO_UCS': st.column_config.NumberColumn("WoW Δ UCs", format="%+d", help="Week-over-week change in CoCo use case count"),
+        'LAST_WK_NEW_COCO': st.column_config.NumberColumn("New CoCo UCs", format="%d", help="CoCo use cases created during the last completed Mon-Sun week"),
+        'NEW_COCO_WOW_PCT': st.column_config.NumberColumn("New CoCo WoW%", format="%+.1f%%", help=NEW_COCO_WOW_HELP),
         'SE_COMMENTS': st.column_config.NumberColumn("SE Comments", format="%d", help="SE wrote coco/cortex code in comments"),
         'PSE_COMMENTS': st.column_config.NumberColumn("PSE Comments", format="%d", help="Partner wrote #coco in comments"),
         'FEATURE_FLAG': st.column_config.NumberColumn("Feature Flag", format="%d", help="AI - Cortex Code in Prioritized Features"),

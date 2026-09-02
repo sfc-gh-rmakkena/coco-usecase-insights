@@ -1301,6 +1301,7 @@ def _confidence_scored_query(partner_filter_sql, start_date, end_date):
         SELECT uc.USE_CASE_ID, uc.USE_CASE_NAME, uc.ACCOUNT_NAME, UPPER(uc.ACCOUNT_NAME) AS ACCOUNT_NAME_UPPER,
             uc.PARTNER_NAME, uc.TECHNICAL_USE_CASE, uc.USE_CASE_STAGE,
             uc.USE_CASE_EACV, uc.IS_COCO, uc.COCO_SOURCE, uc.THEATER_NAME, uc.REGION_NAME,
+            uc.CREATED_DATE,
             CASE
                 WHEN uc.TECHNICAL_USE_CASE ILIKE '%AI:%' THEN 'AI'
                 WHEN uc.TECHNICAL_USE_CASE ILIKE '%Analytics:%' THEN 'Analytics'
