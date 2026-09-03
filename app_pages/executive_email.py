@@ -17,6 +17,7 @@ from utils.queries import (
 )
 from utils.cortex_helpers import cortex_complete
 from utils import APJ_RSI_REGION_MAP, EMEA_RSI_REGION_MAP, LATAM_RSI_REGION_MAP, PARTNER_ALIASES as _PA_EMAIL, apply_coco_final, new_coco_wow, last_two_iso_weeks
+from utils import new_coco_by_group, NEW_COCO_WK_COL, NEW_COCO_DELTA_COL
 
 # Restricted page. streamlit_app.py hides the nav entry for anyone not on the list;
 # this second check stops a direct page URL from rendering the report anyway. Note
@@ -1138,7 +1139,9 @@ def _build_group_ctx(group_df, group_label, credit_lkp, wow_lkp):
             f"  {p['PARTNER_NAME']}: {int(p['TOTAL_UCS'])} UCs, {int(p['COCO_UCS'])} CoCo ({int(p['COCO_PCT'])}%), "
             f"${eacv/1000:.0f}K EACV, AI={int(p['AI'])}, DE={int(p['DE'])}, Analytics={int(p['ANALYTICS'])}, "
             f"Q3 Credits=${credits:,.0f}, Last 7d Credits=${last7:,.0f}, Q3 Tokens={_fmt_tokens(tokens)}, "
-            f"7D Credits WoW%={wow_str}, CoCo% WoW={wow_coco_pct}, CoCo UCs WoW={wow_coco_ucs}\n"
+            f"7D Credits WoW%={wow_str}, CoCo% WoW={wow_coco_pct}, CoCo UCs WoW={wow_coco_ucs}, "
+            f"New CoCo UCs (wk)={int(p.get(NEW_COCO_WK_COL, 0) or 0)}, "
+            f"New CoCo Δ vs prior wk={int(p.get(NEW_COCO_DELTA_COL, 0) or 0):+d}\n"
         )
     return ctx
 
@@ -1198,6 +1201,7 @@ def _group_partners(group_tag):
         return pd.DataFrame([{
             'PARTNER_NAME': p, 'TOTAL_UCS': 0, 'COCO_UCS': 0, 'TOTAL_EACV': 0,
             'AI': 0, 'DE': 0, 'ANALYTICS': 0, 'COCO_EACV': 0, 'COCO_PCT': 0,
+            NEW_COCO_WK_COL: 0, NEW_COCO_DELTA_COL: 0,
         } for p in _expected])
     _coco_eacv = _g[_g['IS_COCO_FINAL']].groupby('PARTNER_NAME')['USE_CASE_EACV'].sum().reset_index()
     _coco_eacv.columns = ['PARTNER_NAME', 'COCO_EACV']
@@ -1211,6 +1215,10 @@ def _group_partners(group_tag):
     ).reset_index()
     _agg = _agg.merge(_coco_eacv, on='PARTNER_NAME', how='left').fillna({'COCO_EACV': 0})
     _agg['COCO_PCT'] = (_agg['COCO_UCS'] * 100.0 / _agg['TOTAL_UCS'].replace(0, float('nan'))).round(0).fillna(0)
+    # Newly created CoCo UCs last completed week, and the change vs the week before
+    _agg = _agg.merge(new_coco_by_group(_g, 'PARTNER_NAME'), on='PARTNER_NAME', how='left')
+    for _nc in (NEW_COCO_WK_COL, NEW_COCO_DELTA_COL):
+        _agg[_nc] = pd.to_numeric(_agg[_nc], errors='coerce').fillna(0).astype(int)
 
     # A group member with no use cases dated inside the quarter never reaches this
     # frame, so it used to vanish from the scorecard entirely - APJ RSI showed 3 of
@@ -1222,6 +1230,7 @@ def _group_partners(group_tag):
         _agg = pd.concat([_agg, pd.DataFrame([{
             'PARTNER_NAME': p, 'TOTAL_UCS': 0, 'COCO_UCS': 0, 'TOTAL_EACV': 0,
             'AI': 0, 'DE': 0, 'ANALYTICS': 0, 'COCO_EACV': 0, 'COCO_PCT': 0,
+            NEW_COCO_WK_COL: 0, NEW_COCO_DELTA_COL: 0,
         } for p in _missing])], ignore_index=True)
     return _agg.sort_values('TOTAL_EACV', ascending=False)
 
@@ -1411,6 +1420,14 @@ if len(managed_bulk_conf) > 0:
            .assign(PCT=lambda d: d['C']/d['T'].replace(0, float('nan'))))
     _p_meeting_50 = int((_pm['PCT'] >= 0.50).sum())
 
+# Book-wide weekly movement, so the summary can lead with it and every section
+# below is measured against the same two weeks.
+_book_new_wow = new_coco_wow(managed_bulk_conf, group_col=None)
+_bn_l, _bn_p = _book_new_wow['LAST_WK_NEW_COCO'], _book_new_wow['PRIOR_WK_NEW_COCO']
+_bn_pct = f"{_book_new_wow['WOW_PCT']:+.1f}%" if _book_new_wow['WOW_PCT'] is not None else "n/a"
+_bn_weeks = (f"{_book_new_wow['LAST_WK_START']} vs {_book_new_wow['PRIOR_WK_START']}"
+             if _book_new_wow['LAST_WK_START'] else "n/a")
+
 okr_headline_ctx = (
     f"  Scope: GSIs (Global all regions) + NOAM RSIs (NoAM) + APJ RSIs (APJ geo) + EMEA RSIs (EMEA geo)\n"
     f"  Total Use Cases: {_live_total}\n"
@@ -1421,6 +1438,8 @@ okr_headline_ctx = (
     f"  Gap (UCs): {_okr_gap_ucs:+d}\n"
     f"  Gap (Adoption %): {_okr_gap_pct:+.1f}pp\n"
     f"  Partners Meeting 75% Target: {_p_meeting_50}/44\n"
+    f"  Weeks compared for every weekly figure in this report: {_bn_weeks} (completed Mon-Sun)\n"
+    f"  New CoCo UCs booked last completed week: {_bn_l} (prior week {_bn_p}, WoW {_bn_pct}, Δ {_bn_l - _bn_p:+d})\n"
 )
 
 if len(adoption_wow_data) > 0:
@@ -2135,6 +2154,7 @@ Follow this EXACT structure with 9 sections:
 - Second sentence: one crisp insight on the dominant pattern.
 - Bullet 1: "**Leading use case types:** [top 3 by count]"
 - Bullet 2: "**CoCo Adoption:** [X]% overall — GSIs: [GSI%] | NOAM RSIs: [NOAM%] | APJ RSIs: [APJ%] | EMEA RSIs: [EMEA%]"
+- Bullet 3: "**New this week:** [New CoCo UCs booked last completed week] new CoCo use cases ([Δ] vs prior week) — use the OKR HEADLINE figures verbatim, and name the leading group from the regional table"
 - Bullet 3: "**Top GSIs by EACV:** ([top 3 GSIs])"
 - Bullet 4: "**Top RSIs by EACV:** ([top 3 RSI partners across all 3 RSI groups])"
 - Bullet 5: "**Competitive displacement:** [top 3 competitors by count]"
@@ -2171,7 +2191,7 @@ Follow this EXACT structure with 9 sections:
 - After the table, one sentence naming the stage where new CoCo attachment is concentrating and the stage that is drying up, citing the actual LW and PW counts.
 
 ## PARTNER SCORECARD — GSI (Global, all regions, target 75%)
-| Partner | Total UCs | CoCo UCs | CoCo% | WoW Δ% | WoW Δ UCs | EACV | AI | DE | Analytics | Q3 Tokens | Q3 Credits | Last 7d Credits | 7D Credits WoW% |
+| Partner | Total UCs | CoCo UCs | CoCo% | WoW Δ% | WoW Δ UCs | New CoCo UCs (wk) | Δ vs prior wk | EACV | AI | DE | Analytics | Q3 Tokens | Q3 Credits | Last 7d Credits | 7D Credits WoW% |
 - Show ALL GSI partners. Sort by EACV descending. UCs are GLOBAL (all regions).
 - The number of rows MUST equal the EXPECTED ROWS value stated for this group in the context. Include every partner listed, including any with 0 UCs. Do not omit, merge or summarise rows.
 - WoW Δ% and WoW Δ UCs from adoption WoW data — show "-" if N/A
@@ -2179,25 +2199,25 @@ Follow this EXACT structure with 9 sections:
 
 
 ## PARTNER SCORECARD — NOAM RSI (NoAM only, target 75%)
-| Partner | Total UCs | CoCo UCs | CoCo% | WoW Δ% | WoW Δ UCs | EACV | AI | DE | Analytics | Q3 Tokens | Q3 Credits | Last 7d Credits | 7D Credits WoW% |
+| Partner | Total UCs | CoCo UCs | CoCo% | WoW Δ% | WoW Δ UCs | New CoCo UCs (wk) | Δ vs prior wk | EACV | AI | DE | Analytics | Q3 Tokens | Q3 Credits | Last 7d Credits | 7D Credits WoW% |
 - Show ALL NOAM RSI partners. Sort by EACV descending. UCs are NoAM scope only.
 - The number of rows MUST equal the EXPECTED ROWS value stated for this group in the context. Include every partner listed, including any with 0 UCs. Do not omit, merge or summarise rows.
 - After table: one sentence . Give one senetence which RSI's are leading and  are lagging by theatre, based on last 4 weeks trend what RSI's are doing - type of engagements
 
 ## PARTNER SCORECARD — APJ RSI (APJ geo-restricted, target 50%)
-| Partner | Total UCs | CoCo UCs | CoCo% | WoW Δ% | WoW Δ UCs | EACV | AI | DE | Analytics | Q3 Tokens | Q3 Credits | Last 7d Credits | 7D Credits WoW% |
+| Partner | Total UCs | CoCo UCs | CoCo% | WoW Δ% | WoW Δ UCs | New CoCo UCs (wk) | Δ vs prior wk | EACV | AI | DE | Analytics | Q3 Tokens | Q3 Credits | Last 7d Credits | 7D Credits WoW% |
 - Show ALL APJ RSI partners. Sort by EACV descending. UCs are each partner's respective APJ region.
 - The number of rows MUST equal the EXPECTED ROWS value stated for this group in the context. Include every partner listed, including any with 0 UCs. Do not omit, merge or summarise rows.
 - After table: one sentence . Give one senetence which RSI's are leading and  are lagging by theatre, based on last 4 weeks trend what RSI's are doing - type of engagements
 
 ## PARTNER SCORECARD — EMEA RSI (EMEA geo-restricted, target 50%)
-| Partner | Total UCs | CoCo UCs | CoCo% | WoW Δ% | WoW Δ UCs | EACV | AI | DE | Analytics | Q3 Tokens | Q3 Credits | Last 7d Credits | 7D Credits WoW% |
+| Partner | Total UCs | CoCo UCs | CoCo% | WoW Δ% | WoW Δ UCs | New CoCo UCs (wk) | Δ vs prior wk | EACV | AI | DE | Analytics | Q3 Tokens | Q3 Credits | Last 7d Credits | 7D Credits WoW% |
 - Show ALL EMEA RSI partners. Sort by EACV descending. UCs are each partner's respective EMEA region.
 - The number of rows MUST equal the EXPECTED ROWS value stated for this group in the context. Include every partner listed, including any with 0 UCs. Do not omit, merge or summarise rows.
 - After table: one sentence . Give one senetence which RSI's are leading and  are lagging by theatre, based on last 4 weeks trend what RSI's are doing - type of engagements
 
 ## PARTNER SCORECARD — LATAM RSI (LATAM geo-restricted, target 50%)
-| Partner | Total UCs | CoCo UCs | CoCo% | WoW Δ% | WoW Δ UCs | EACV | AI | DE | Analytics | Q3 Tokens | Q3 Credits | Last 7d Credits | 7D Credits WoW% |
+| Partner | Total UCs | CoCo UCs | CoCo% | WoW Δ% | WoW Δ UCs | New CoCo UCs (wk) | Δ vs prior wk | EACV | AI | DE | Analytics | Q3 Tokens | Q3 Credits | Last 7d Credits | 7D Credits WoW% |
 - Show ALL LATAM RSI partners. Sort by EACV descending. UCs are LATAM geo only.
 - The number of rows MUST equal the EXPECTED ROWS value stated for this group in the context. Include every partner listed, including any with 0 UCs. Do not omit, merge or summarise rows.
 - After table: one sentence. Give one sentence which RSI’s are leading and are lagging by theatre, based on last 4 weeks trend what RSI’s are doing - type of engagements
@@ -2206,8 +2226,10 @@ Follow this EXACT structure with 9 sections:
 "**Disclaimer:** Use case data sourced from SE comments (coco/cortex code mentions), #coco in Partner Comments, and AI-Cortex Code feature flag. Pipeline figures are being confirmed by the PDM team and are subject to change. Detailed stats: http://go/cocopse"
 
 FORMATTING RULES:
+- WEEKLY COLUMNS — every section uses the SAME two weeks, stated in OKR HEADLINE. On all five partner scorecards, "New CoCo UCs (wk)" is that partner's `New CoCo UCs (wk)=` value from context and "Δ vs prior wk" is its `New CoCo Δ vs prior wk=` value. Copy both verbatim; never derive them from CoCo UCs or from WoW Δ UCs. 0 is a real value — write 0, not "-". Only write "-" when the field is genuinely absent from context.
+- "New CoCo UCs (wk)" counts use cases CREATED in the week. "WoW Δ UCs" is cumulative movement in the CoCo total. They measure different things and will not reconcile — never average them, and do not describe a mismatch as an inconsistency.
 - NEVER invent a value to fill a cell. If a figure is absent from the context, or the context shows it as n/a, blank or zero, write "-" (or $0 for currency). This applies especially to WoW Δ%, WoW Δ UCs and the credit and token columns. A fabricated percentage is worse than an empty cell.
-- Partners seeded at 0 UCs have no trend to report: leave their WoW and credit cells as "-" and do not describe them in the narrative sentences.
+- Partners seeded at 0 UCs have no trend to report: leave their WoW Δ%, WoW Δ UCs, credit and token cells as "-" and do not describe them in the narrative sentences. The two weekly new-CoCo columns are the exception — write 0 for them, not "-".
 - Markdown tables for ALL data — no narrative paragraphs for numbers
 - Executive summary: exactly 2-3 sentences + 6 bullets, nothing more
 - Section headings: ## format, no numbering

@@ -398,3 +398,124 @@ NEW_COCO_WOW_HELP = (
     "not all new pipeline. Blank means the prior week was zero."
 )
 
+# ── "New CoCo use cases this week" columns, shared across every table ─────────
+# One definition, one pair of labels, so the theatre / region / partner / stage
+# tables cannot drift apart. NEW_COCO_WK is the count created in the last COMPLETED
+# Mon-Sun week; NEW_COCO_DELTA is that count minus the prior week's.
+NEW_COCO_WK_COL = "NEW_COCO_WK"
+NEW_COCO_DELTA_COL = "NEW_COCO_DELTA"
+NEW_COCO_WK_LABEL = "New CoCo UCs (wk)"
+NEW_COCO_DELTA_LABEL = "Δ vs prior wk"
+NEW_COCO_WK_HELP = (
+    "CoCo use cases CREATED during the last completed Mon-Sun week. Population is "
+    "stages 3-7, so a use case counts only once it has reached Technical/Business "
+    "Validation — new-and-qualified, not all new pipeline."
+)
+NEW_COCO_DELTA_HELP = (
+    "Change vs the week before: last completed week's new CoCo use cases minus the "
+    "prior week's. Shown as a raw count rather than a percentage because weekly "
+    "volumes are small."
+)
+NEW_THIS_WEEK_LABEL = "New this wk"
+NEW_THIS_WEEK_HELP = (
+    "Yes = this use case was created during the last completed Mon-Sun week."
+)
+
+
+def new_coco_col_config(st_mod, wk_key=NEW_COCO_WK_COL, delta_key=NEW_COCO_DELTA_COL):
+    """column_config entries for the two shared columns. Pass in `streamlit`.
+
+    wk_key/delta_key let callers whose display frame is keyed by the human labels
+    (several overview tables rename positionally) reuse the same formats and help.
+    """
+    return {
+        wk_key: st_mod.column_config.NumberColumn(
+            NEW_COCO_WK_LABEL, format="%d", help=NEW_COCO_WK_HELP),
+        delta_key: st_mod.column_config.NumberColumn(
+            NEW_COCO_DELTA_LABEL, format="%+d", help=NEW_COCO_DELTA_HELP),
+    }
+
+
+def new_coco_by_group(uc_df, group_col, coco_col="IS_COCO_FINAL", created_col="CREATED_DATE"):
+    """Per-group new-CoCo counts for the last completed week and the change vs prior.
+
+    group_col may be a single column name or a list of names (composite grain, e.g.
+    partner x stage). Returns a frame of [*group_cols, NEW_COCO_WK, NEW_COCO_DELTA],
+    or an empty frame with those columns when the inputs cannot support the metric.
+    """
+    import pandas as pd
+
+    keys = [group_col] if isinstance(group_col, str) else list(group_col)
+    cols = keys + [NEW_COCO_WK_COL, NEW_COCO_DELTA_COL]
+    if (uc_df is None or len(uc_df) == 0
+            or created_col not in uc_df.columns
+            or coco_col not in uc_df.columns
+            or any(k not in uc_df.columns for k in keys)):
+        return pd.DataFrame(columns=cols)
+
+    ls, le, ps, pe = last_two_iso_weeks()
+    created = pd.to_datetime(uc_df[created_col], errors="coerce")
+    if created.notna().sum() == 0:
+        return pd.DataFrame(columns=cols)
+    created = created.dt.date
+    is_coco = uc_df[coco_col].fillna(False).astype(bool)
+
+    work = uc_df[keys].copy()
+    work["_last"] = ((created >= ls) & (created <= le) & is_coco).astype(int)
+    work["_prior"] = ((created >= ps) & (created <= pe) & is_coco).astype(int)
+    agg = work.groupby(keys, as_index=False, dropna=False).sum()
+    agg[NEW_COCO_WK_COL] = agg["_last"].astype(int)
+    agg[NEW_COCO_DELTA_COL] = (agg["_last"] - agg["_prior"]).astype(int)
+    return agg[cols]
+
+
+def merge_new_coco(display_df, uc_df, group_col, left_key=None,
+                   coco_col="IS_COCO_FINAL", created_col="CREATED_DATE"):
+    """Attach NEW_COCO_WK / NEW_COCO_DELTA to a display frame.
+
+    left_key names the matching column(s) on display_df when they differ from
+    group_col. Rows with no match get 0 rather than NaN: a group that booked no new
+    CoCo use cases genuinely booked zero, which is different from "unknown". When the
+    metric cannot be computed at all the columns are still added as 0 so callers can
+    reference them unconditionally.
+    """
+    import pandas as pd
+
+    if display_df is None or len(display_df) == 0:
+        return display_df
+
+    keys = [group_col] if isinstance(group_col, str) else list(group_col)
+    lkeys = keys if left_key is None else ([left_key] if isinstance(left_key, str) else list(left_key))
+    out = display_df.copy()
+
+    by_group = new_coco_by_group(uc_df, group_col, coco_col=coco_col, created_col=created_col)
+    if len(by_group) == 0 or any(k not in out.columns for k in lkeys):
+        out[NEW_COCO_WK_COL] = 0
+        out[NEW_COCO_DELTA_COL] = 0
+        return out
+
+    right = by_group.rename(columns=dict(zip(keys, lkeys)))
+    out = out.merge(right, on=lkeys, how="left")
+    for _c in (NEW_COCO_WK_COL, NEW_COCO_DELTA_COL):
+        out[_c] = pd.to_numeric(out[_c], errors="coerce").fillna(0).astype(int)
+    return out
+
+
+def new_this_week_flag(df, created_col="CREATED_DATE"):
+    """Per-row "was this use case created in the last completed week?" as Yes / "-".
+
+    For individual-use-case tables, where a group count has no meaning.
+    """
+    import pandas as pd
+
+    if df is None or len(df) == 0 or created_col not in df.columns:
+        return pd.Series(["-"] * (0 if df is None else len(df)),
+                         index=None if df is None else df.index)
+    ls, le, _ps, _pe = last_two_iso_weeks()
+    created = pd.to_datetime(df[created_col], errors="coerce").dt.date
+    return pd.Series(
+        [("Yes" if (d is not None and pd.notna(d) and ls <= d <= le) else "-") for d in created],
+        index=df.index,
+    )
+
+
