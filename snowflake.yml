@@ -20,9 +20,13 @@ entities:
       schema: COCO_PARTNER_ADOPTION_DEV
     stage: STREAMLIT
     query_warehouse: COCO_PARTNER_ADOPTION_WH
+    runtime_name: SYSTEM$ST_CONTAINER_RUNTIME_PY3_11
+    compute_pool: STREAMLIT_DEDICATED_POOL_L
+    external_access_integrations:
+      - PYPI_ACCESS_INTEGRATION
     main_file: streamlit_app.py
     artifacts:
       - streamlit_app.py
-      - environment.yml
+      - pyproject.toml
       - app_pages/
       - utils/

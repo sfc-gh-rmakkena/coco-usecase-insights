@@ -51,9 +51,12 @@ TECH_UC_SKILL_MAP = {
 }
 
 
-def detect_migration(name: str, tech_uc: str):
-    """Return (is_migration, list_of_signals)."""
-    combined = f"{name} {tech_uc}".lower()
+def detect_migration(name: str, tech_uc: str, extra_text: str = ""):
+    """Return (is_migration, list_of_signals). `extra_text` (e.g. SE_COMMENTS)
+    widens the keyword scan beyond the structured name/tech_uc fields, since
+    SEs often note the actual legacy platform being replaced in free text
+    that never makes it into the Technical Use Case taxonomy field."""
+    combined = f"{name} {tech_uc} {extra_text}".lower()
     signals = []
     for kw in MIGRATION_KEYWORDS:
         if kw in combined:
@@ -84,10 +87,12 @@ def h(text) -> str:
     return html_lib.escape(str(text or ""))
 
 
-def map_coco_skills_explained(name: str, tech_uc: str) -> dict:
+def map_coco_skills_explained(name: str, tech_uc: str, se_comments: str = "") -> dict:
     """
     Runs the exact same rules as map_coco_skills() but records the trigger for
-    each skill. Returns:
+    each skill. `se_comments` widens migration detection to free-text SE notes
+    (see detect_migration) without affecting the structured TECH_UC_SKILL_MAP
+    matching, which stays scoped to the taxonomy field only. Returns:
       {
         "skills":       [sorted skill tags],
         "reasons":      {skill: [reason strings]},
@@ -98,7 +103,7 @@ def map_coco_skills_explained(name: str, tech_uc: str) -> dict:
       }
     """
     tech_uc = tech_uc or ""
-    is_mig, signals = detect_migration(name, tech_uc)
+    is_mig, signals = detect_migration(name, tech_uc, se_comments)
 
     reasons: dict = {}
     matched_cats: list = []
@@ -123,7 +128,7 @@ def map_coco_skills_explained(name: str, tech_uc: str) -> dict:
         kw_list = ", ".join(signals)
         for s in ("migration-guide", "snowconvert-assessment"):
             reasons.setdefault(s, []).append(
-                f"Migration detected &rarr; keyword(s) <b>{h(kw_list)}</b> in UC name / tech field"
+                f"Migration detected &rarr; keyword(s) <b>{h(kw_list)}</b> in UC name / tech field / SE notes"
             )
         joined = " ".join(signals)
         spark_hits = [kw for kw in SPARK_KEYWORDS if kw in joined]

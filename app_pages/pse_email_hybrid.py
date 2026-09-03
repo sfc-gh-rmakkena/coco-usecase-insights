@@ -45,9 +45,12 @@ from utils.queries import (
 from utils.config import get_env
 from utils.cortex_helpers import cortex_complete
 from utils.report import copy_rich_text_button
-from utils.coco_skill_map import (
+from utils.coco_skill_map_v2 import (
     map_coco_skills_explained, theater_label as _theater_label, h as _h,
     MANAGED_PARTNERS, GSI_LIST, GSI_NAMES, NOAM_RSI_NAMES,
+    build_ai_skill_prompt, parse_ai_skill_response, merge_additional_skills,
+    detect_aim_source, apply_aim_override, cap_skills, prioritize_aim_skill,
+    AIM_SKILL_NAME, MAX_SKILLS_PER_USE_CASE,
 )
 
 SNOWFLAKE_BLUE = "#29b5e8"
@@ -153,130 +156,211 @@ def _compute_regional_breakdown(detail_df: pd.DataFrame, target: int):
 
 
 _SANITIZE_MAX_WORKERS = 10  # matches the ThreadPoolExecutor pattern in pse-si-qbr's streamlit_app.py
-_SANITIZE_MAX_TOKENS = 300  # each call answers exactly ONE use case, so this budget is never shared
+_SANITIZE_MAX_TOKENS = 700  # each call answers exactly ONE use case, so this budget is never shared
 
 
-def _sanitize_one(conn, uc_id: str, desc: str):
-    """One Cortex COMPLETE call for exactly one use case. Each call gets its
-    own dedicated max_tokens budget -- no batching, so one long description
-    can never crowd out another item's output the way a shared-budget batch
-    call could. Called concurrently from a ThreadPoolExecutor; touches no
-    shared state (the cache merge happens back on the main thread)."""
-    prompt = (
-        "Summarize the following internal Salesforce use case description in "
-        "1-2 short sentences suitable for sharing externally with a partner. "
-        "Remove dollar amounts, internal names/comments, and anything sensitive. "
-        "Focus only on the business problem or goal. Return only the summary "
-        "text, no preamble, no title, no markdown.\n\nDescription:\n" + desc[:1500]
-    )
+def _sanitize_one(conn, uc_id: str, desc: str, se_comments: str, skills: list):
+    """One Cortex COMPLETE call for exactly one use case, returning a
+    partner-safe description summary, a rationale for why the skill set
+    accelerates THIS engagement, and (validated) additional catalog-grounded
+    skills beyond the deterministic set -- all via the shared prompt/parse
+    helpers in coco_skill_map_v2 so this stays a single call, fanned out
+    concurrently from a ThreadPoolExecutor with its own dedicated max_tokens
+    budget (no batching, no shared budget with any other use case)."""
+    prompt = build_ai_skill_prompt(desc, se_comments, skills)
     try:
-        summary = cortex_complete(conn, "claude-sonnet-4-5", prompt, max_tokens=_SANITIZE_MAX_TOKENS).strip()
+        raw = cortex_complete(conn, "claude-sonnet-4-5", prompt, max_tokens=_SANITIZE_MAX_TOKENS).strip()
+        parsed = parse_ai_skill_response(raw)
     except Exception:
-        summary = ""
-    return uc_id, desc, summary
+        parsed = {"summary": "", "rationale": "", "additional_skills": {}}
+    return (uc_id, desc, se_comments, tuple(skills or []),
+            parsed["summary"], parsed["rationale"], parsed["additional_skills"])
 
 
-def _sanitize_descriptions_batch(conn, id_desc_pairs: list) -> dict:
-    """AI 1-2 sentence, externally-safe summaries for MANY use cases -- one
-    independent Cortex COMPLETE call PER use case (own max_tokens budget,
-    never shared with another item), fanned out CONCURRENTLY via
-    ThreadPoolExecutor so N independent calls don't turn into N sequential
-    round-trips. Cached per raw description text for the session, so
-    regenerating for the same partner needs zero new calls.
+def _sanitize_descriptions_batch(conn, items: list) -> dict:
+    """AI summary + grounded skill rationale + additional catalog-grounded
+    skills for MANY use cases -- one independent Cortex COMPLETE call PER use
+    case (own max_tokens budget, never shared with another item), fanned out
+    CONCURRENTLY via ThreadPoolExecutor so N independent calls don't turn
+    into N sequential round-trips. Cached per (description, se_comments,
+    skills) tuple for the session, so regenerating for the same partner needs
+    zero new calls.
 
-    id_desc_pairs: list of (use_case_id, description) tuples.
-    Returns {use_case_id: sanitized_summary}.
+    items: list of (use_case_id, description, se_comments, skills) tuples.
+    Returns {use_case_id: {"summary": ..., "rationale": ..., "additional_skills": {...}}}.
     """
     cache = st.session_state.setdefault("_pse_hybrid_sanitize_cache", {})
     result = {}
-    to_fetch = []  # (uc_id, desc) still needing an AI call
-    for uc_id, desc in id_desc_pairs:
+    to_fetch = []  # (uc_id, desc, se_comments, skills_key) still needing an AI call
+    for uc_id, desc, se_comments, skills in items:
         desc = (desc or "").strip()
-        if not desc:
-            result[uc_id] = ""
-        elif desc in cache:
-            result[uc_id] = cache[desc]
+        se_comments = (se_comments or "").strip()
+        skills_key = tuple(skills or [])
+        cache_key = (desc, se_comments, skills_key)
+        if not desc and not se_comments:
+            result[uc_id] = {"summary": "", "rationale": "", "additional_skills": {}}
+        elif cache_key in cache:
+            result[uc_id] = cache[cache_key]
         else:
-            to_fetch.append((uc_id, desc))
+            to_fetch.append((uc_id, desc, se_comments, skills_key))
 
     if to_fetch:
         with ThreadPoolExecutor(max_workers=min(_SANITIZE_MAX_WORKERS, len(to_fetch))) as pool:
-            futures = [pool.submit(_sanitize_one, conn, uc_id, desc) for uc_id, desc in to_fetch]
+            futures = [pool.submit(_sanitize_one, conn, uc_id, desc, se_comments, list(skills_key))
+                       for uc_id, desc, se_comments, skills_key in to_fetch]
             for future in as_completed(futures):
                 try:
-                    uc_id, desc, summary = future.result()
+                    uc_id, desc, se_comments, skills_key, summary, rationale, additional_skills = future.result()
                 except Exception:
                     continue
-                cache[desc] = summary
-                result[uc_id] = summary
+                entry = {"summary": summary, "rationale": rationale, "additional_skills": additional_skills}
+                cache[(desc, se_comments, skills_key)] = entry
+                result[uc_id] = entry
 
     # Anything that failed outright still gets a defined value so downstream
     # rendering never KeyErrors.
-    for uc_id, _desc in to_fetch:
-        result.setdefault(uc_id, "")
+    for uc_id, _desc, _se, _skills_key in to_fetch:
+        result.setdefault(uc_id, {"summary": "", "rationale": "", "additional_skills": {}})
 
     return result
 
 
-def _build_gap_table_rows(conn, non_coco_df: pd.DataFrame):
-    """Per-region list of UC row dicts for the gap table, each with skill+reason
-    and a sanitized description, sorted by EACV desc within region."""
-    sorted_df = non_coco_df.sort_values("USE_CASE_EACV", ascending=False)
-    pairs = [
-        (str(row.get("USE_CASE_ID", "")), row.get("USE_CASE_DESCRIPTION", ""))
-        for _, row in sorted_df.iterrows()
-    ]
-    sanitized_map = _sanitize_descriptions_batch(conn, pairs)
+def _group_non_coco_by_region(non_coco_df: pd.DataFrame) -> dict:
+    """Fast (no AI) per-region grouping of non-CoCo UCs with name/account/skills/
+    eacv, sorted by EACV desc within region. Shared base for the narrative's
+    quick NoAM preview (no sanitization needed there) and the full gap table
+    used in Part 2, which adds an AI-sanitized description on top.
 
+    Skill selection additionally scans SE_COMMENTS (not just the structured
+    Technical Use Case field) for migration signals -- SEs often name the
+    actual legacy platform being replaced in free text that never makes it
+    into the taxonomy field.
+
+    If the description/SE_COMMENTS/name mention a Snowflake AIM-supported
+    legacy source, the generic CoCo migration skills are replaced with a
+    single, prioritized 'Snowflake AIM' recommendation (see
+    apply_aim_override), and every use case is capped at
+    MAX_SKILLS_PER_USE_CASE total (see cap_skills) -- relevance over
+    quantity."""
+    sorted_df = non_coco_df.sort_values("USE_CASE_EACV", ascending=False)
     by_region = {}
     for _, row in sorted_df.iterrows():
         label = _theater_label(row.get("THEATER_NAME", ""))
         region = "NoAM" if label == "AMS" else label
         name = row.get("USE_CASE_NAME", "") or ""
         tech = row.get("TECHNICAL_USE_CASE", "") or ""
-        exp = map_coco_skills_explained(name, tech)
+        se_comments = row.get("SE_COMMENTS", "") or ""
+        raw_desc = row.get("USE_CASE_DESCRIPTION", "")
+        exp = map_coco_skills_explained(name, tech, se_comments)
+        aim_source = detect_aim_source(name, tech, raw_desc, se_comments)
+        skills, reasons = apply_aim_override(exp["skills"], exp["reasons"], aim_source)
+        skills, reasons = cap_skills(skills, reasons)
         stage = str(row.get("USE_CASE_STAGE", ""))
         sm = re.match(r"^(\d+)", stage)
         stage_num = int(sm.group(1)) if sm else 99
-        eacv = row.get("USE_CASE_EACV", 0) or 0
-        uc_id = str(row.get("USE_CASE_ID", ""))
         by_region.setdefault(region, []).append({
+            "uc_id": str(row.get("USE_CASE_ID", "")),
             "uc_num": row.get("USE_CASE_NUMBER", row.get("USE_CASE_ID", "")),
             "name": name,
             "account": row.get("ACCOUNT_NAME", ""),
             "stage_label": "POC" if stage_num == 3 else "Implementation",
-            "eacv": eacv,
-            "skills": exp["skills"],
-            "reasons": exp["reasons"],
-            "sanitized_desc": sanitized_map.get(uc_id, ""),
+            "eacv": row.get("USE_CASE_EACV", 0) or 0,
+            "skills": skills,
+            "reasons": reasons,
+            "aim_source": aim_source,
+            "raw_desc": raw_desc,
+            "raw_se_comments": se_comments,
         })
     return by_region
 
 
+def _build_gap_table_rows(conn, non_coco_df: pd.DataFrame):
+    """Per-region list of UC row dicts for the gap table, each with skill+reason,
+    a sanitized description, an AI-grounded skill rationale, and any validated
+    AI-added skills merged additively on top of the deterministic set (informed
+    by both the description and SE_COMMENTS), sorted by EACV desc within region.
+    Snowflake AIM override and the MAX_SKILLS_PER_USE_CASE cap are re-applied
+    after the AI merge, since the AI's additional_skills could otherwise push
+    a use case over the cap or reintroduce a generic migration skill this use
+    case already has a better (AIM) answer for."""
+    by_region = _group_non_coco_by_region(non_coco_df)
+    all_rows = [row for rows in by_region.values() for row in rows]
+    items = [(row["uc_id"], row["raw_desc"], row["raw_se_comments"], row["skills"]) for row in all_rows]
+    sanitized_map = _sanitize_descriptions_batch(conn, items)
+    for row in all_rows:
+        entry = sanitized_map.get(row["uc_id"], {"summary": "", "rationale": "", "additional_skills": {}})
+        row["sanitized_desc"] = entry["summary"]
+        row["skill_rationale"] = entry["rationale"]
+        row["skills"], row["reasons"] = merge_additional_skills(
+            row["skills"], row["reasons"], entry.get("additional_skills", {})
+        )
+        row["skills"], row["reasons"] = apply_aim_override(row["skills"], row["reasons"], row["aim_source"])
+        row["skills"], row["reasons"] = cap_skills(row["skills"], row["reasons"])
+        del row["raw_desc"]
+        del row["raw_se_comments"]
+    return by_region
+
+
 def _build_action_plan(regional_breakdown, gap_rows_by_region, partner):
-    """Numbered action items grounded in the partner's actual regional gaps,
-    mirroring other_pse_email.pdf's APJ Focus / EMEA Push / NoAM Final Mile."""
+    """Numbered action items grounded in the partner's actual regional gaps.
+
+    NoAM is the only region PSE can proactively drive: those items showcase
+    the specific CoCo skills that can accelerate the listed use cases via a
+    working session with the partner's NoAM Delivery Leads. Every other
+    region with a gap (EMEA, APJ, ...) is visibility-only for a NoAM-based
+    PSE, so those gaps are folded into a single FYI note instead of separate
+    actionable items, and flagged to the regional PSE/account teams rather
+    than promising direct follow-up.
+    """
     items = []
     gap_regions = sorted(
         [r for r in regional_breakdown if r["REGION"] != "Global" and r["GAP"] > 0],
         key=lambda r: r["GAP"], reverse=True,
     )
-    label_map = {"NoAM": "NoAM Final Mile", "EMEA": "EMEA Push", "APJ": "APJ Focus"}
-    for i, r in enumerate(gap_regions):
-        top_ucs = sorted(gap_rows_by_region.get(r["REGION"], []),
+    noam_row = next((r for r in gap_regions if r["REGION"] == "NoAM"), None)
+    other_rows = [r for r in gap_regions if r["REGION"] != "NoAM"]
+
+    if noam_row:
+        top_ucs = sorted(gap_rows_by_region.get("NoAM", []),
                           key=lambda x: x["eacv"], reverse=True)[:4]
-        names = ", ".join(u["name"] for u in top_ucs) if top_ucs else "the accounts below"
-        title = label_map.get(r["REGION"], f"{r['REGION']} Push")
-        if i == 0:
-            title += " (priority)"
+        accounts = []
+        for u in top_ucs:
+            acct = u.get("account", "") or u["name"]
+            if acct not in accounts:
+                accounts.append(acct)
+        names = ", ".join(accounts) if accounts else "the accounts below"
+        skills = []
+        for u in top_ucs:
+            for s in u.get("skills", []):
+                if s not in skills:
+                    skills.append(s)
+        skills = prioritize_aim_skill(skills)
+        skills_str = ", ".join(skills[:3]) if skills else "relevant CoCo skills"
+        aim_uc = next((u for u in top_ucs if u.get("aim_source")), None)
+        rationale = (
+            aim_uc["reasons"][AIM_SKILL_NAME][0] if aim_uc and AIM_SKILL_NAME in aim_uc.get("reasons", {})
+            else next((u.get("skill_rationale") for u in top_ucs if u.get("skill_rationale")), "")
+        )
+        body = (
+            f"NoAM is at {noam_row['COCO_PCT']}% with {noam_row['GAP']} UCs needed to reach target. "
+            f"We'd like to set up working sessions with {partner} NoAM Delivery Leads on {names} "
+            f"to showcase {skills_str} and demonstrate how they can accelerate these engagements, "
+            "then collaborate on tagging them for attribution."
+        )
+        if rationale:
+            body += f" {rationale}"
+        items.append({"title": "NoAM Skill Deep-Dive (priority)", "body": body})
+
+    if other_rows:
+        summary = ", ".join(f"{r['REGION']} is at {r['COCO_PCT']}% ({r['GAP']} UCs short)" for r in other_rows)
         items.append({
-            "title": title,
+            "title": "Regional Visibility (FYI only)",
             "body": (
-                f"{r['REGION']} is at {r['COCO_PCT']}% with {r['GAP']} UCs needed to reach target. "
-                f"We need help from {partner} {r['REGION']} Delivery Leads to confirm if and how "
-                f"CoCo is being used in {names}, and to collaborate on tagging these use cases for attribution."
+                f"{summary}. These fall outside what our NoAM-based team can drive directly, so we're "
+                f"flagging them to the regional PSE/account teams to follow up with {partner}'s local delivery leads."
             ),
         })
+
     items.append({
         "title": "Attribution Registration",
         "body": (
@@ -288,7 +372,7 @@ def _build_action_plan(regional_breakdown, gap_rows_by_region, partner):
 
 
 def _build_narrative_draft(conn, partner, recipients, coco_pct, coco_count, total_ucs,
-                            peer_benchmark, regional_breakdown, max_gap_region, report_date):
+                            peer_benchmark, regional_breakdown, max_gap_region, gap_rows_by_region, report_date):
     recipients = recipients.strip() or "team"
     peer_line = ""
     if peer_benchmark:
@@ -307,9 +391,45 @@ def _build_narrative_draft(conn, partner, recipients, coco_pct, coco_count, tota
     if max_gap_region:
         gap_line = (f"The biggest opportunity is in {max_gap_region['REGION']} "
                     f"({max_gap_region['COCO_PCT']}%, {max_gap_region['GAP']} UCs to target).")
+
+    # NoAM is the only region PSE can proactively drive -- always offer a concrete,
+    # skill-led deep dive there regardless of which region has the largest raw gap.
+    noam_row = next((r for r in regional_breakdown if r["REGION"] == "NoAM"), None)
+    noam_line = ""
+    if noam_row and noam_row["GAP"] > 0:
+        top_ucs = sorted(gap_rows_by_region.get("NoAM", []),
+                          key=lambda x: x["eacv"], reverse=True)[:4]
+        accounts = []
+        for u in top_ucs:
+            acct = u.get("account", "") or u["name"]
+            if acct not in accounts:
+                accounts.append(acct)
+        names = ", ".join(accounts) if accounts else "the accounts below"
+        skills = []
+        for u in top_ucs:
+            for s in u.get("skills", []):
+                if s not in skills:
+                    skills.append(s)
+        skills = prioritize_aim_skill(skills)
+        skills_str = ", ".join(skills[:3]) if skills else "relevant CoCo skills"
+        aim_uc = next((u for u in top_ucs if u.get("aim_source")), None)
+        rationale = (
+            aim_uc["reasons"][AIM_SKILL_NAME][0] if aim_uc and AIM_SKILL_NAME in aim_uc.get("reasons", {})
+            else next((u.get("skill_rationale") for u in top_ucs if u.get("skill_rationale")), "")
+        )
+        noam_line = (f"On the NoAM side specifically, we'd like to set up deep-dive sessions with "
+                     f"{partner} NoAM Delivery Leads on {names} to demonstrate {skills_str} and show "
+                     "how they can accelerate these engagements.")
+        if rationale:
+            noam_line += f" {rationale}"
+
     other_gaps = ", ".join(
         f"{r['GAP']} UCs short in {r['REGION']}" for r in regional_breakdown
-        if r["REGION"] != "Global" and r is not max_gap_region and r["GAP"] > 0
+        if r["REGION"] not in ("Global", "NoAM") and r["GAP"] > 0
+    )
+    visibility_line = (
+        f"For visibility, {other_gaps} — these fall outside what our NoAM-based team can drive "
+        "directly, so we're flagging them to the regional PSE/account teams." if other_gaps else ""
     )
     prompt = f"""Draft a short, personal email opening (5 short paragraphs max, plain text,
 no markdown headers) for a Snowflake Partner SE sending a biweekly CoCo adoption
@@ -318,8 +438,7 @@ update to {recipients} at {partner}, dated {report_date}.
 Must include, in this order:
 1. "Hi {recipients}" greeting, then one line saying the biweekly CoCo adoption update for {partner} is attached.
 2. A "Headline:" sentence stating {partner} is at {coco_pct}% CoCo attach rate ({coco_count} of {total_ucs} use cases). {peer_line}
-3. A "Where we need your help:" paragraph. {gap_line} {('Also mention: ' + other_gaps + '.') if other_gaps else ''}
-   Ask {partner} Delivery Leads in the relevant regions to confirm if/how CoCo is being used so these use cases can be tagged for attribution.
+3. A "Where we need your help:" paragraph. {gap_line} {noam_line} {visibility_line}
 4. One line pointing to the full account/request-volume detail in the attached report.
 5. A friendly sign-off offering a quick call to walk through details.
 
@@ -333,7 +452,7 @@ Return only the email body text, no subject line, no signature block."""
             f"Hi {recipients}\n\nPlease find attached our biweekly CoCo adoption update for "
             f"{partner} as of {report_date}.\n\nHeadline: {partner} is at {coco_pct}% CoCo attach "
             f"rate ({coco_count} of {total_ucs} use cases). {peer_line}\n\nWhere we need your help: "
-            f"{gap_line} {('Also mention: ' + other_gaps + '.') if other_gaps else ''}\n\n"
+            f"{gap_line} {noam_line} {visibility_line}\n\n"
             "The full list of accounts and request volumes is in the attached report.\n\n"
             "Happy to set up a quick call to walk through the details."
         )
@@ -799,9 +918,25 @@ if st.button(":material/auto_awesome: Generate Narrative Draft", key="_pse_hybri
     with st.spinner("Computing benchmark and drafting narrative…"):
         peer_benchmark = _compute_peer_benchmark(conn, selected_partner, q_start, q_end, coco_pct)
         regional_breakdown, max_gap_region = _compute_regional_breakdown(detail, target)
+        noam_preview_rows = _group_non_coco_by_region(non_coco)
+        # Ground the NoAM ask with a real skill rationale too -- scoped to just
+        # the top 4 NoAM UCs actually referenced in the letter, so this stays
+        # cheap even though it's a real AI call (not the fast-only path).
+        noam_top = sorted(noam_preview_rows.get("NoAM", []), key=lambda x: x["eacv"], reverse=True)[:4]
+        if noam_top:
+            noam_items = [(r["uc_id"], r["raw_desc"], r["raw_se_comments"], r["skills"]) for r in noam_top]
+            noam_sanitized = _sanitize_descriptions_batch(conn, noam_items)
+            for r in noam_top:
+                entry = noam_sanitized.get(r["uc_id"], {"rationale": "", "additional_skills": {}})
+                r["skill_rationale"] = entry.get("rationale", "")
+                r["skills"], r["reasons"] = merge_additional_skills(
+                    r["skills"], r["reasons"], entry.get("additional_skills", {})
+                )
+                r["skills"], r["reasons"] = apply_aim_override(r["skills"], r["reasons"], r["aim_source"])
+                r["skills"], r["reasons"] = cap_skills(r["skills"], r["reasons"])
         narrative = _build_narrative_draft(
             conn, selected_partner, recipients, coco_pct, coco_count, total_ucs,
-            peer_benchmark, regional_breakdown, max_gap_region,
+            peer_benchmark, regional_breakdown, max_gap_region, noam_preview_rows,
             datetime.now().strftime("%B %d, %Y"),
         )
     st.session_state["_pse_hybrid_narrative_text"] = narrative
