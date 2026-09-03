@@ -159,9 +159,18 @@ _NOAM_RSI = frozenset(
     p for p in _PA.get('--- NOAM RSIs ---', []) if not p.startswith('---')
 ) | {'LTI Mindtree', 'Kipi.ai'}
 
+# GSIs report globally (all theaters); NOAM RSIs report NoAM only.
+# Aliases: EY=Ernst & Young (EY), IBM=IBM Consulting, kipi.ai=Kipi.ai, LTM=LTI Mindtree
+# Same 8-name list used by executive_email.py's GSI_LIST / _GSI_NAMES.
+GSI_LIST = [
+    'Accenture', 'Capgemini Technologies LLC', 'Cognizant Technology Solutions US Corp',
+    'Deloitte Consulting', 'EY', 'Ernst & Young (EY)', 'IBM', 'IBM Consulting',
+]
+GSI_NAMES = frozenset(GSI_LIST)
+NOAM_RSI_NAMES = _NOAM_RSI
+
 MANAGED_PARTNERS = list(
-    {'Accenture', 'Capgemini Technologies LLC', 'Cognizant Technology Solutions US Corp',
-     'Deloitte Consulting', 'EY', 'Ernst & Young (EY)', 'IBM', 'IBM Consulting'}
+    GSI_NAMES
     | _NOAM_RSI
     | frozenset(APJ_RSI_REGION_MAP.keys())
     | frozenset(EMEA_RSI_REGION_MAP.keys())
