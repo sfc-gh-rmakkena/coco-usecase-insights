@@ -16,7 +16,7 @@ from utils.queries import (
     get_partner_velocity_data, get_account_coco_credits,
 )
 from utils.cortex_helpers import cortex_complete
-from utils import APJ_RSI_REGION_MAP, EMEA_RSI_REGION_MAP, LATAM_RSI_REGION_MAP, PARTNER_ALIASES as _PA_EMAIL, apply_coco_final
+from utils import APJ_RSI_REGION_MAP, EMEA_RSI_REGION_MAP, LATAM_RSI_REGION_MAP, PARTNER_ALIASES as _PA_EMAIL, apply_coco_final, new_coco_wow, last_two_iso_weeks
 
 # Restricted page. streamlit_app.py hides the nav entry for anyone not on the list;
 # this second check stops a direct page URL from rendering the report anyway. Note
@@ -1269,10 +1269,28 @@ if len(managed_stage_data) > 0 and len(managed_bulk_conf) > 0:
     stage_merged['COCO_UCS'] = stage_merged['COCO_UCS'].astype(int)
     stage_merged['COCO_PCT'] = (stage_merged['COCO_UCS'] * 100.0 / stage_merged['UC_COUNT'].replace(0, float('nan'))).round(0).fillna(0).astype(int)
 
+    # Weekly change per stage: newly created CoCo UCs, last completed ISO week vs the
+    # week before. The weekly snapshot table carries no stage granularity, so the
+    # new-UC basis is the only WoW available at this grain.
+    _stage_new_wow = new_coco_wow(stage_coco, group_col='STAGE_GROUP')
+    _stage_new_lookup = (
+        _stage_new_wow['BY_PARTNER'].set_index('STAGE_GROUP').to_dict('index')
+        if len(_stage_new_wow['BY_PARTNER']) > 0 else {}
+    )
+
     for _, sg in stage_merged.iterrows():
         eacv = sg.get('TOTAL_EACV', 0) or 0
         coco_eacv = sg.get('COCO_EACV', 0) or 0
-        stage_ctx += f"  {sg['STAGE_GROUP']}: {int(sg['UC_COUNT'])} UCs, {int(sg['COCO_UCS'])} CoCo ({int(sg['COCO_PCT'])}%), Total EACV ${eacv/1_000_000:.1f}M, CoCo EACV ${coco_eacv/1_000_000:.1f}M\n"
+        _nw = _stage_new_lookup.get(sg['STAGE_GROUP'], {})
+        _nl = int(_nw.get('LAST_WK_NEW_COCO', 0) or 0)
+        _np = int(_nw.get('PRIOR_WK_NEW_COCO', 0) or 0)
+        _npct = _nw.get('NEW_COCO_WOW_PCT')
+        _npct_str = f"{float(_npct):+.1f}%" if _npct is not None and pd.notna(_npct) else "n/a"
+        stage_ctx += (
+            f"  {sg['STAGE_GROUP']}: {int(sg['UC_COUNT'])} UCs, {int(sg['COCO_UCS'])} CoCo ({int(sg['COCO_PCT'])}%), "
+            f"Total EACV ${eacv/1_000_000:.1f}M, CoCo EACV ${coco_eacv/1_000_000:.1f}M, "
+            f"New CoCo UCs LW={_nl} PW={_np}, New CoCo WoW={_npct_str}, New CoCo Δ={_nl - _np:+d}\n"
+        )
 else:
     for _, sg in managed_stage_data.iterrows():
         eacv = sg.get('TOTAL_EACV', 0) or 0
@@ -1447,11 +1465,56 @@ def _okr_row(grp_df, label, target_pct, group_tag=None):
     _pm['PCT'] = _pm['C'] / _pm['T'].replace(0, float('nan'))
     meeting = int((_pm['PCT'] >= target_pct / 100.0).sum())
     total_partners = in_scope if in_scope else len(_pm)
+
+    # Weekly change, two independent measures:
+    #  (1) newly created CoCo UCs this group booked last week vs the week before
+    #  (2) cumulative movement in the group's CoCo count / adoption % from the
+    #      weekly snapshot, summed over the group's partners
+    _gnw = new_coco_wow(grp_df, group_col=None)
+    _new_l, _new_p = _gnw['LAST_WK_NEW_COCO'], _gnw['PRIOR_WK_NEW_COCO']
+    _new_pct = f"{_gnw['WOW_PCT']:+.1f}%" if _gnw['WOW_PCT'] is not None else "n/a"
+
+    _cum = _group_cumulative_wow(_pm['PARTNER_NAME'].tolist())
+
     return (
         f"  {label}: {total_partners} total partners in scope, {total} total UCs, {coco} CoCo UCs, {pct}% CoCo adoption, "
         f"{meeting}/{total_partners} partners meeting goal ({target_pct}%), "
-        f"{total - coco} non-CoCo UCs still open as convertible pipeline\n"
+        f"{total - coco} non-CoCo UCs still open as convertible pipeline, "
+        f"New CoCo UCs LW={_new_l} PW={_new_p}, New CoCo WoW={_new_pct}, New CoCo Δ={_new_l - _new_p:+d}, "
+        f"Cumulative WoW Δ UCs={_cum['DELTA_UCS']}, Cumulative WoW Δpp={_cum['DELTA_PP']}\n"
     )
+
+
+def _group_cumulative_wow(partner_names):
+    """Group-level cumulative CoCo movement vs last week, from the weekly snapshot.
+
+    Sums the group's partner rows rather than reading a group row, because the
+    snapshot is stored per partner. Δpp uses each side's own denominator
+    (prior TOTAL_UCS, not the current one), so a group that grew its total UC base
+    does not show a phantom adoption gain.
+
+    Returns display-ready strings; "n/a" whenever fewer than two weeks of snapshot
+    data exist for these partners.
+    """
+    _na = {'DELTA_UCS': 'n/a', 'DELTA_PP': 'n/a'}
+    if len(adoption_wow_data) == 0 or not partner_names:
+        return _na
+    _rows = adoption_wow_data[
+        adoption_wow_data['PARTNER_NAME'].isin(partner_names)
+        & adoption_wow_data['WOW_COCO_UCS'].notna()
+    ]
+    if len(_rows) == 0:
+        return _na
+    _coco_now  = pd.to_numeric(_rows['COCO_UCS'],      errors='coerce').fillna(0).sum()
+    _total_now = pd.to_numeric(_rows['TOTAL_UCS'],     errors='coerce').fillna(0).sum()
+    _d_coco    = pd.to_numeric(_rows['WOW_COCO_UCS'],  errors='coerce').fillna(0).sum()
+    _d_total   = (pd.to_numeric(_rows['WOW_TOTAL_UCS'], errors='coerce').fillna(0).sum()
+                  if 'WOW_TOTAL_UCS' in _rows.columns else 0)
+    _coco_prev, _total_prev = _coco_now - _d_coco, _total_now - _d_total
+    if _total_now <= 0 or _total_prev <= 0:
+        return {'DELTA_UCS': f"{int(_d_coco):+d}", 'DELTA_PP': 'n/a'}
+    _pp = (_coco_now / _total_now - _coco_prev / _total_prev) * 100.0
+    return {'DELTA_UCS': f"{int(_d_coco):+d}", 'DELTA_PP': f"{_pp:+.1f}pp"}
 
 if len(managed_bulk_conf) > 0 and '_GROUP' in managed_bulk_conf.columns:
     regional_okr_ctx += _okr_row(managed_bulk_conf[managed_bulk_conf['_GROUP'] == 'GSI'],       'GSI (Global, all regions)', 75, 'GSI')
@@ -1679,7 +1742,8 @@ MANAGED PARTNER COCO COVERAGE (Q3, by region):
   Overall: {managed_total_ucs} total UCs, {managed_coco_ucs} CoCo, {managed_coco_pct}%
 {regional_coco_ctx}
 
-PIPELINE (Managed Partners, Q3, all UCs):
+PIPELINE (Managed Partners, Q3, all UCs — LW=last completed Mon-Sun week, PW=prior week;
+"New CoCo" = CoCo UCs CREATED in that week, the only WoW available at stage grain):
 {stage_ctx}
 
 PIPELINE WoW (all CoCo partners, use case count change vs prior week):
@@ -1713,7 +1777,10 @@ OKR PROGRESS — 6 GSIs WoW (CoCo engagement, all regions combined — LW=last w
 OKR PROGRESS — NoAM SIs WoW (CoCo engagement — LW=last week, PW=prior week):
 {noam_si_wow_ctx}
 
-OKR PROGRESS — REGIONAL BREAKDOWN (5 groups; GSI/NOAM goal=75%, APJ/EMEA/LATAM goal=50%):
+OKR PROGRESS — REGIONAL BREAKDOWN (5 groups; GSI/NOAM goal=75%, APJ/EMEA/LATAM goal=50%.
+Two distinct weekly measures per row: "New CoCo" = CoCo UCs CREATED last completed week vs
+prior week; "Cumulative WoW" = movement in the group's total CoCo count/adoption % from the
+weekly snapshot. They answer different questions and will not match):
 {regional_okr_ctx}
 
 QUARTER PROGRESS TREND (weeks left, and whether the count of CoCo use cases is still climbing):
@@ -2083,17 +2150,25 @@ Follow this EXACT structure with 9 sections:
 - Do NOT use RECENT ACTIVITY data or COMMENT HIGHLIGHTS for this section
 
 ## OKR PROGRESS — REGIONAL BREAKDOWN
-| Group | Scope | Total Partners | Total UCs | CoCo UCs | CoCo % | Partners Meeting Goal% |
+| Group | Scope | Total Partners | Total UCs | CoCo UCs | CoCo % | New CoCo UCs (LW) | New CoCo WoW% | WoW Δ UCs | WoW Δpp | Partners Meeting Goal% |
 - Show 5 rows: GSI (Global), NOAM RSI, APJ RSI, EMEA RSI, LATAM RSI
-- Use "OKR PROGRESS — REGIONAL BREAKDOWN" data from context (each row has group name, total partners in scope, total UCs, CoCo UCs, CoCo %, partners meeting goal)
+- Use "OKR PROGRESS — REGIONAL BREAKDOWN" data from context (each row has group name, total partners in scope, total UCs, CoCo UCs, CoCo %, partners meeting goal, plus the weekly change fields)
 - Total Partners = total partners in scope for that group (irrelevant of CoCo adoption)
 - Goal% is 75% for GSI and NOAM RSI, 50% for APJ RSI and EMEA RSI — reflect the correct target per row
-- After table: {_NARRATIVE_INSTRUCTIONS.get(narrative_group, _NARRATIVE_INSTRUCTIONS["Default"])}
+- "New CoCo UCs (LW)" = the row's `New CoCo UCs LW=` value; "New CoCo WoW%" = its `New CoCo WoW=` value
+- "WoW Δ UCs" = the row's `Cumulative WoW Δ UCs=` value; "WoW Δpp" = its `Cumulative WoW Δpp=` value
+- These are two DIFFERENT measures — do not average, reconcile, or treat a mismatch as an error
+- Write "-" wherever the context says n/a. Never compute or infer any of these four values yourself.
+- Immediately after the table, one sentence naming the group with the strongest weekly gain and the group that went backwards or flat, citing the actual numbers. If every group is n/a, say the weekly comparison is not yet available instead.
+- After that sentence: {_NARRATIVE_INSTRUCTIONS.get(narrative_group, _NARRATIVE_INSTRUCTIONS["Default"])}
 - Use the matching insight data block from context (labelled with the narrative name) to ground all figures in this narrative.
 
 ## MANAGED PARTNER PIPELINE OVERVIEW
-| Stage | Total UCs | CoCo UCs | CoCo % | Total EACV | CoCo EACV |
+| Stage | Total UCs | CoCo UCs | CoCo % | New CoCo UCs (LW) | New CoCo WoW% | Total EACV | CoCo EACV |
 - Use MANAGED PARTNERS pipeline data (stage_ctx) for all columns
+- "New CoCo UCs (LW)" = the stage's `New CoCo UCs LW=` value; "New CoCo WoW%" = its `New CoCo WoW=` value. Write "-" when the context says n/a.
+- Only the new-UC WoW exists at stage level — do NOT put cumulative WoW figures in this table
+- After the table, one sentence naming the stage where new CoCo attachment is concentrating and the stage that is drying up, citing the actual LW and PW counts.
 
 ## PARTNER SCORECARD — GSI (Global, all regions, target 75%)
 | Partner | Total UCs | CoCo UCs | CoCo% | WoW Δ% | WoW Δ UCs | EACV | AI | DE | Analytics | Q3 Tokens | Q3 Credits | Last 7d Credits | 7D Credits WoW% |

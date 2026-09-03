@@ -319,12 +319,13 @@ def last_two_iso_weeks():
     return last_start, last_start + _td(days=6), prior_start, prior_start + _td(days=6)
 
 
-def new_coco_wow(df, coco_col="IS_COCO_FINAL", created_col="CREATED_DATE"):
+def new_coco_wow(df, coco_col="IS_COCO_FINAL", created_col="CREATED_DATE", group_col="PARTNER_NAME"):
     """Week-over-week movement in NEWLY CREATED CoCo use cases.
 
     Compares the last completed ISO week against the one before it, counting use
-    cases by CREATED_DATE. Returns a dict of overall figures plus a per-partner
-    frame. WOW_PCT is None when the prior week was zero (undefined, not infinite).
+    cases by CREATED_DATE. Returns a dict of overall figures plus a per-group frame
+    (keyed by group_col — PARTNER_NAME, _GROUP, STAGE_GROUP, ...). WOW_PCT is None
+    when the prior week was zero (undefined, not infinite).
 
     Caveat worth surfacing in the UI: the source population is stages 3-7 only, so a
     use case appears here the week it was created ONLY if it had already advanced to
@@ -333,13 +334,14 @@ def new_coco_wow(df, coco_col="IS_COCO_FINAL", created_col="CREATED_DATE"):
     """
     import pandas as pd
 
+    _gc = group_col or "PARTNER_NAME"
     empty = {
         "LAST_WK_NEW_COCO": 0, "PRIOR_WK_NEW_COCO": 0,
         "LAST_WK_NEW_TOTAL": 0, "PRIOR_WK_NEW_TOTAL": 0,
         "WOW_PCT": None, "WOW_DELTA": 0,
         "LAST_WK_START": None, "PRIOR_WK_START": None,
         "BY_PARTNER": pd.DataFrame(columns=[
-            "PARTNER_NAME", "LAST_WK_NEW_COCO", "PRIOR_WK_NEW_COCO",
+            _gc, "LAST_WK_NEW_COCO", "PRIOR_WK_NEW_COCO",
             "NEW_COCO_WOW_PCT", "NEW_COCO_WOW_DELTA"]),
     }
     if df is None or len(df) == 0 or created_col not in df.columns or coco_col not in df.columns:
@@ -360,13 +362,15 @@ def new_coco_wow(df, coco_col="IS_COCO_FINAL", created_col="CREATED_DATE"):
     wow_pct = round((last_coco - prior_coco) * 100.0 / prior_coco, 1) if prior_coco > 0 else None
 
     by_partner = pd.DataFrame()
-    if "PARTNER_NAME" in df.columns:
+    if _gc in df.columns:
         _w = pd.DataFrame({
-            "PARTNER_NAME": df["PARTNER_NAME"],
+            _gc: df[_gc],
             "LAST_WK_NEW_COCO": (in_last & is_coco).astype(int),
             "PRIOR_WK_NEW_COCO": (in_prior & is_coco).astype(int),
+            "LAST_WK_NEW_TOTAL": in_last.astype(int),
+            "PRIOR_WK_NEW_TOTAL": in_prior.astype(int),
         })
-        by_partner = _w.groupby("PARTNER_NAME", as_index=False).sum()
+        by_partner = _w.groupby(_gc, as_index=False).sum()
         by_partner["NEW_COCO_WOW_DELTA"] = (
             by_partner["LAST_WK_NEW_COCO"] - by_partner["PRIOR_WK_NEW_COCO"])
         by_partner["NEW_COCO_WOW_PCT"] = (

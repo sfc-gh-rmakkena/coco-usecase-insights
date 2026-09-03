@@ -2331,6 +2331,7 @@ def get_coco_final_wow(_conn, partners=None, gsi_global=False, gsi_names=frozens
         cur.TOTAL_UCS, cur.COCO_UCS, cur.COCO_PCT,
         cur.TOTAL_EACV, cur.COCO_EACV,
         cur.COCO_UCS  - prev.COCO_UCS            AS WOW_COCO_UCS,
+        cur.TOTAL_UCS - prev.TOTAL_UCS           AS WOW_TOTAL_UCS,
         ROUND(cur.COCO_PCT - prev.COCO_PCT, 1)   AS WOW_COCO_PCT,
         cur.COCO_EACV - prev.COCO_EACV           AS WOW_COCO_EACV
     FROM ranked cur
