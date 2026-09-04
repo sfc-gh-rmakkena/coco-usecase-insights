@@ -1,11 +1,9 @@
 import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
-from utils.queries import get_adoption_overview, get_adoption_by_partner, get_adoption_by_stage, get_adoption_by_region, get_by_technical_type, get_by_account_gvp, get_bulk_confidence_scores, get_partner_coco_coverage, get_all_uc_counts, get_all_uc_counts_by_theatre, get_partner_metrics_by_theatre, get_all_uc_counts_by_region, get_partner_metrics_by_region, get_apj_rsi_adoption, get_emea_rsi_adoption, get_latam_rsi_adoption, get_gsi_adoption, get_noam_rsi_adoption
-from utils import resolve_partner_filter, resolve_region_theaters, filter_out_partner_own_accounts, apply_coco_final, new_coco_wow, NEW_COCO_WOW_HELP
-from utils import (merge_new_coco, new_coco_col_config, new_coco_by_group,
-                   NEW_COCO_WK_COL, NEW_COCO_DELTA_COL,
-                   NEW_COCO_WK_LABEL, NEW_COCO_DELTA_LABEL)
+from utils.queries import get_adoption_overview, get_adoption_by_partner, get_adoption_by_stage, get_adoption_by_region, get_by_technical_type, get_by_account_gvp, get_bulk_confidence_scores, get_partner_coco_coverage, get_all_uc_counts, get_all_uc_counts_by_theatre, get_partner_metrics_by_theatre, get_all_uc_counts_by_region, get_partner_metrics_by_region, get_apj_rsi_adoption, get_emea_rsi_adoption, get_latam_rsi_adoption, get_gsi_adoption, get_noam_rsi_adoption, get_coco_final_wow
+from utils import resolve_partner_filter, resolve_region_theaters, filter_out_partner_own_accounts, apply_coco_final
+from utils.config import get_schema
 from utils import APJ_RSI_REGION_MAP, EMEA_RSI_REGION_MAP, LATAM_RSI_REGION_MAP
 from utils import PARTNER_ALIASES as _PA_EARLY
 
@@ -23,6 +21,87 @@ _APJ_RSI_PARTNER_NAMES  = set(APJ_RSI_REGION_MAP.keys())
 _EMEA_RSI_PARTNER_NAMES = set(EMEA_RSI_REGION_MAP.keys())
 _LATAM_RSI_PARTNER_NAMES = set(LATAM_RSI_REGION_MAP.keys())
 _ALL_MANAGED_PARTNERS   = _GSI_PARTNER_NAMES | _NOAM_RSI_PARTNER_NAMES | _APJ_RSI_PARTNER_NAMES | _EMEA_RSI_PARTNER_NAMES | _LATAM_RSI_PARTNER_NAMES
+
+
+def _sql_list(values):
+    return "','".join(str(v).replace("'", "''") for v in sorted(set(values)))
+
+
+@st.cache_data(ttl=30 * 60)
+def _get_gsi_noam_snapshot_trend(_conn, gsi_names, noam_names):
+    """Weekly GSI/NOAM adoption trend from the Q3 snapshot table.
+
+    This is the same snapshot basis as the WoW Δ UCs columns: net movement in the
+    Q3-scoped stock of use cases, not CREATED_DATE. GSI is global; NOAM RSI is
+    restricted to REGION='NoAM'.
+    """
+    snapshot_table = f"{get_schema()}.IS_COCO_FINAL_WEEKLY_SNAPSHOT_Q3"
+    gsi_sql = _sql_list(gsi_names)
+    noam_sql = _sql_list(noam_names)
+    return _conn.query(f"""
+        WITH deduped AS (
+            SELECT WEEK_START, PARTNER_NAME, REGION, TOTAL_UCS, COCO_UCS
+            FROM {snapshot_table}
+            WHERE (
+                (PARTNER_NAME IN ('{gsi_sql}')  AND REGION = 'Global')
+                OR (PARTNER_NAME IN ('{noam_sql}') AND REGION = 'NoAM')
+            )
+            QUALIFY ROW_NUMBER() OVER (
+                PARTITION BY WEEK_START, PARTNER_NAME, REGION
+                ORDER BY SAVED_AT
+            ) = 1
+        ), grouped AS (
+            SELECT WEEK_START,
+                   CASE WHEN REGION = 'Global' THEN 'GSI' ELSE 'NOAM RSI' END AS GROUP_NAME,
+                   SUM(TOTAL_UCS) AS TOTAL_UCS,
+                   SUM(COCO_UCS) AS COCO_UCS
+            FROM deduped
+            GROUP BY 1, 2
+        )
+        SELECT WEEK_START, GROUP_NAME, TOTAL_UCS, COCO_UCS,
+               ROUND(COCO_UCS * 100.0 / NULLIF(TOTAL_UCS, 0), 1) AS COCO_PCT
+        FROM grouped
+        ORDER BY WEEK_START, GROUP_NAME
+    """)
+
+
+def _forecast_snapshot_group(rows, q_end, target_pct=75.0):
+    """Linear quarter-end forecast from recent weekly snapshot deltas."""
+    if rows is None or len(rows) == 0:
+        return None
+    work = rows.sort_values('WEEK_START').copy()
+    for c in ['TOTAL_UCS', 'COCO_UCS', 'COCO_PCT']:
+        work[c] = pd.to_numeric(work[c], errors='coerce').fillna(0)
+    latest = work.iloc[-1]
+    deltas = work[['TOTAL_UCS', 'COCO_UCS']].diff().tail(3)
+    avg_total_delta = float(deltas['TOTAL_UCS'].mean() or 0)
+    avg_coco_delta = float(deltas['COCO_UCS'].mean() or 0)
+    latest_week = pd.to_datetime(latest['WEEK_START']).date()
+    quarter_end = pd.to_datetime(q_end).date()
+    weeks_left = max(0, -((latest_week - quarter_end).days // 7))
+    projected_total = max(0, float(latest['TOTAL_UCS']) + avg_total_delta * weeks_left)
+    projected_coco = min(projected_total, max(0, float(latest['COCO_UCS']) + avg_coco_delta * weeks_left))
+    projected_pct = round(projected_coco * 100.0 / projected_total, 1) if projected_total else 0.0
+    required_total = projected_total
+    required_coco_delta = max(0.0, (target_pct / 100.0 * required_total) - float(latest['COCO_UCS']))
+    required_weekly = required_coco_delta / weeks_left if weeks_left > 0 else required_coco_delta
+    if projected_pct >= target_pct:
+        status = 'On track'
+    elif avg_coco_delta <= 0:
+        status = 'Unlikely at current pace'
+    else:
+        status = 'Needs acceleration'
+    return {
+        'current_pct': float(latest['COCO_PCT']),
+        'current_coco': int(latest['COCO_UCS']),
+        'current_total': int(latest['TOTAL_UCS']),
+        'avg_coco_delta': round(avg_coco_delta, 1),
+        'avg_total_delta': round(avg_total_delta, 1),
+        'projected_pct': projected_pct,
+        'required_weekly': round(required_weekly, 1),
+        'weeks_left': int(weeks_left),
+        'status': status,
+    }
 
 # NoAM theater list — needed by managed-bc builder and region breakdown
 _NOAM_THEATERS = ('AMSExpansion', 'USMajors', 'AMSAcquisition', 'USPubSec')
@@ -271,6 +350,38 @@ else:
 _go_lives_pct      = round(_all_deployed_partner * 100.0 / _partner_total, 1) if _partner_total > 0 else 0.0
 _coco_go_lives_pct = round(_go_live_coco * 100.0 / coco_count, 1) if coco_count > 0 else 0.0
 
+_snapshot_wow_lkp = {}
+_snapshot_overall = {}
+try:
+    _snapshot_wow = get_coco_final_wow(
+        conn,
+        partners=tuple(sorted(_ALL_MANAGED_PARTNERS)),
+        gsi_global=True,
+        gsi_names=frozenset(_GSI_PARTNER_NAMES),
+    )
+    if len(_snapshot_wow) > 0:
+        _snapshot_overall_rows = _snapshot_wow[_snapshot_wow['PARTNER_NAME'].isna()]
+        if len(_snapshot_overall_rows) > 0:
+            _snapshot_overall = _snapshot_overall_rows.iloc[0].to_dict()
+        _snapshot_wow_lkp = {
+            str(r['PARTNER_NAME']): r.to_dict()
+            for _, r in _snapshot_wow[_snapshot_wow['PARTNER_NAME'].notna()].iterrows()
+        }
+except Exception:
+    _snapshot_wow_lkp = {}
+    _snapshot_overall = {}
+
+
+def _apply_snapshot_wow(display_df, partner_col='PARTNER_LABEL'):
+    out = display_df.copy()
+    out['WOW_COCO_UCS'] = out[partner_col].apply(
+        lambda p: _snapshot_wow_lkp.get(str(p), {}).get('WOW_COCO_UCS') if str(p) != 'TOTAL' else None)
+    out['WOW_COCO_PCT'] = out[partner_col].apply(
+        lambda p: _snapshot_wow_lkp.get(str(p), {}).get('WOW_COCO_PCT') if str(p) != 'TOTAL' else None)
+    out['WOW_COCO_UCS'] = pd.to_numeric(out['WOW_COCO_UCS'], errors='coerce')
+    out['WOW_COCO_PCT'] = pd.to_numeric(out['WOW_COCO_PCT'], errors='coerce')
+    return out
+
 st.markdown(
     f"""<div class="coco-sentiment-box">
   <div class="coco-sentiment-title">Overall Company Sentiment</div>
@@ -305,28 +416,74 @@ c6.metric("CoCo Partner Go-Lives",     f"{_coco_go_lives_pct:.1f}%",
           f"{_go_live_coco} of {coco_count} CoCo UCs",
           help="IS_COCO_FINAL Stage 7 as % of total IS_COCO_FINAL UCs — deployment rate within CoCo")
 
-# WoW movement in newly created CoCo use cases — last completed Mon-Sun week vs the
-# week before, counted by CREATED_DATE on the managed-partner slice.
-_new_wow = new_coco_wow(_bc_managed if len(_bc_managed) > 0 else bulk_conf)
-if _new_wow['LAST_WK_START'] is not None:
+if _snapshot_overall:
     n1, n2, n3 = st.columns(3)
-    _npct = _new_wow['WOW_PCT']
-    n1.metric("New CoCo UCs (last full week)", f"{_new_wow['LAST_WK_NEW_COCO']:,}",
-              f"{_npct:+.1f}% WoW" if _npct is not None else "WoW n/a (prior week 0)",
-              help=NEW_COCO_WOW_HELP)
-    n2.metric("New CoCo UCs (prior week)", f"{_new_wow['PRIOR_WK_NEW_COCO']:,}",
-              f"{_new_wow['WOW_DELTA']:+d} UCs")
-    _nlt, _npt = _new_wow['LAST_WK_NEW_TOTAL'], _new_wow['PRIOR_WK_NEW_TOTAL']
-    n3.metric("CoCo share of new UCs",
-              f"{_new_wow['LAST_WK_NEW_COCO']*100.0/_nlt:.0f}%" if _nlt else "n/a",
-              f"{_new_wow['PRIOR_WK_NEW_COCO']*100.0/_npt:.0f}% prior week" if _npt else None,
-              help="CoCo-attached share of all newly created partner use cases in the week")
+    n1.metric("WoW Δ CoCo UCs", f"{int(_snapshot_overall['WOW_COCO_UCS']):+d}",
+              help="Net change in Q3-scoped CoCo use cases vs the prior weekly snapshot. This matches the Executive Email and partner scorecards.")
+    n2.metric("WoW Δ Total UCs", f"{int(_snapshot_overall['WOW_TOTAL_UCS']):+d}",
+              help="Net change in all Q3-scoped partner use cases vs the prior weekly snapshot.")
+    n3.metric("WoW Δ CoCo %", f"{float(_snapshot_overall['WOW_COCO_PCT']):+.1f}pp",
+              help="Percentage-point change in Q3-scoped CoCo adoption vs the prior weekly snapshot.")
     st.caption(
-        f"New-use-case weeks compared: {_new_wow['LAST_WK_START']} vs {_new_wow['PRIOR_WK_START']} "
-        "(completed Mon-Sun weeks, counted by CREATED_DATE). Scoped to the managed-partner slice, "
-        "so counts can differ from the OKR page. Counts new use cases already at Stage 3+; weekly "
-        "volumes are small, so read the counts alongside the percentage."
+        f"Weekly snapshot comparison: {_snapshot_overall['WEEK_START']} vs {_snapshot_overall['PREV_WEEK']}. "
+        "These are snapshot deltas, not CREATED_DATE counts."
     )
+
+st.divider()
+st.subheader("Weekly Growth & 75% Forecast")
+_trend = _get_gsi_noam_snapshot_trend(conn, tuple(_GSI_PARTNER_NAMES), tuple(_NOAM_RSI_PARTNER_NAMES))
+if len(_trend) > 0:
+    _trend['WEEK_START'] = pd.to_datetime(_trend['WEEK_START'])
+    _trend['COCO_PCT'] = pd.to_numeric(_trend['COCO_PCT'], errors='coerce').fillna(0)
+    _trend['COCO_UCS'] = pd.to_numeric(_trend['COCO_UCS'], errors='coerce').fillna(0).astype(int)
+    _trend['TOTAL_UCS'] = pd.to_numeric(_trend['TOTAL_UCS'], errors='coerce').fillna(0).astype(int)
+
+    _fig = go.Figure()
+    for _group, _group_rows in _trend.groupby('GROUP_NAME'):
+        _fig.add_trace(go.Scatter(
+            x=_group_rows['WEEK_START'],
+            y=_group_rows['COCO_PCT'],
+            mode='lines+markers',
+            name=f'{_group} CoCo %',
+            customdata=_group_rows[['COCO_UCS', 'TOTAL_UCS']],
+            hovertemplate='%{x|%Y-%m-%d}<br>%{y:.1f}% CoCo<br>%{customdata[0]} / %{customdata[1]} UCs<extra></extra>',
+        ))
+    _fig.add_hline(
+        y=75,
+        line_dash='dash',
+        line_color='#d62728',
+        annotation_text='75% target',
+        annotation_position='top left',
+    )
+    _fig.update_layout(
+        height=360,
+        yaxis_title='CoCo Adoption %',
+        xaxis_title='',
+        yaxis=dict(range=[0, 100], ticksuffix='%'),
+        legend=dict(orientation='h', y=1.12),
+        margin=dict(l=20, r=20, t=30, b=20),
+    )
+    st.plotly_chart(_fig, use_container_width=True)
+
+    _card_cols = st.columns(2)
+    for _idx, _group in enumerate(['GSI', 'NOAM RSI']):
+        _fc = _forecast_snapshot_group(_trend[_trend['GROUP_NAME'] == _group], end_date, target_pct=75.0)
+        if not _fc:
+            continue
+        with _card_cols[_idx]:
+            st.metric(
+                f'{_group} projected quarter-end',
+                f"{_fc['projected_pct']:.1f}%",
+                f"current {_fc['current_pct']:.1f}% ({_fc['current_coco']}/{_fc['current_total']} UCs)",
+            )
+            st.caption(
+                f"{_fc['status']} | Last-3-week avg: +{_fc['avg_coco_delta']:.1f} CoCo UCs/wk, "
+                f"+{_fc['avg_total_delta']:.1f} total UCs/wk | Need +{_fc['required_weekly']:.1f} CoCo UCs/wk "
+                f"over {_fc['weeks_left']} weeks to reach 75%."
+            )
+    st.caption("Forecast uses weekly snapshot deltas, not CREATED_DATE. It projects both CoCo UCs and total UCs using the last 3 weekly changes.")
+else:
+    st.info("Weekly snapshot trend is not available yet.")
 
 
 st.caption(
@@ -418,7 +575,6 @@ def _build_partner_theatre_from_bulk(bc):
                           grp['TOTAL_PARTNER_UCS'].replace(0, float('nan'))).round(1).fillna(0)
     grp['COCO_GO_LIVE_PCT'] = (grp['DEPLOYED_COCO'] * 100.0 /
                                 grp['COCO_UCS'].replace(0, float('nan'))).round(1).fillna(0)
-    grp = merge_new_coco(grp, _bc, 'THEATER_NAME')
     # Token aggregation: IS_COCO_FINAL accounts only, deduped per (theatre, account)
     _tok_cols = ['LAST7_TOKENS', 'PRIOR7_TOKENS']
     if all(c in _bc.columns for c in _tok_cols) and 'ACCOUNT_NAME_UPPER' in _bc.columns:
@@ -464,7 +620,6 @@ def _build_partner_region_from_bulk(bc):
                           grp['TOTAL_PARTNER_UCS'].replace(0, float('nan'))).round(1).fillna(0)
     grp['COCO_GO_LIVE_PCT'] = (grp['DEPLOYED_COCO'] * 100.0 /
                                 grp['COCO_UCS'].replace(0, float('nan'))).round(1).fillna(0)
-    grp = merge_new_coco(grp, _bc, 'REGION')
     # Token aggregation: IS_COCO_FINAL accounts only, deduped per (region, account)
     _tok_cols = ['LAST7_TOKENS', 'PRIOR7_TOKENS']
     if all(c in _bc.columns for c in _tok_cols) and 'ACCOUNT_NAME_UPPER' in _bc.columns:
@@ -503,11 +658,7 @@ with st.expander(":material/table: Breakdown by Theatre", expanded=True):
     if len(_theatre_mdm) > 0:
         _t = _theatre_mdm.set_index("THEATER_NAME")[["ALL_USE_CASES", "ALL_GO_LIVES"]]
         if len(_theatre_partner) > 0:
-            _tp_cols = ["TOTAL_PARTNER_UCS", "COCO_UCS"]
-            _t_has_new = all(c in _theatre_partner.columns for c in (NEW_COCO_WK_COL, NEW_COCO_DELTA_COL))
-            if _t_has_new:
-                _tp_cols += [NEW_COCO_WK_COL, NEW_COCO_DELTA_COL]
-            _tp_cols += ["DEPLOYED_ALL", "GO_LIVE_PCT", "DEPLOYED_COCO", "COCO_GO_LIVE_PCT"]
+            _tp_cols = ["TOTAL_PARTNER_UCS", "COCO_UCS", "DEPLOYED_ALL", "GO_LIVE_PCT", "DEPLOYED_COCO", "COCO_GO_LIVE_PCT"]
             _t_has_tokens = all(c in _theatre_partner.columns for c in ['LAST7_TOKENS', 'TOKENS_WOW_PCT'])
             if _t_has_tokens:
                 _tp_cols += ['LAST7_TOKENS', 'TOKENS_WOW_PCT']
@@ -522,12 +673,9 @@ with st.expander(":material/table: Breakdown by Theatre", expanded=True):
             _theatre_combined["DEPLOYED_COCO"] = 0
             _theatre_combined["COCO_GO_LIVE_PCT"] = 0.0
             _t_has_tokens = False
-            _t_has_new = False
-        _theatre_combined.columns = (["Theatre", "Overall UCs", "Go Live UCs",
-                                      "Total Partner UCs", "Partner CoCo UCs"]
-                                     + ([NEW_COCO_WK_LABEL, NEW_COCO_DELTA_LABEL] if _t_has_new else [])
-                                     + ["_dep_all", "_pct_all", "_dep_coco", "_pct_coco"]
-                                     + (["Last 7d Tokens", "7D Tokens WoW%"] if _t_has_tokens else []))
+        _theatre_combined.columns = ["Theatre", "Overall UCs", "Go Live UCs",
+                                      "Total Partner UCs", "Partner CoCo UCs", "_dep_all", "_pct_all", "_dep_coco", "_pct_coco"] + (
+                                     ["Last 7d Tokens", "7D Tokens WoW%"] if _t_has_tokens else [])
         _theatre_combined = _theatre_combined.drop(columns=["Overall UCs", "Go Live UCs"])
         _theatre_combined[["_dep_all", "_dep_coco", "_pct_all", "_pct_coco"]] = \
             _theatre_combined[["_dep_all", "_dep_coco", "_pct_all", "_pct_coco"]].fillna(0)
@@ -548,19 +696,10 @@ with st.expander(":material/table: Breakdown by Theatre", expanded=True):
         _theatre_combined = _theatre_combined.fillna(0)
         _theatre_combined["Total Partner UCs"] = _theatre_combined["Total Partner UCs"].astype(int)
         _theatre_combined["Partner CoCo UCs"]  = _theatre_combined["Partner CoCo UCs"].astype(int)
-        if _t_has_new:
-            for _c in (NEW_COCO_WK_LABEL, NEW_COCO_DELTA_LABEL):
-                _theatre_combined[_c] = _theatre_combined[_c].fillna(0).astype(int)
-            _t_new_wk = int(_theatre_combined[NEW_COCO_WK_LABEL].sum())
-            _t_new_delta = int(_theatre_combined[NEW_COCO_DELTA_LABEL].sum())
         _theatre_total = pd.DataFrame([{
             "Theatre": "TOTAL",
             "Total Partner UCs": _t_total_ucs,
             "Partner CoCo UCs": _t_coco_ucs,
-            **({
-                NEW_COCO_WK_LABEL: _t_new_wk,
-                NEW_COCO_DELTA_LABEL: _t_new_delta,
-            } if _t_has_new else {}),
             "Total Partner Go-Lives": f"{_t_dep_all} ({_t_pct_all:.1f}%)",
             "CoCo Partner Go-Lives": f"{_t_dep_coco} ({_t_pct_coco:.1f}%)",
             **({
@@ -569,13 +708,11 @@ with st.expander(":material/table: Breakdown by Theatre", expanded=True):
             } if _t_has_tokens else {}),
         }])
         _t_col_cfg = {}
-        if _t_has_new:
-            _t_col_cfg.update(new_coco_col_config(st, NEW_COCO_WK_LABEL, NEW_COCO_DELTA_LABEL))
         if _t_has_tokens:
-            _t_col_cfg.update({
+            _t_col_cfg = {
                 "Last 7d Tokens": st.column_config.NumberColumn(format="%d", help="Token usage in last 7 rolling days — IS_COCO_FINAL accounts only"),
                 "7D Tokens WoW%": st.column_config.NumberColumn(format="%+.1f%%", help="Week-over-week % change in tokens (last 7d vs prior 7d)"),
-            })
+            }
         _t_df = pd.concat([_theatre_combined, _theatre_total], ignore_index=True)
         def _t_wow_bg(val):
             if pd.isna(val) or val == 0: return ''
@@ -608,11 +745,7 @@ with st.expander(":material/public: Breakdown by Region", expanded=True):
     if len(_region_mdm) > 0:
         _r = _region_mdm.set_index("REGION")[["ALL_USE_CASES", "ALL_GO_LIVES"]]
         if len(_region_partner) > 0:
-            _rp_cols = ["TOTAL_PARTNER_UCS", "COCO_UCS"]
-            _r_has_new = all(c in _region_partner.columns for c in (NEW_COCO_WK_COL, NEW_COCO_DELTA_COL))
-            if _r_has_new:
-                _rp_cols += [NEW_COCO_WK_COL, NEW_COCO_DELTA_COL]
-            _rp_cols += ["DEPLOYED_ALL", "GO_LIVE_PCT", "DEPLOYED_COCO", "COCO_GO_LIVE_PCT"]
+            _rp_cols = ["TOTAL_PARTNER_UCS", "COCO_UCS", "DEPLOYED_ALL", "GO_LIVE_PCT", "DEPLOYED_COCO", "COCO_GO_LIVE_PCT"]
             _r_has_tokens = all(c in _region_partner.columns for c in ['LAST7_TOKENS', 'TOKENS_WOW_PCT'])
             if _r_has_tokens:
                 _rp_cols += ['LAST7_TOKENS', 'TOKENS_WOW_PCT']
@@ -630,12 +763,9 @@ with st.expander(":material/public: Breakdown by Region", expanded=True):
             _region_combined["DEPLOYED_COCO"] = 0
             _region_combined["COCO_GO_LIVE_PCT"] = 0.0
             _r_has_tokens = False
-            _r_has_new = False
-        _region_combined.columns = (["Region", "Overall UCs", "Go Live UCs",
-                                     "Total Partner UCs", "Partner CoCo UCs"]
-                                    + ([NEW_COCO_WK_LABEL, NEW_COCO_DELTA_LABEL] if _r_has_new else [])
-                                    + ["_dep_all", "_pct_all", "_dep_coco", "_pct_coco"]
-                                    + (["Last 7d Tokens", "7D Tokens WoW%"] if _r_has_tokens else []))
+        _region_combined.columns = ["Region", "Overall UCs", "Go Live UCs",
+                                     "Total Partner UCs", "Partner CoCo UCs", "_dep_all", "_pct_all", "_dep_coco", "_pct_coco"] + (
+                                    ["Last 7d Tokens", "7D Tokens WoW%"] if _r_has_tokens else [])
         _region_combined = _region_combined.drop(columns=["Overall UCs", "Go Live UCs"])
         _region_combined[["_dep_all", "_dep_coco", "_pct_all", "_pct_coco"]] = \
             _region_combined[["_dep_all", "_dep_coco", "_pct_all", "_pct_coco"]].fillna(0)
@@ -656,19 +786,10 @@ with st.expander(":material/public: Breakdown by Region", expanded=True):
         _region_combined = _region_combined.fillna(0)
         _region_combined["Total Partner UCs"] = _region_combined["Total Partner UCs"].astype(int)
         _region_combined["Partner CoCo UCs"]  = _region_combined["Partner CoCo UCs"].astype(int)
-        if _r_has_new:
-            for _c in (NEW_COCO_WK_LABEL, NEW_COCO_DELTA_LABEL):
-                _region_combined[_c] = _region_combined[_c].fillna(0).astype(int)
-            _r_new_wk = int(_region_combined[NEW_COCO_WK_LABEL].sum())
-            _r_new_delta = int(_region_combined[NEW_COCO_DELTA_LABEL].sum())
         _region_total = pd.DataFrame([{
             "Region": "TOTAL",
             "Total Partner UCs": _r_total_ucs,
             "Partner CoCo UCs": _r_coco_ucs,
-            **({
-                NEW_COCO_WK_LABEL: _r_new_wk,
-                NEW_COCO_DELTA_LABEL: _r_new_delta,
-            } if _r_has_new else {}),
             "Total Partner Go-Lives": f"{_r_dep_all} ({_r_pct_all:.1f}%)",
             "CoCo Partner Go-Lives": f"{_r_dep_coco} ({_r_pct_coco:.1f}%)",
             **({
@@ -677,13 +798,11 @@ with st.expander(":material/public: Breakdown by Region", expanded=True):
             } if _r_has_tokens else {}),
         }])
         _r_col_cfg = {}
-        if _r_has_new:
-            _r_col_cfg.update(new_coco_col_config(st, NEW_COCO_WK_LABEL, NEW_COCO_DELTA_LABEL))
         if _r_has_tokens:
-            _r_col_cfg.update({
+            _r_col_cfg = {
                 "Last 7d Tokens": st.column_config.NumberColumn(format="%d", help="Token usage in last 7 rolling days — IS_COCO_FINAL accounts only"),
                 "7D Tokens WoW%": st.column_config.NumberColumn(format="%+.1f%%", help="Week-over-week % change in tokens (last 7d vs prior 7d)"),
-            })
+            }
         _r_df = pd.concat([_region_combined, _region_total], ignore_index=True)
         def _r_wow_bg(val):
             if pd.isna(val) or val == 0: return ''
@@ -715,10 +834,6 @@ def _add_totals_row(display_df, partner_col='Partner', scope_col='Scope',
     if eacv_col      in display_df.columns:    row[eacv_col]       = t_eacv
     if coco_eacv_col in display_df.columns:    row[coco_eacv_col]  = c_eacv
     if status_col    in display_df.columns:    row[status_col]     = f'{pct:.1f}%'
-    # New-CoCo-this-week columns are plain counts, so the TOTAL row sums them
-    for _nc in (NEW_COCO_WK_LABEL, NEW_COCO_DELTA_LABEL):
-        if _nc in display_df.columns:
-            row[_nc] = int(pd.to_numeric(display_df[_nc], errors='coerce').fillna(0).sum())
     return pd.concat([display_df, pd.DataFrame([row])], ignore_index=True)
 
 
@@ -860,12 +975,9 @@ def _render_partner_section(base_df, bc, bc_partner_map, skeleton_df, target_pct
             S6_COCO=('_s6','sum'), S7_COCO=('_s7','sum'),
             COCO_EACV=('_coco_eacv','sum'),
         ).reset_index().rename(columns={'_label':'PARTNER_LABEL'}))
-        _nc_lbl = new_coco_by_group(_bc, '_label').rename(columns={'_label': 'PARTNER_LABEL'})
-        agg = agg.merge(_nc_lbl, on='PARTNER_LABEL', how='left')
         df = df.merge(agg, on='PARTNER_LABEL', how='left')
         for c in ['COCO_FINAL_UCS','VALIDATION_COCO','IN_PROGRESS_COCO','IMPL_COMPLETE_DEPLOYED_COCO',
-                  'DEPLOYED_COCO','S3_COCO','S4_COCO','S5_COCO','S6_COCO','S7_COCO',
-                  NEW_COCO_WK_COL, NEW_COCO_DELTA_COL]:
+                  'DEPLOYED_COCO','S3_COCO','S4_COCO','S5_COCO','S6_COCO','S7_COCO']:
             df[c] = df[c].fillna(0).astype(int)
         df['COCO_EACV'] = df['COCO_EACV'].fillna(0)
     else:
@@ -877,8 +989,6 @@ def _render_partner_section(base_df, bc, bc_partner_map, skeleton_df, target_pct
         df['COCO_EACV']                   = df['COCO_EACV_SQL']
         for c in _stage_sql_cols:
             df[c] = df.get(f'{c}_SQL', pd.Series(0, index=df.index))
-        df[NEW_COCO_WK_COL] = 0
-        df[NEW_COCO_DELTA_COL] = 0
 
     df['COCO_PCT'] = (df['COCO_FINAL_UCS'] * 100.0 / df['TOTAL_UCS'].replace(0, float('nan'))).round(1).fillna(0)
 
@@ -894,8 +1004,8 @@ def _render_partner_section(base_df, bc, bc_partner_map, skeleton_df, target_pct
 
     # Collapsible table — sorted desc by CoCo %, colored status, EACV + token columns
     with st.expander(f":material/table_chart: {detail_label}", expanded=False):
-        _disp = df[['PARTNER_LABEL','COUNTRY','TOTAL_UCS','COCO_FINAL_UCS','COCO_PCT',
-                    NEW_COCO_WK_COL, NEW_COCO_DELTA_COL,'TOTAL_EACV','COCO_EACV']].copy()
+        _disp = df[['PARTNER_LABEL','COUNTRY','TOTAL_UCS','COCO_FINAL_UCS','COCO_PCT','TOTAL_EACV','COCO_EACV']].copy()
+        _disp = _apply_snapshot_wow(_disp)
         # Merge token usage
         _tok = _build_token_usage(bc, bc_partner_map) if bc_partner_map else pd.DataFrame(columns=['PARTNER_LABEL'])
         if len(_tok) > 0:
@@ -909,7 +1019,7 @@ def _render_partner_section(base_df, bc, bc_partner_map, skeleton_df, target_pct
             'PARTNER_LABEL': 'Partner', 'COUNTRY': 'Scope',
             'TOTAL_UCS': 'Total UCs', 'COCO_FINAL_UCS': 'CoCo UCs',
             'COCO_PCT': _pct_label,
-            NEW_COCO_WK_COL: NEW_COCO_WK_LABEL, NEW_COCO_DELTA_COL: NEW_COCO_DELTA_LABEL,
+            'WOW_COCO_UCS': 'WoW Δ UCs', 'WOW_COCO_PCT': 'WoW Δ%',
             'TOTAL_EACV': 'Total EACV ($)', 'COCO_EACV': 'CoCo EACV ($)',
         }
         _disp = _add_totals_row(_disp.rename(columns=_rename), pct_col=_pct_label)
@@ -917,12 +1027,13 @@ def _render_partner_section(base_df, bc, bc_partner_map, skeleton_df, target_pct
             _pct_label:         st.column_config.ProgressColumn(min_value=0, max_value=100, format="%.1f%%"),
             'Total UCs':        st.column_config.NumberColumn(format="%d"),
             'CoCo UCs':         st.column_config.NumberColumn(format="%d"),
+            'WoW Δ UCs':        st.column_config.NumberColumn(format="%+d"),
+            'WoW Δ%':           st.column_config.NumberColumn(format="%+.1f%%"),
             'Total EACV ($)':   st.column_config.NumberColumn(format="$%.0f"),
             'CoCo EACV ($)':    st.column_config.NumberColumn(format="$%.0f"),
             'Tokens Consumed':  st.column_config.NumberColumn(format="%d"),
             'Last 7d Tokens':   st.column_config.NumberColumn(format="%d"),
             '7D Tokens WoW%':      st.column_config.NumberColumn(format="%+.1f%%"),
-            **new_coco_col_config(st, NEW_COCO_WK_LABEL, NEW_COCO_DELTA_LABEL),
         }
         st.dataframe(_disp, column_config=_col_cfg, hide_index=True, use_container_width=True)
 
@@ -1052,11 +1163,7 @@ with st.expander(":material/language: APJ RSI CoCo Adoption (50% Target)", expan
             .reset_index().rename(columns={'_label': 'PARTNER_LABEL'})
         )
         _apj_df = _apj_df.merge(_bc_agg, on='PARTNER_LABEL', how='left')
-        _apj_df = _apj_df.merge(
-            new_coco_by_group(_apj_bc, '_label').rename(columns={'_label': 'PARTNER_LABEL'}),
-            on='PARTNER_LABEL', how='left')
-        for _c in ['COCO_FINAL_UCS','S3_COCO','S4_COCO','S5_COCO','S6_COCO','S7_COCO','DEPLOYED_COCO',
-                   NEW_COCO_WK_COL, NEW_COCO_DELTA_COL]:
+        for _c in ['COCO_FINAL_UCS','S3_COCO','S4_COCO','S5_COCO','S6_COCO','S7_COCO','DEPLOYED_COCO']:
             _apj_df[_c] = _apj_df[_c].fillna(0).astype(int)
         _apj_bc_eacv = _apj_bc.assign(_coco_eacv=_apj_bc['USE_CASE_EACV'].where(_apj_bc['IS_COCO_FINAL'], 0)).groupby('_label').agg(COCO_EACV=('_coco_eacv', 'sum')).reset_index().rename(columns={'_label':'PARTNER_LABEL'})
         _apj_df = _apj_df.merge(_apj_bc_eacv, on='PARTNER_LABEL', how='left')
@@ -1067,8 +1174,6 @@ with st.expander(":material/language: APJ RSI CoCo Adoption (50% Target)", expan
         for _c in ['S3_COCO','S4_COCO','S5_COCO','S6_COCO','S7_COCO']:
             _apj_df[_c] = _apj_df.get(f'{_c}_SQL', pd.Series(0, index=_apj_df.index)).fillna(0).astype(int)
         _apj_df['DEPLOYED_COCO'] = _apj_df['S7_COCO']
-        _apj_df[NEW_COCO_WK_COL] = 0
-        _apj_df[NEW_COCO_DELTA_COL] = 0
 
     _apj_df['COCO_PCT'] = (
         _apj_df['COCO_FINAL_UCS'] * 100.0 /
@@ -1091,8 +1196,8 @@ with st.expander(":material/language: APJ RSI CoCo Adoption (50% Target)", expan
     )
 
     with st.expander(":material/table_chart: Partner detail", expanded=False):
-        _apj_display = _apj_df[['PARTNER_LABEL','COUNTRY','TOTAL_UCS','COCO_FINAL_UCS','COCO_PCT',
-                                NEW_COCO_WK_COL, NEW_COCO_DELTA_COL,'TOTAL_EACV','COCO_EACV','Status']].copy()
+        _apj_display = _apj_df[['PARTNER_LABEL','COUNTRY','TOTAL_UCS','COCO_FINAL_UCS','COCO_PCT','TOTAL_EACV','COCO_EACV','Status']].copy()
+        _apj_display = _apply_snapshot_wow(_apj_display)
         _apj_tok = _build_token_usage(_bc_managed, APJ_RSI_REGION_MAP)
         if len(_apj_tok) > 0:
             _apj_display = _apj_display.merge(_apj_tok, on='PARTNER_LABEL', how='left')
@@ -1105,7 +1210,7 @@ with st.expander(":material/language: APJ RSI CoCo Adoption (50% Target)", expan
                 'PARTNER_LABEL': 'Partner', 'COUNTRY': 'Country',
                 'TOTAL_UCS': 'Total UCs', 'COCO_FINAL_UCS': 'CoCo UCs',
                 'COCO_PCT': 'CoCo % vs 50% Target',
-                NEW_COCO_WK_COL: NEW_COCO_WK_LABEL, NEW_COCO_DELTA_COL: NEW_COCO_DELTA_LABEL,
+                'WOW_COCO_UCS': 'WoW Δ UCs', 'WOW_COCO_PCT': 'WoW Δ%',
                 'TOTAL_EACV': 'Total EACV ($)', 'COCO_EACV': 'CoCo EACV ($)',
             }),
             scope_col='Country', pct_col='CoCo % vs 50% Target',
@@ -1116,12 +1221,13 @@ with st.expander(":material/language: APJ RSI CoCo Adoption (50% Target)", expan
                 'CoCo % vs 50% Target': st.column_config.ProgressColumn(min_value=0, max_value=100, format="%.1f%%"),
                 'Total UCs':       st.column_config.NumberColumn(format="%d"),
                 'CoCo UCs':        st.column_config.NumberColumn(format="%d"),
+                'WoW Δ UCs':       st.column_config.NumberColumn(format="%+d"),
+                'WoW Δ%':          st.column_config.NumberColumn(format="%+.1f%%"),
                 'Total EACV ($)':  st.column_config.NumberColumn(format="$%.0f"),
                 'CoCo EACV ($)':   st.column_config.NumberColumn(format="$%.0f"),
                 'Tokens Consumed': st.column_config.NumberColumn(format="%d"),
                 'Last 7d Tokens':  st.column_config.NumberColumn(format="%d"),
                 '7D Tokens WoW%':     st.column_config.NumberColumn(format="%+.1f%%"),
-                **new_coco_col_config(st, NEW_COCO_WK_LABEL, NEW_COCO_DELTA_LABEL),
             },
             hide_index=True, use_container_width=True,
         )
@@ -1185,11 +1291,7 @@ with st.expander("🌎 LATAM RSI CoCo Adoption (50% Target)", expanded=True):
             .reset_index().rename(columns={'_label': 'PARTNER_LABEL'})
         )
         _latam_df = _latam_df.merge(_lbc_agg, on='PARTNER_LABEL', how='left')
-        _latam_df = _latam_df.merge(
-            new_coco_by_group(_latam_bc, '_label').rename(columns={'_label': 'PARTNER_LABEL'}),
-            on='PARTNER_LABEL', how='left')
-        for _c in ['COCO_FINAL_UCS','S3_COCO','S4_COCO','S5_COCO','S6_COCO','S7_COCO','DEPLOYED_COCO',
-                   NEW_COCO_WK_COL, NEW_COCO_DELTA_COL]:
+        for _c in ['COCO_FINAL_UCS','S3_COCO','S4_COCO','S5_COCO','S6_COCO','S7_COCO','DEPLOYED_COCO']:
             _latam_df[_c] = _latam_df[_c].fillna(0).astype(int)
         _latam_bc_eacv = _latam_bc.assign(_coco_eacv=_latam_bc['USE_CASE_EACV'].where(_latam_bc['IS_COCO_FINAL'], 0)).groupby('_label').agg(COCO_EACV=('_coco_eacv', 'sum')).reset_index().rename(columns={'_label':'PARTNER_LABEL'})
         _latam_df = _latam_df.merge(_latam_bc_eacv, on='PARTNER_LABEL', how='left')
@@ -1200,8 +1302,6 @@ with st.expander("🌎 LATAM RSI CoCo Adoption (50% Target)", expanded=True):
         for _c in ['S3_COCO','S4_COCO','S5_COCO','S6_COCO','S7_COCO']:
             _latam_df[_c] = _latam_df.get(f'{_c}_SQL', pd.Series(0, index=_latam_df.index)).fillna(0).astype(int)
         _latam_df['DEPLOYED_COCO'] = _latam_df['S7_COCO']
-        _latam_df[NEW_COCO_WK_COL] = 0
-        _latam_df[NEW_COCO_DELTA_COL] = 0
 
     _latam_df['COCO_PCT'] = (
         _latam_df['COCO_FINAL_UCS'] * 100.0 /
@@ -1224,8 +1324,8 @@ with st.expander("🌎 LATAM RSI CoCo Adoption (50% Target)", expanded=True):
     )
 
     with st.expander(":material/table_chart: Partner detail", expanded=False):
-        _latam_display = _latam_df[['PARTNER_LABEL','COUNTRY','TOTAL_UCS','COCO_FINAL_UCS','COCO_PCT',
-                                    NEW_COCO_WK_COL, NEW_COCO_DELTA_COL,'TOTAL_EACV','COCO_EACV','Status']].copy()
+        _latam_display = _latam_df[['PARTNER_LABEL','COUNTRY','TOTAL_UCS','COCO_FINAL_UCS','COCO_PCT','TOTAL_EACV','COCO_EACV','Status']].copy()
+        _latam_display = _apply_snapshot_wow(_latam_display)
         _latam_tok = _build_token_usage(_bc_managed, LATAM_RSI_REGION_MAP)
         if len(_latam_tok) > 0:
             _latam_display = _latam_display.merge(_latam_tok, on='PARTNER_LABEL', how='left')
@@ -1235,7 +1335,7 @@ with st.expander("🌎 LATAM RSI CoCo Adoption (50% Target)", expanded=True):
                 'PARTNER_LABEL': 'Partner', 'COUNTRY': 'Country',
                 'TOTAL_UCS': 'Total UCs', 'COCO_FINAL_UCS': 'CoCo UCs',
                 'COCO_PCT': 'CoCo % vs 50% Target',
-                NEW_COCO_WK_COL: NEW_COCO_WK_LABEL, NEW_COCO_DELTA_COL: NEW_COCO_DELTA_LABEL,
+                'WOW_COCO_UCS': 'WoW Δ UCs', 'WOW_COCO_PCT': 'WoW Δ%',
                 'TOTAL_EACV': 'Total EACV ($)', 'COCO_EACV': 'CoCo EACV ($)',
             }),
             scope_col='Country', pct_col='CoCo % vs 50% Target',
@@ -1246,12 +1346,13 @@ with st.expander("🌎 LATAM RSI CoCo Adoption (50% Target)", expanded=True):
                 'CoCo % vs 50% Target': st.column_config.ProgressColumn(min_value=0, max_value=100, format="%.1f%%"),
                 'Total UCs':       st.column_config.NumberColumn(format="%d"),
                 'CoCo UCs':        st.column_config.NumberColumn(format="%d"),
+                'WoW Δ UCs':       st.column_config.NumberColumn(format="%+d"),
+                'WoW Δ%':          st.column_config.NumberColumn(format="%+.1f%%"),
                 'Total EACV ($)':  st.column_config.NumberColumn(format="$%.0f"),
                 'CoCo EACV ($)':   st.column_config.NumberColumn(format="$%.0f"),
                 'Tokens Consumed': st.column_config.NumberColumn(format="%d"),
                 'Last 7d Tokens':  st.column_config.NumberColumn(format="%d"),
                 '7D Tokens WoW%':  st.column_config.NumberColumn(format="%+.1f%%"),
-                **new_coco_col_config(st, NEW_COCO_WK_LABEL, NEW_COCO_DELTA_LABEL),
             },
             hide_index=True, use_container_width=True,
         )
@@ -1320,11 +1421,7 @@ with st.expander(":material/globe_uk: EMEA RSI CoCo Adoption (50% Target)", expa
             .reset_index().rename(columns={'_label': 'PARTNER_LABEL'})
         )
         _emea_df = _emea_df.merge(_ebc_agg, on='PARTNER_LABEL', how='left')
-        _emea_df = _emea_df.merge(
-            new_coco_by_group(_emea_bc, '_label').rename(columns={'_label': 'PARTNER_LABEL'}),
-            on='PARTNER_LABEL', how='left')
-        for _c in ['COCO_FINAL_UCS','S3_COCO','S4_COCO','S5_COCO','S6_COCO','S7_COCO','DEPLOYED_COCO',
-                   NEW_COCO_WK_COL, NEW_COCO_DELTA_COL]:
+        for _c in ['COCO_FINAL_UCS','S3_COCO','S4_COCO','S5_COCO','S6_COCO','S7_COCO','DEPLOYED_COCO']:
             _emea_df[_c] = _emea_df[_c].fillna(0).astype(int)
         _emea_bc_eacv = _emea_bc.assign(_coco_eacv=_emea_bc['USE_CASE_EACV'].where(_emea_bc['IS_COCO_FINAL'], 0)).groupby('_label').agg(COCO_EACV=('_coco_eacv', 'sum')).reset_index().rename(columns={'_label':'PARTNER_LABEL'})
         _emea_df = _emea_df.merge(_emea_bc_eacv, on='PARTNER_LABEL', how='left')
@@ -1335,8 +1432,6 @@ with st.expander(":material/globe_uk: EMEA RSI CoCo Adoption (50% Target)", expa
         for _c in ['S3_COCO','S4_COCO','S5_COCO','S6_COCO','S7_COCO']:
             _emea_df[_c] = _emea_df.get(f'{_c}_SQL', pd.Series(0, index=_emea_df.index)).fillna(0).astype(int)
         _emea_df['DEPLOYED_COCO'] = _emea_df['S7_COCO']
-        _emea_df[NEW_COCO_WK_COL] = 0
-        _emea_df[NEW_COCO_DELTA_COL] = 0
 
     _emea_df['COCO_PCT'] = (
         _emea_df['COCO_FINAL_UCS'] * 100.0 /
@@ -1359,8 +1454,8 @@ with st.expander(":material/globe_uk: EMEA RSI CoCo Adoption (50% Target)", expa
     )
 
     with st.expander(":material/table_chart: Partner detail", expanded=False):
-        _emea_display = _emea_df[['PARTNER_LABEL','COUNTRY','TOTAL_UCS','COCO_FINAL_UCS','COCO_PCT',
-                                  NEW_COCO_WK_COL, NEW_COCO_DELTA_COL,'TOTAL_EACV','COCO_EACV','Status']].copy()
+        _emea_display = _emea_df[['PARTNER_LABEL','COUNTRY','TOTAL_UCS','COCO_FINAL_UCS','COCO_PCT','TOTAL_EACV','COCO_EACV','Status']].copy()
+        _emea_display = _apply_snapshot_wow(_emea_display)
         _emea_tok = _build_token_usage(_bc_managed, EMEA_RSI_REGION_MAP)
         if len(_emea_tok) > 0:
             _emea_display = _emea_display.merge(_emea_tok, on='PARTNER_LABEL', how='left')
@@ -1370,7 +1465,7 @@ with st.expander(":material/globe_uk: EMEA RSI CoCo Adoption (50% Target)", expa
                 'PARTNER_LABEL': 'Partner', 'COUNTRY': 'Country',
                 'TOTAL_UCS': 'Total UCs', 'COCO_FINAL_UCS': 'CoCo UCs',
                 'COCO_PCT': 'CoCo % vs 50% Target',
-                NEW_COCO_WK_COL: NEW_COCO_WK_LABEL, NEW_COCO_DELTA_COL: NEW_COCO_DELTA_LABEL,
+                'WOW_COCO_UCS': 'WoW Δ UCs', 'WOW_COCO_PCT': 'WoW Δ%',
                 'TOTAL_EACV': 'Total EACV ($)', 'COCO_EACV': 'CoCo EACV ($)',
             }),
             scope_col='Country', pct_col='CoCo % vs 50% Target',
@@ -1381,12 +1476,13 @@ with st.expander(":material/globe_uk: EMEA RSI CoCo Adoption (50% Target)", expa
                 'CoCo % vs 50% Target': st.column_config.ProgressColumn(min_value=0, max_value=100, format="%.1f%%"),
                 'Total UCs':       st.column_config.NumberColumn(format="%d"),
                 'CoCo UCs':        st.column_config.NumberColumn(format="%d"),
+                'WoW Δ UCs':       st.column_config.NumberColumn(format="%+d"),
+                'WoW Δ%':          st.column_config.NumberColumn(format="%+.1f%%"),
                 'Total EACV ($)':  st.column_config.NumberColumn(format="$%.0f"),
                 'CoCo EACV ($)':   st.column_config.NumberColumn(format="$%.0f"),
                 'Tokens Consumed': st.column_config.NumberColumn(format="%d"),
                 'Last 7d Tokens':  st.column_config.NumberColumn(format="%d"),
                 '7D Tokens WoW%':     st.column_config.NumberColumn(format="%+.1f%%"),
-                **new_coco_col_config(st, NEW_COCO_WK_LABEL, NEW_COCO_DELTA_LABEL),
             },
             hide_index=True, use_container_width=True,
         )
@@ -1416,7 +1512,6 @@ if len(_bc_managed) > 0 and 'IS_COCO_FINAL' in _bc_managed.columns:
         _bc[_bc['_is_coco_final']].groupby('USE_CASE_STAGE')['USE_CASE_EACV'].sum()
         .reindex(_stage_agg['USE_CASE_STAGE']).fillna(0).values
     )
-    _stage_agg = merge_new_coco(_stage_agg, _bc, 'USE_CASE_STAGE')
 else:
     # Fallback: build from summary stats (no EACV split available)
     _stage_agg = pd.DataFrame([
@@ -1433,9 +1528,6 @@ else:
          'TOTAL_UCS': int(s['DEPLOYED_COUNT']), 'COCO_UCS': _go_live_coco,
          'TOTAL_EACV': float(s['DEPLOYED_EACV'] or 0), 'COCO_EACV': _coco_eacv},
     ])
-    # SQL fallback has no use-case rows, so the weekly columns cannot be derived
-    _stage_agg[NEW_COCO_WK_COL] = 0
-    _stage_agg[NEW_COCO_DELTA_COL] = 0
 
 if len(_stage_agg) > 0:
     _stage_agg['COCO_PCT'] = (
@@ -1463,8 +1555,7 @@ if len(_stage_agg) > 0:
     st.plotly_chart(_sfig, use_container_width=True)
 
     st.dataframe(
-        _stage_agg[['USE_CASE_STAGE', 'TOTAL_UCS', 'COCO_UCS', 'COCO_PCT',
-                    NEW_COCO_WK_COL, NEW_COCO_DELTA_COL, 'TOTAL_EACV', 'COCO_EACV']].rename(columns={
+        _stage_agg[['USE_CASE_STAGE', 'TOTAL_UCS', 'COCO_UCS', 'COCO_PCT', 'TOTAL_EACV', 'COCO_EACV']].rename(columns={
             'USE_CASE_STAGE': 'Stage', 'TOTAL_UCS': 'Total UCs', 'COCO_UCS': 'CoCo UCs (IS_COCO_FINAL)',
             'COCO_PCT': 'CoCo %', 'TOTAL_EACV': 'Total EACV', 'COCO_EACV': 'CoCo EACV',
         }),
@@ -1472,7 +1563,6 @@ if len(_stage_agg) > 0:
             'CoCo %': st.column_config.ProgressColumn(min_value=0, max_value=100, format="%.1f%%"),
             'Total EACV': st.column_config.NumberColumn(format="$%.0f"),
             'CoCo EACV': st.column_config.NumberColumn(format="$%.0f"),
-            **new_coco_col_config(st),
         },
         hide_index=True, use_container_width=True,
     )

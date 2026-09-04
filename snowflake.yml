@@ -26,3 +26,21 @@ entities:
       - environment.yml
       - app_pages/
       - utils/
+  coco_usecase_insights_dev2:
+    type: streamlit
+    identifier:
+      name: COCO_USECASE_INSIGHTS_DEV2
+      database: TEMP
+      schema: COCO_PARTNER_ADOPTION_DEV
+    stage: STREAMLIT
+    query_warehouse: COCO_PARTNER_ADOPTION_WH
+    runtime_name: SYSTEM$ST_CONTAINER_RUNTIME_PY3_11
+    compute_pool: STREAMLIT_DEDICATED_POOL_L
+    main_file: streamlit_app.py
+    artifacts:
+      - streamlit_app.py
+      - environment.yml
+      - pyproject.toml
+      - uv.lock
+      - app_pages/
+      - utils/
