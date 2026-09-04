@@ -651,17 +651,19 @@ def _build_report_html(partner, q_start, q_end, target, coco_count, total_ucs, c
                 f'background:{bg};color:{fg};">{stage_label}</span>')
 
     gap_table_rows = ""
+    seq = 0
     for region in ["NoAM", "EMEA", "APJ"]:
         rows = gap_rows_by_region.get(region, [])
         if not rows:
             continue
         region_eacv = sum(u["eacv"] for u in rows) / 1_000_000
         gap_table_rows += (
-            f'<tr style="background:#eef2ff;"><td colspan="6" style="padding:7px 10px;font-weight:700;'
+            f'<tr style="background:#eef2ff;"><td colspan="7" style="padding:7px 10px;font-weight:700;'
             f'font-size:11px;color:#312e81;text-transform:uppercase;letter-spacing:.03em;">'
             f'{_h(region)} &mdash; {len(rows)} use case{"s" if len(rows) != 1 else ""} &middot; ${region_eacv:.2f}M EACV</td></tr>'
         )
         for u in rows:
+            seq += 1
             eacv = u["eacv"]
             eacv_str = f"${eacv/1_000_000:.2f}M" if eacv >= 1_000_000 else f"${eacv/1000:.0f}K"
             if u["skills"]:
@@ -678,7 +680,8 @@ def _build_report_html(partner, q_start, q_end, target, coco_count, total_ucs, c
                              'No CoCo skill rule matched this use case&rsquo;s technical category yet</span>')
             desc = u["sanitized_desc"] or "&mdash;"
             gap_table_rows += f"""
-<tr><td style="padding:7px 10px;border-bottom:1px solid #f1f5f9;vertical-align:top;">{_h(u['name'])}</td>
+<tr><td style="padding:7px 10px;border-bottom:1px solid #f1f5f9;vertical-align:top;text-align:right;color:#9ca3af;">{seq}</td>
+  <td style="padding:7px 10px;border-bottom:1px solid #f1f5f9;vertical-align:top;">{_h(u['name'])}</td>
   <td style="padding:7px 10px;border-bottom:1px solid #f1f5f9;vertical-align:top;">{_h(u['account'])}</td>
   <td style="padding:7px 10px;border-bottom:1px solid #f1f5f9;vertical-align:top;">{_stage_pill(u['stage_label'])}</td>
   <td style="padding:7px 10px;border-bottom:1px solid #f1f5f9;vertical-align:top;text-align:right;">{eacv_str}</td>
@@ -727,6 +730,7 @@ def _build_report_html(partner, q_start, q_end, target, coco_count, total_ucs, c
   <div style="overflow-x:auto;">
   <table style="border-collapse:collapse;width:100%;font-size:12px;">
     <thead><tr>
+      <th style="background:#f8fafc;text-align:right;padding:7px 10px;font-size:10.5px;text-transform:uppercase;color:#6b7280;border-bottom:2px solid #e5e7eb;">#</th>
       <th style="background:#f8fafc;text-align:left;padding:7px 10px;font-size:10.5px;text-transform:uppercase;color:#6b7280;border-bottom:2px solid #e5e7eb;">Use Case</th>
       <th style="background:#f8fafc;text-align:left;padding:7px 10px;font-size:10.5px;text-transform:uppercase;color:#6b7280;border-bottom:2px solid #e5e7eb;">Account</th>
       <th style="background:#f8fafc;text-align:left;padding:7px 10px;font-size:10.5px;text-transform:uppercase;color:#6b7280;border-bottom:2px solid #e5e7eb;">Stage</th>
@@ -980,7 +984,8 @@ def _build_report_pdf_bytes(partner, q_start, q_end, target, coco_count, total_u
     story.append(Spacer(1, 0.15 * inch))
 
     story.append(Paragraph("Non-CoCo Gap Opportunities", styles['heading2']))
-    gap_col_widths = [1.3 * inch, 1.0 * inch, 0.85 * inch, 0.55 * inch, 1.6 * inch, 1.6 * inch]
+    gap_col_widths = [0.35 * inch, 1.3 * inch, 1.0 * inch, 0.85 * inch, 0.55 * inch, 1.6 * inch, 1.6 * inch]
+    seq = 0
     for region in ["NoAM", "EMEA", "APJ"]:
         rows = gap_rows_by_region.get(region, [])
         if not rows:
@@ -998,19 +1003,20 @@ def _build_report_pdf_bytes(partner, q_start, q_end, target, coco_count, total_u
         ]))
         story.append(band)
         gap_header = [_wrap_cell(t, cell_h) for t in
-                      ["Use Case", "Account", "Stage", "EACV", "CoCo Skills (+ reason)", "Description (sanitized)"]]
+                      ["#", "Use Case", "Account", "Stage", "EACV", "CoCo Skills (+ reason)", "Description (sanitized)"]]
         gap_data = [gap_header]
         for u in rows:
+            seq += 1
             eacv = u["eacv"]
             eacv_str = f"${eacv/1_000_000:.2f}M" if eacv >= 1_000_000 else f"${eacv/1000:.0f}K"
             gap_data.append([
-                _wrap_cell(u["name"], cell), _wrap_cell(u["account"], cell),
+                Paragraph(str(seq), cell_c), _wrap_cell(u["name"], cell), _wrap_cell(u["account"], cell),
                 _pdf_stage_badge(u["stage_label"], cell.fontName), Paragraph(eacv_str, cell_c),
                 _pdf_skill_chip_flowables(u, cell.fontName), _wrap_cell(u["sanitized_desc"] or "-", cell),
             ])
         gap_table = Table(gap_data, colWidths=gap_col_widths, repeatRows=1)
         gap_table.setStyle(_pdf_table_style())
-        gap_table.setStyle(TableStyle([('ALIGN', (2, 1), (2, -1), 'CENTER')]))
+        gap_table.setStyle(TableStyle([('ALIGN', (3, 1), (3, -1), 'CENTER')]))
         story.append(gap_table)
         story.append(Spacer(1, 0.1 * inch))
 
