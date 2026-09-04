@@ -33,6 +33,7 @@ from reportlab.platypus import (
 from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY, TA_LEFT
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+from reportlab.graphics.shapes import Drawing, Rect
 
 from utils import (
     APJ_RSI_REGION_MAP, EMEA_RSI_REGION_MAP, LATAM_RSI_REGION_MAP,
@@ -54,6 +55,26 @@ from utils.coco_skill_map_v2 import (
 
 SNOWFLAKE_BLUE = "#29b5e8"
 NOAM_THEATERS = ("AMSExpansion", "USMajors", "AMSAcquisition", "USPubSec")
+
+# Shared color mappings used by BOTH the HTML and PDF renderers so the two
+# outputs never drift from each other.
+_REGION_COLORS = {"NoAM": "#16a34a", "EMEA": "#f59e0b", "APJ": "#dc2626", "Global": "#7c3aed"}
+_STAGE_COLORS = {
+    "POC": ("#fef3c7", "#92400e"),
+    "Deployed": ("#dcfce7", "#166534"),
+    "Implementation": ("#dbeafe", "#1e40af"),
+}
+
+# PDF-only: a deliberately muted/deeper variant of the same palette. Bright,
+# high-saturation fills render fine on a screen (HTML) but look garish and
+# "AI slop"-y on paper/PDF, so the PDF renderer uses darker, less saturated
+# shades of the same colors for the same status meaning.
+_PDF_REGION_COLORS = {"NoAM": "#15803d", "EMEA": "#b45309", "APJ": "#b91c1c", "Global": "#4338ca"}
+_PDF_STATUS_GOOD = "#15803d"
+_PDF_STATUS_WARN = "#b45309"
+_PDF_STATUS_BAD = "#b91c1c"
+_PDF_CHIP_TEXT = "#1d4ed8"
+_PDF_CHIP_BORDER = "#94a3b8"
 
 
 def _exec_table_skill_display(skill: str) -> str:
@@ -596,11 +617,10 @@ def _build_report_html(partner, q_start, q_end, target, coco_count, total_ucs, c
   Peer identities are not disclosed.
 </div>"""
 
-    region_colors = {"NoAM": "#16a34a", "EMEA": "#f59e0b", "APJ": "#dc2626", "Global": "#7c3aed"}
     region_rows_html = ""
     max_gap_label = ""
     for r in regional_breakdown:
-        color = region_colors.get(r["REGION"], "#29b5e8")
+        color = _REGION_COLORS.get(r["REGION"], "#29b5e8")
         weight = "font-weight:700;background:#f9fafb;" if r["REGION"] == "Global" else ""
         eacv_str = f"${r['EACV']/1_000_000:.2f}M" if r["EACV"] >= 1_000_000 else f"${r['EACV']/1000:.0f}K"
         region_rows_html += f"""
@@ -619,12 +639,6 @@ def _build_report_html(partner, q_start, q_end, target, coco_count, total_ucs, c
                           f"{smallest['REGION']} is within {smallest['GAP']} UCs of target."
                           if biggest["REGION"] != smallest["REGION"] else
                           f"{biggest['REGION']} is the largest gap ({biggest['GAP']} UCs needed).")
-
-    _STAGE_COLORS = {
-        "POC": ("#fef3c7", "#92400e"),
-        "Deployed": ("#dcfce7", "#166534"),
-        "Implementation": ("#dbeafe", "#1e40af"),
-    }
 
     def _stage_pill(stage_label):
         bg, fg = _STAGE_COLORS.get(stage_label, ("#e5e7eb", "#374151"))
@@ -771,7 +785,7 @@ def _pdf_styles():
                                        fontSize=8, leading=10, alignment=TA_CENTER),
         'cell_header': ParagraphStyle('CellHeader', parent=styles['Normal'], fontName=font,
                                        fontSize=8, leading=10, alignment=TA_CENTER, textColor=white),
-        'kpi_number': ParagraphStyle('KPINum', fontName=font, fontSize=22, leading=26,
+        'kpi_number': ParagraphStyle('KPINum', fontName=font, fontSize=16, leading=19,
                                       alignment=TA_CENTER, textColor=blue),
         'kpi_label': ParagraphStyle('KPILbl', fontName=font, fontSize=8.5, leading=11,
                                      alignment=TA_CENTER, textColor=HexColor('#666666')),
@@ -795,6 +809,63 @@ def _pdf_table_style(header_color=None):
         ('GRID', (0, 0), (-1, -1), 0.5, HexColor('#CCCCCC')),
         ('ROWBACKGROUNDS', (0, 1), (-1, -1), [white, HexColor('#F5F5F5')]),
     ])
+
+
+def _pdf_progress_bar(pct, color, width=58, height=8):
+    """Colored horizontal progress bar as a Drawing flowable -- the PDF
+    equivalent of _region_bar_html(), so the Regional Breakdown table keeps
+    the same at-a-glance color signal as the HTML report."""
+    d = Drawing(width, height)
+    d.add(Rect(0, 0, width, height, fillColor=HexColor('#F1F5F9'), strokeColor=None))
+    fill_width = width * max(0, min(pct, 100)) / 100
+    if fill_width > 0:
+        d.add(Rect(0, 0, fill_width, height, fillColor=HexColor(color), strokeColor=None))
+    return d
+
+
+def _pdf_stage_badge(stage_label, font):
+    """Colored pill for a use case's Stage, mirroring _stage_pill() in the
+    HTML renderer via the shared _STAGE_COLORS mapping."""
+    bg, fg = _STAGE_COLORS.get(stage_label, ("#e5e7eb", "#374151"))
+    style = ParagraphStyle('StageBadge', fontName=font, fontSize=7, leading=8.5,
+                            alignment=TA_CENTER, textColor=HexColor(fg))
+    t = Table([[Paragraph(html_lib.escape(stage_label), style)]], colWidths=[0.78 * inch])
+    t.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (0, 0), HexColor(bg)),
+        ('TOPPADDING', (0, 0), (0, 0), 3), ('BOTTOMPADDING', (0, 0), (0, 0), 3),
+        ('LEFTPADDING', (0, 0), (0, 0), 3), ('RIGHTPADDING', (0, 0), (0, 0), 3),
+        ('ALIGN', (0, 0), (0, 0), 'CENTER'),
+    ]))
+    return t
+
+
+def _pdf_skill_chip_flowables(u, font):
+    """List of flowables (chip Table + reason Paragraph, repeated per skill)
+    for one Gap-table cell -- the PDF equivalent of the HTML chip/reason
+    <span> pairs. Table cells accept a list of flowables and stack them
+    vertically, so this reproduces the HTML's repeated-block layout."""
+    if not u["skills"]:
+        no_skill_style = ParagraphStyle('NoSkill', fontName=font, fontSize=8, leading=10,
+                                         textColor=HexColor('#9ca3af'))
+        return [Paragraph("No CoCo skill rule matched yet", no_skill_style)]
+    chip_style = ParagraphStyle('Chip', fontName=font, fontSize=8, leading=10,
+                                 textColor=HexColor(_PDF_CHIP_TEXT))
+    reason_style = ParagraphStyle('ChipReason', fontName=font, fontSize=7.5, leading=9.5,
+                                   textColor=HexColor('#64748b'), spaceAfter=4)
+    flows = []
+    for s in u["skills"]:
+        label = html_lib.escape(_exec_table_skill_display(s))
+        chip = Table([[Paragraph(f"<b>{label}</b>", chip_style)]], colWidths=[1.45 * inch])
+        chip.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (0, 0), HexColor('#f1f5f9')),
+            ('BOX', (0, 0), (0, 0), 0.5, HexColor(_PDF_CHIP_BORDER)),
+            ('TOPPADDING', (0, 0), (0, 0), 2), ('BOTTOMPADDING', (0, 0), (0, 0), 2),
+            ('LEFTPADDING', (0, 0), (0, 0), 4), ('RIGHTPADDING', (0, 0), (0, 0), 4),
+        ]))
+        flows.append(chip)
+        reason = html_lib.escape("; ".join(u["reasons"].get(s, [])))
+        flows.append(Paragraph(reason, reason_style))
+    return flows
 
 
 def _pdf_footer(canvas, doc):
@@ -824,14 +895,21 @@ def _build_report_pdf_bytes(partner, q_start, q_end, target, coco_count, total_u
     story.append(Spacer(1, 0.15 * inch))
 
     eacv_m = non_coco_eacv / 1_000_000
+    attach_color = _PDF_STATUS_BAD if coco_pct < target else _PDF_STATUS_GOOD
+    kpi_colors = [attach_color, _PDF_STATUS_WARN, _PDF_STATUS_BAD, '#1E3A5F']
+    kpi_values = [f"{coco_pct}%", f"{coco_count} of {total_ucs}", str(non_coco_count), f"${eacv_m:.2f}M"]
+    kpi_labels = ["CoCo attach rate", "CoCo use cases", "Awaiting confirmation", "EACV awaiting"]
     kpi_data = [
-        [Paragraph(f"{coco_pct}%", styles['kpi_number']), Paragraph(f"{coco_count} of {total_ucs}", styles['kpi_number']),
-         Paragraph(str(non_coco_count), styles['kpi_number']), Paragraph(f"${eacv_m:.2f}M", styles['kpi_number'])],
-        [Paragraph("CoCo attach rate", styles['kpi_label']), Paragraph("CoCo use cases", styles['kpi_label']),
-         Paragraph("Awaiting confirmation", styles['kpi_label']), Paragraph("EACV awaiting", styles['kpi_label'])],
+        [Paragraph(v, ParagraphStyle(f'KPINum{i}', parent=styles['kpi_number'], textColor=HexColor(c)))
+         for i, (v, c) in enumerate(zip(kpi_values, kpi_colors))],
+        [Paragraph(lbl, styles['kpi_label']) for lbl in kpi_labels],
     ]
     kpi_table = Table(kpi_data, colWidths=[1.7 * inch] * 4)
-    kpi_table.setStyle(TableStyle([('ALIGN', (0, 0), (-1, -1), 'CENTER'), ('VALIGN', (0, 0), (-1, -1), 'MIDDLE')]))
+    kpi_style = [('ALIGN', (0, 0), (-1, -1), 'CENTER'), ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                 ('TOPPADDING', (0, 0), (-1, -1), 8), ('BOTTOMPADDING', (0, 0), (-1, -1), 8)]
+    for col in range(4):
+        kpi_style.append(('BOX', (col, 0), (col, -1), 0.75, HexColor('#E5E7EB')))
+    kpi_table.setStyle(TableStyle(kpi_style))
     story.append(kpi_table)
     story.append(Spacer(1, 0.15 * inch))
 
@@ -854,49 +932,54 @@ def _build_report_pdf_bytes(partner, q_start, q_end, target, coco_count, total_u
 
     story.append(Paragraph("Regional Breakdown", styles['heading2']))
     region_header = [_wrap_cell(t, cell_h) for t in
-                      ["Region", "Total UCs", "CoCo UCs", "CoCo %", f"Gap to {target}%", "Total EACV"]]
+                      ["Region", "Total UCs", "CoCo UCs", "CoCo %", f"Gap to {target}%", "Total EACV", "Progress"]]
     region_data = [region_header]
     for r in regional_breakdown:
         eacv_str = f"${r['EACV']/1_000_000:.2f}M" if r["EACV"] >= 1_000_000 else f"${r['EACV']/1000:.0f}K"
         region_data.append([
             _wrap_cell(r["REGION"], cell), _wrap_cell(r["TOTAL_UCS"], cell_c), _wrap_cell(r["COCO_UCS"], cell_c),
             _wrap_cell(f"{r['COCO_PCT']}%", cell_c), _wrap_cell(f"{r['GAP']} UCs", cell_c), _wrap_cell(eacv_str, cell_c),
+            _pdf_progress_bar(r["COCO_PCT"], _PDF_REGION_COLORS.get(r["REGION"], "#334155")),
         ])
-    region_table = Table(region_data, colWidths=[1.1 * inch, 0.9 * inch, 0.9 * inch, 0.9 * inch, 1.1 * inch, 1.1 * inch])
+    region_table = Table(region_data, colWidths=[1.0 * inch, 0.8 * inch, 0.8 * inch, 0.75 * inch,
+                                                   0.95 * inch, 0.95 * inch, 0.85 * inch])
     region_table.setStyle(_pdf_table_style())
+    region_table.setStyle(TableStyle([('ALIGN', (6, 1), (6, -1), 'CENTER')]))
     story.append(region_table)
     story.append(Spacer(1, 0.15 * inch))
 
     story.append(Paragraph("Non-CoCo Gap Opportunities", styles['heading2']))
+    gap_col_widths = [1.3 * inch, 1.0 * inch, 0.85 * inch, 0.55 * inch, 1.6 * inch, 1.6 * inch]
     for region in ["NoAM", "EMEA", "APJ"]:
         rows = gap_rows_by_region.get(region, [])
         if not rows:
             continue
         region_eacv = sum(u["eacv"] for u in rows) / 1_000_000
-        story.append(Paragraph(
-            f"<b>{region}</b> &mdash; {len(rows)} use case{'s' if len(rows) != 1 else ''} &middot; ${region_eacv:.2f}M EACV",
-            ParagraphStyle('RegionHead', parent=styles['body'], textColor=HexColor('#312e81'), spaceAfter=3)))
+        band_style = ParagraphStyle('RegionBand', fontName=cell.fontName, fontSize=9.5, leading=12,
+                                     textColor=HexColor('#312e81'))
+        band_text = (f"<b>{html_lib.escape(region)}</b> &mdash; {len(rows)} use case"
+                     f"{'s' if len(rows) != 1 else ''} &middot; ${region_eacv:.2f}M EACV")
+        band = Table([[Paragraph(band_text, band_style)]], colWidths=[sum(gap_col_widths)])
+        band.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (0, 0), HexColor('#eef2ff')),
+            ('TOPPADDING', (0, 0), (0, 0), 5), ('BOTTOMPADDING', (0, 0), (0, 0), 5),
+            ('LEFTPADDING', (0, 0), (0, 0), 6),
+        ]))
+        story.append(band)
         gap_header = [_wrap_cell(t, cell_h) for t in
                       ["Use Case", "Account", "Stage", "EACV", "CoCo Skills (+ reason)", "Description (sanitized)"]]
         gap_data = [gap_header]
         for u in rows:
             eacv = u["eacv"]
             eacv_str = f"${eacv/1_000_000:.2f}M" if eacv >= 1_000_000 else f"${eacv/1000:.0f}K"
-            if u["skills"]:
-                skill_txt = "<br/>".join(
-                    f"<b>{_exec_table_skill_display(s)}</b>: {'; '.join(u['reasons'].get(s, []))}"
-                    for s in u["skills"]
-                )
-            else:
-                skill_txt = "No CoCo skill rule matched yet"
             gap_data.append([
                 Paragraph(html_lib.escape(u["name"]), cell), Paragraph(html_lib.escape(u["account"]), cell),
-                Paragraph(u["stage_label"], cell_c), Paragraph(eacv_str, cell_c),
-                Paragraph(skill_txt, cell), Paragraph(html_lib.escape(u["sanitized_desc"] or "-"), cell),
+                _pdf_stage_badge(u["stage_label"], cell.fontName), Paragraph(eacv_str, cell_c),
+                _pdf_skill_chip_flowables(u, cell.fontName), Paragraph(html_lib.escape(u["sanitized_desc"] or "-"), cell),
             ])
-        gap_table = Table(gap_data, colWidths=[1.4 * inch, 1.1 * inch, 0.7 * inch, 0.6 * inch, 1.6 * inch, 1.6 * inch],
-                           repeatRows=1)
+        gap_table = Table(gap_data, colWidths=gap_col_widths, repeatRows=1)
         gap_table.setStyle(_pdf_table_style())
+        gap_table.setStyle(TableStyle([('ALIGN', (2, 1), (2, -1), 'CENTER')]))
         story.append(gap_table)
         story.append(Spacer(1, 0.1 * inch))
 
