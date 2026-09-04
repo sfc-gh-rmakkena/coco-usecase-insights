@@ -920,7 +920,7 @@ if get_env() not in ("dev",):
 
 conn = st.session_state.conn
 
-st.title(":material/forward_to_inbox: PSE Email (Hybrid Layout)")
+st.title(":material/forward_to_inbox: PSE CoCo Use Case Insights")
 st.caption(
     "Personal narrative (copy as rich text) plus an executive-table CoCo adoption report "
     "(copy as rich text, download as HTML, or download as PDF) for the selected partner."
