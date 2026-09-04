@@ -112,16 +112,10 @@ def _peer_group_for(partner: str):
     return ([], "none", None, 75, "partners")
 
 
-def _compute_peer_benchmark(conn, partner, q_start, q_end, partner_total_eacv, partner_coco_eacv):
-    """Anonymized OKR ranking: where `partner`'s DOLLAR-weighted (EACV)
-    attach rate ranks among its peer group (no peer identities disclosed),
-    plus the dollar amount still short of the group's OKR target.
-
-    Ranking on $ attached / $ total (not use-case COUNT) avoids a scale-blind
-    ranking where a partner with e.g. 2 small use cases (both CoCo-attached,
-    100%) would outrank a partner with 10x the pipeline and a real multi-
-    million-dollar gap just because their raw percentage is lower. Returns
-    None if there is no peer group."""
+def _compute_peer_benchmark(conn, partner, q_start, q_end, coco_pct):
+    """Anonymized OKR ranking: where `partner`'s attach rate ranks among its
+    peer group (no peer identities disclosed), plus the point-gap to the
+    group's OKR target. Returns None if there is no peer group."""
     peers, filter_kind, filter_value, target, group_label = _peer_group_for(partner)
     if not peers:
         return None
@@ -140,27 +134,20 @@ def _compute_peer_benchmark(conn, partner, q_start, q_end, partner_total_eacv, p
     # before grouping, otherwise the same company's use cases split across its alias
     # spellings count as two separate "peers" and inflate the group size / skew rank.
     conf["PARTNER_NAME"] = conf["PARTNER_NAME"].map(lambda p: PARTNER_RENAME_MAP.get(p, p))
-    conf["_COCO_EACV_ROW"] = conf["USE_CASE_EACV"].where(conf["IS_COCO_FINAL"], 0)
     per_partner = conf.groupby("PARTNER_NAME").agg(
         TOTAL=("USE_CASE_ID", "count"), COCO=("IS_COCO_FINAL", "sum"),
-        TOTAL_EACV=("USE_CASE_EACV", "sum"), COCO_EACV=("_COCO_EACV_ROW", "sum"),
     ).reset_index()
     per_partner = per_partner[per_partner["TOTAL"] > 0]
     if len(per_partner) == 0:
         return None
-    per_partner["EACV_PCT"] = per_partner.apply(
-        lambda r: (r["COCO_EACV"] * 100.0 / r["TOTAL_EACV"]) if r["TOTAL_EACV"] > 0 else 0.0, axis=1)
-    partner_eacv_pct = (partner_coco_eacv * 100.0 / partner_total_eacv) if partner_total_eacv > 0 else 0.0
-    peer_eacv_pcts = per_partner["EACV_PCT"].tolist()
-    rank = sum(1 for pct in peer_eacv_pcts if pct > partner_eacv_pct) + 1
-    gap_eacv = max(0.0, (target / 100.0) * partner_total_eacv - partner_coco_eacv)
+    per_partner["PCT"] = per_partner["COCO"] * 100.0 / per_partner["TOTAL"]
+    peer_pcts = per_partner["PCT"].tolist()
+    rank = sum(1 for pct in peer_pcts if pct > coco_pct) + 1
     return {
         "rank": rank,
-        "total_in_group": len(peer_eacv_pcts) + 1,
+        "total_in_group": len(peer_pcts) + 1,
         "target": target,
         "group_label": group_label,
-        "eacv_pct": round(partner_eacv_pct, 1),
-        "gap_eacv": gap_eacv,
     }
 
 
@@ -456,20 +443,15 @@ def _build_narrative_draft(conn, partner, recipients, coco_pct, coco_count, tota
     recipients = recipients.strip() or "team"
     peer_line = ""
     if peer_benchmark:
-        eacv_pct = peer_benchmark["eacv_pct"]
-        gap_eacv = peer_benchmark["gap_eacv"]
-        gap = round(peer_benchmark["target"] - eacv_pct, 1)
+        gap = round(peer_benchmark["target"] - coco_pct, 1)
         global_row = next((r for r in regional_breakdown if r["REGION"] == "Global"), None)
         ucs_needed = global_row["GAP"] if global_row else 0
         rank_str = (f"{partner} ranks {peer_benchmark['rank']} of {peer_benchmark['total_in_group']} "
-                    f"{peer_benchmark['group_label']} on dollar-weighted OKR attainment "
-                    f"({eacv_pct}% of pipeline CoCo-attached)")
+                    f"{peer_benchmark['group_label']} on OKR attainment")
         if gap <= 0:
             peer_line = f"{rank_str} and has already hit the {peer_benchmark['target']}% target — great work keeping pace!"
         else:
-            gap_eacv_str = f"${gap_eacv/1_000_000:.2f}M" if gap_eacv >= 1_000_000 else f"${gap_eacv/1000:.0f}K"
-            peer_line = (f"{rank_str}, sitting {gap} points behind the {peer_benchmark['target']}% target "
-                         f"({gap_eacv_str} of pipeline still awaiting CoCo attachment)"
+            peer_line = (f"{rank_str}, sitting {gap} points behind the {peer_benchmark['target']}% target"
                          + (f" — closing this gap requires {ucs_needed} more CoCo-attached use cases this quarter."
                             if ucs_needed else "."))
     # NoAM is the only region PSE can proactively drive, so the narrative
@@ -618,20 +600,15 @@ def _build_report_html(partner, q_start, q_end, target, coco_count, total_ucs, c
 
     peer_html = ""
     if peer_benchmark:
-        eacv_pct = peer_benchmark["eacv_pct"]
-        gap_eacv = peer_benchmark["gap_eacv"]
-        gap = round(peer_benchmark["target"] - eacv_pct, 1)
+        gap = round(peer_benchmark["target"] - coco_pct, 1)
         global_row = next((r for r in regional_breakdown if r["REGION"] == "Global"), None)
         ucs_needed = global_row["GAP"] if global_row else 0
         rank_str = (f"{_h(partner)} ranks <b>{peer_benchmark['rank']} of {peer_benchmark['total_in_group']}</b> "
-                    f"{_h(peer_benchmark['group_label'])} on dollar-weighted OKR attainment "
-                    f"(<b>{eacv_pct}%</b> of pipeline CoCo-attached)")
+                    f"{_h(peer_benchmark['group_label'])} on OKR attainment")
         if gap <= 0:
             detail = f"and has already hit the {peer_benchmark['target']}% target &mdash; great work keeping pace!"
         else:
-            gap_eacv_str = f"${gap_eacv/1_000_000:.2f}M" if gap_eacv >= 1_000_000 else f"${gap_eacv/1000:.0f}K"
-            detail = (f", sitting <b>{gap} points</b> behind the {peer_benchmark['target']}% target "
-                      f"(<b>{gap_eacv_str}</b> of pipeline still awaiting CoCo attachment)"
+            detail = (f", sitting <b>{gap} points</b> behind the {peer_benchmark['target']}% target"
                       + (f", closing this gap requires <b>{ucs_needed} more</b> CoCo-attached use cases this quarter."
                          if ucs_needed else "."))
         peer_html = f"""
@@ -963,20 +940,15 @@ def _build_report_pdf_bytes(partner, q_start, q_end, target, coco_count, total_u
     story.append(Spacer(1, 0.15 * inch))
 
     if peer_benchmark:
-        eacv_pct = peer_benchmark["eacv_pct"]
-        gap_eacv = peer_benchmark["gap_eacv"]
-        gap = round(peer_benchmark["target"] - eacv_pct, 1)
+        gap = round(peer_benchmark["target"] - coco_pct, 1)
         global_row = next((r for r in regional_breakdown if r["REGION"] == "Global"), None)
         ucs_needed = global_row["GAP"] if global_row else 0
         rank_str = (f"{partner} ranks <b>{peer_benchmark['rank']} of {peer_benchmark['total_in_group']}</b> "
-                    f"{peer_benchmark['group_label']} on dollar-weighted OKR attainment "
-                    f"(<b>{eacv_pct}%</b> of pipeline CoCo-attached)")
+                    f"{peer_benchmark['group_label']} on OKR attainment")
         if gap <= 0:
             detail = f"and has already hit the {peer_benchmark['target']}% target &mdash; great work keeping pace!"
         else:
-            gap_eacv_str = f"${gap_eacv/1_000_000:.2f}M" if gap_eacv >= 1_000_000 else f"${gap_eacv/1000:.0f}K"
-            detail = (f", sitting <b>{gap} points</b> behind the {peer_benchmark['target']}% target "
-                      f"(<b>{gap_eacv_str}</b> of pipeline still awaiting CoCo attachment)"
+            detail = (f", sitting <b>{gap} points</b> behind the {peer_benchmark['target']}% target"
                       + (f", closing this gap requires <b>{ucs_needed} more</b> CoCo-attached use cases this quarter."
                          if ucs_needed else "."))
         story.append(Paragraph(
@@ -1111,8 +1083,6 @@ coco_count = len(coco_ucs)
 non_coco_count = len(non_coco)
 coco_pct = round(coco_count * 100.0 / total_ucs, 1) if total_ucs > 0 else 0.0
 non_coco_eacv = non_coco["USE_CASE_EACV"].sum()
-total_eacv = detail["USE_CASE_EACV"].sum()
-coco_eacv = coco_ucs["USE_CASE_EACV"].sum()
 
 _apj_emea_latam = set(APJ_RSI_REGION_MAP) | set(EMEA_RSI_REGION_MAP) | set(LATAM_RSI_REGION_MAP)
 target = 50 if selected_partner in _apj_emea_latam else 75
@@ -1131,7 +1101,7 @@ recipients = st.text_input("Recipients", placeholder="e.g. Sree / Adnan", key="_
 
 if st.button(":material/auto_awesome: Generate Narrative Draft", key="_pse_hybrid_gen_narrative"):
     with st.spinner("Computing benchmark and drafting narrative…"):
-        peer_benchmark = _compute_peer_benchmark(conn, selected_partner, q_start, q_end, total_eacv, coco_eacv)
+        peer_benchmark = _compute_peer_benchmark(conn, selected_partner, q_start, q_end, coco_pct)
         regional_breakdown, max_gap_region = _compute_regional_breakdown(detail, target)
         noam_preview_rows = _group_non_coco_by_region(non_coco)
         # Ground the NoAM ask with a real skill rationale too -- scoped to just
@@ -1195,7 +1165,7 @@ else:
     if st.button(f":material/auto_awesome: Generate Report for {non_coco_count} Use Cases",
                  type="primary", use_container_width=True, key="_pse_hybrid_gen_report"):
         with st.spinner("Computing peer benchmark and regional breakdown…"):
-            peer_benchmark = _compute_peer_benchmark(conn, selected_partner, q_start, q_end, total_eacv, coco_eacv)
+            peer_benchmark = _compute_peer_benchmark(conn, selected_partner, q_start, q_end, coco_pct)
             regional_breakdown, _ = _compute_regional_breakdown(detail, target)
         with st.spinner(f"Mapping CoCo skills and sanitizing descriptions for {non_coco_count} use cases…"):
             gap_rows_by_region = _build_gap_table_rows(conn, non_coco)
