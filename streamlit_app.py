@@ -3,7 +3,7 @@ from utils.queries import get_distinct_partners, get_distinct_subregions
 from utils import PARTNER_GROUPS
 from utils.ask_ai import ask_ai, ask_ai_agent
 from utils.config import get_env
-from datetime import date, timedelta
+from datetime import date
 
 st.set_page_config(
     page_title="CoCo Use Case Intelligence",
@@ -14,6 +14,19 @@ st.set_page_config(
 
 if "conn" not in st.session_state:
     st.session_state.conn = st.connection("snowflake")
+
+# Restricted caller's-rights connection: only way to get the actual VIEWER's
+# CURRENT_USER() on container runtime (the default owner's-rights connection
+# above returns the app OWNER's context in container runtime -- see
+# "Restricted caller's rights and Streamlit in Snowflake" docs). Only
+# supported on container runtime, so this errors out on warehouse runtime
+# (PROD) / local dev -- caught once here since the token is short-lived and
+# must be created at the top of the script, not lazily.
+if "_callers_rights_conn" not in st.session_state:
+    try:
+        st.session_state._callers_rights_conn = st.connection("snowflake-callers-rights")
+    except Exception:
+        st.session_state._callers_rights_conn = None
 
 if "_ui_region" not in st.session_state:
     st.session_state._ui_region = "Global"
@@ -196,14 +209,36 @@ with st.sidebar:
 EXEC_EMAIL_USERS = {"RMAKKENA", "NIRASHAH", "SDOGRA", "PLAKHANPAL"}
 
 
-@st.cache_data(ttl=timedelta(minutes=30))
 def _current_snowflake_user(_conn) -> str:
-    """Snowflake login of the viewer. Empty string if it cannot be determined."""
-    try:
-        df = _conn.query("SELECT CURRENT_USER() AS U", ttl=0)
-        return str(df.iloc[0]["U"]).strip().upper() if len(df) else ""
-    except Exception:
-        return ""
+    """Snowflake login of the viewer. Empty string if it cannot be determined.
+
+    Prefers the restricted caller's-rights connection (st.session_state.
+    _callers_rights_conn) when available, since on container runtime the
+    default owner's-rights connection's CURRENT_USER() returns the app
+    OWNER's context, not the viewer's -- see "Restricted caller's rights and
+    Streamlit in Snowflake" docs. Falls back to `_conn` (owner's rights) for
+    warehouse runtime (PROD) / local dev, where CURRENT_USER() on the regular
+    connection already correctly reflects the viewer and no caller's-rights
+    connection exists.
+
+    Memoized in st.session_state rather than @st.cache_data: container
+    runtime caches are shared across ALL viewer sessions (unlike warehouse
+    runtime, where caching is single-session), and this function's only
+    argument (_conn) is excluded from the cache key by Streamlit's leading-
+    underscore convention. Under @st.cache_data that meant every viewer
+    shared one global cache slot -- whoever loaded the app first got their
+    resolved username cached for everyone else too for the full TTL. Session
+    state is per-viewer-session even in container runtime, so this avoids
+    that leakage entirely.
+    """
+    if "_current_user_upper" not in st.session_state:
+        query_conn = st.session_state.get("_callers_rights_conn") or _conn
+        try:
+            df = query_conn.query("SELECT CURRENT_USER() AS U", ttl=0)
+            st.session_state._current_user_upper = str(df.iloc[0]["U"]).strip().upper() if len(df) else ""
+        except Exception:
+            st.session_state._current_user_upper = ""
+    return st.session_state._current_user_upper
 
 
 _viewer = _current_snowflake_user(st.session_state.conn)

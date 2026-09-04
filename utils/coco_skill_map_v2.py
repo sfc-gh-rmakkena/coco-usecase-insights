@@ -77,7 +77,8 @@ def coco_skill_catalog_prompt_block() -> str:
 _COCO_SKILL_CATALOG_BLOCK = coco_skill_catalog_prompt_block()
 
 
-def build_ai_skill_prompt(desc: str, se_comments: str, deterministic_skills: list, partner_comments: str = "") -> str:
+def build_ai_skill_prompt(desc: str, se_comments: str, deterministic_skills: list, partner_comments: str = "",
+                          name: str = "") -> str:
     """Build the prompt for one use case's AI summary + rationale + additional-
     skills call. The caller (page file) is responsible for actually invoking
     the LLM and passing the raw response to parse_ai_skill_response().
@@ -92,7 +93,11 @@ def build_ai_skill_prompt(desc: str, se_comments: str, deterministic_skills: lis
     would just get truncated away."""
     skills_str = ", ".join(deterministic_skills) if deterministic_skills else "CoCo"
     remaining = max(0, MAX_SKILLS_PER_USE_CASE - len(deterministic_skills))
-    context = f"Use case description:\n{(desc or '')[:1500]}"
+    # The use case NAME is often the single most explicit signal (e.g. a name
+    # like "Semantic Views for X" directly names the CoCo capability needed)
+    # -- the structured TECHNICAL_USE_CASE picklist frequently doesn't capture
+    # this, and the description alone is often too generic. Lead with it.
+    context = f"Use case name:\n{(name or '')[:300]}\n\nUse case description:\n{(desc or '')[:1500]}"
     if se_comments:
         context += (
             f"\n\nInternal SE notes (context only -- may contain sensitive detail):\n"
@@ -116,7 +121,7 @@ def build_ai_skill_prompt(desc: str, se_comments: str, deterministic_skills: lis
         f"the skill(s) [{skills_str}] (plus any additional_skills below) would accelerate THIS engagement.\n"
         f"- \"additional_skills\": a JSON object of AT MOST {remaining} catalog skill names -> one-sentence "
         "reason each, for skills from the catalog above -- beyond the ones already tagged -- that are "
-        "genuinely well-supported by the description, SE notes, or partner notes. Use EXACT skill names from the catalog. "
+        "genuinely well-supported by the use case name, description, SE notes, or partner notes. Use EXACT skill names from the catalog. "
         "Return an empty object {} if no real capacity remains or nothing else clearly applies -- do not "
         "force matches just to fill the quota.\n\n"
         "ALL text fields must be partner-safe: remove dollar amounts, EACV, competitor names, internal "

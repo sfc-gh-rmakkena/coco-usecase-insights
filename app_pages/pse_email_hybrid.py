@@ -174,21 +174,28 @@ _SANITIZE_MAX_WORKERS = 10  # matches the ThreadPoolExecutor pattern in pse-si-q
 _SANITIZE_MAX_TOKENS = 700  # each call answers exactly ONE use case, so this budget is never shared
 
 
-def _sanitize_one(conn, uc_id: str, desc: str, se_comments: str, skills: list, partner_comments: str = ""):
+def _sanitize_one(conn, uc_id: str, desc: str, se_comments: str, skills: list, partner_comments: str = "", name: str = ""):
     """One Cortex COMPLETE call for exactly one use case, returning a
     partner-safe description summary, a rationale for why the skill set
     accelerates THIS engagement, and (validated) additional catalog-grounded
     skills beyond the deterministic set -- all via the shared prompt/parse
     helpers in coco_skill_map_v2 so this stays a single call, fanned out
     concurrently from a ThreadPoolExecutor with its own dedicated max_tokens
-    budget (no batching, no shared budget with any other use case)."""
-    prompt = build_ai_skill_prompt(desc, se_comments, skills, partner_comments)
+    budget (no batching, no shared budget with any other use case).
+
+    `name` (the use case name) is passed to build_ai_skill_prompt so the AI
+    additional-skills layer can ground suggestions in the use case's own
+    title -- often the single most explicit signal (e.g. a name like
+    "Semantic Views for X" directly names the needed CoCo capability), which
+    the deterministic layer never sees since it only maps TECHNICAL_USE_CASE.
+    """
+    prompt = build_ai_skill_prompt(desc, se_comments, skills, partner_comments, name)
     try:
         raw = cortex_complete(conn, "claude-sonnet-4-5", prompt, max_tokens=_SANITIZE_MAX_TOKENS).strip()
         parsed = parse_ai_skill_response(raw)
     except Exception:
         parsed = {"summary": "", "rationale": "", "additional_skills": {}}
-    return (uc_id, desc, se_comments, partner_comments, tuple(skills or []),
+    return (uc_id, desc, se_comments, partner_comments, name, tuple(skills or []),
             parsed["summary"], parsed["rationale"], parsed["additional_skills"])
 
 
@@ -198,46 +205,47 @@ def _sanitize_descriptions_batch(conn, items: list) -> dict:
     case (own max_tokens budget, never shared with another item), fanned out
     CONCURRENTLY via ThreadPoolExecutor so N independent calls don't turn
     into N sequential round-trips. Cached per (description, se_comments,
-    partner_comments, skills) tuple for the session, so regenerating for the
-    same partner needs zero new calls.
+    partner_comments, name, skills) tuple for the session, so regenerating
+    for the same partner needs zero new calls.
 
     items: list of (use_case_id, description, se_comments, partner_comments,
-    skills) tuples.
+    name, skills) tuples.
     Returns {use_case_id: {"summary": ..., "rationale": ..., "additional_skills": {...}}}.
     """
     cache = st.session_state.setdefault("_pse_hybrid_sanitize_cache", {})
     result = {}
-    to_fetch = []  # (uc_id, desc, se_comments, partner_comments, skills_key) still needing an AI call
-    for uc_id, desc, se_comments, partner_comments, skills in items:
+    to_fetch = []  # (uc_id, desc, se_comments, partner_comments, name, skills_key) still needing an AI call
+    for uc_id, desc, se_comments, partner_comments, name, skills in items:
         desc = (desc or "").strip()
         se_comments = (se_comments or "").strip()
         partner_comments = (partner_comments or "").strip()
+        name = (name or "").strip()
         skills_key = tuple(skills or [])
-        cache_key = (desc, se_comments, partner_comments, skills_key)
+        cache_key = (desc, se_comments, partner_comments, name, skills_key)
         if not desc and not se_comments and not partner_comments:
             result[uc_id] = {"summary": "", "rationale": "", "additional_skills": {}}
         elif cache_key in cache:
             result[uc_id] = cache[cache_key]
         else:
-            to_fetch.append((uc_id, desc, se_comments, partner_comments, skills_key))
+            to_fetch.append((uc_id, desc, se_comments, partner_comments, name, skills_key))
 
     if to_fetch:
         with ThreadPoolExecutor(max_workers=min(_SANITIZE_MAX_WORKERS, len(to_fetch))) as pool:
-            futures = [pool.submit(_sanitize_one, conn, uc_id, desc, se_comments, list(skills_key), partner_comments)
-                       for uc_id, desc, se_comments, partner_comments, skills_key in to_fetch]
+            futures = [pool.submit(_sanitize_one, conn, uc_id, desc, se_comments, list(skills_key), partner_comments, name)
+                       for uc_id, desc, se_comments, partner_comments, name, skills_key in to_fetch]
             for future in as_completed(futures):
                 try:
-                    (uc_id, desc, se_comments, partner_comments, skills_key,
+                    (uc_id, desc, se_comments, partner_comments, name, skills_key,
                      summary, rationale, additional_skills) = future.result()
                 except Exception:
                     continue
                 entry = {"summary": summary, "rationale": rationale, "additional_skills": additional_skills}
-                cache[(desc, se_comments, partner_comments, skills_key)] = entry
+                cache[(desc, se_comments, partner_comments, name, skills_key)] = entry
                 result[uc_id] = entry
 
     # Anything that failed outright still gets a defined value so downstream
     # rendering never KeyErrors.
-    for uc_id, _desc, _se, _partner, _skills_key in to_fetch:
+    for uc_id, _desc, _se, _partner, _name, _skills_key in to_fetch:
         result.setdefault(uc_id, {"summary": "", "rationale": "", "additional_skills": {}})
 
     return result
@@ -306,7 +314,7 @@ def _build_gap_table_rows(conn, non_coco_df: pd.DataFrame):
     case already has a better (AIM) answer for."""
     by_region = _group_non_coco_by_region(non_coco_df)
     all_rows = [row for rows in by_region.values() for row in rows]
-    items = [(row["uc_id"], row["raw_desc"], row["raw_se_comments"], row["raw_partner_comments"], row["skills"])
+    items = [(row["uc_id"], row["raw_desc"], row["raw_se_comments"], row["raw_partner_comments"], row["name"], row["skills"])
               for row in all_rows]
     sanitized_map = _sanitize_descriptions_batch(conn, items)
     for row in all_rows:
@@ -992,7 +1000,7 @@ if st.button(":material/auto_awesome: Generate Narrative Draft", key="_pse_hybri
         # cheap even though it's a real AI call (not the fast-only path).
         noam_top = sorted(noam_preview_rows.get("NoAM", []), key=lambda x: x["eacv"], reverse=True)[:4]
         if noam_top:
-            noam_items = [(r["uc_id"], r["raw_desc"], r["raw_se_comments"], r["raw_partner_comments"], r["skills"])
+            noam_items = [(r["uc_id"], r["raw_desc"], r["raw_se_comments"], r["raw_partner_comments"], r["name"], r["skills"])
                           for r in noam_top]
             noam_sanitized = _sanitize_descriptions_batch(conn, noam_items)
             for r in noam_top:
