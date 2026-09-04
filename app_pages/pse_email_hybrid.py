@@ -112,10 +112,15 @@ def _peer_group_for(partner: str):
     return ([], "none", None, 75, "partners")
 
 
-def _compute_peer_benchmark(conn, partner, q_start, q_end, coco_pct):
+def _compute_peer_benchmark(conn, partner, q_start, q_end, coco_pct, bands):
     """Anonymized OKR ranking: where `partner`'s attach rate ranks among its
     peer group (no peer identities disclosed), plus the point-gap to the
-    group's OKR target. Returns None if there is no peer group."""
+    group's OKR target. Returns None if there is no peer group.
+
+    `bands` MUST be the same confidence bands used to compute the partner's
+    own `coco_pct` (via apply_coco_final) -- peers are scored with
+    apply_coco_final too, so both sides of the "rank X of Y" comparison use
+    an identical, consistent definition of CoCo-attached."""
     peers, filter_kind, filter_value, target, group_label = _peer_group_for(partner)
     if not peers:
         return None
@@ -129,7 +134,7 @@ def _compute_peer_benchmark(conn, partner, q_start, q_end, coco_pct):
     if len(conf) == 0:
         return None
     conf = conf.copy()
-    conf["IS_COCO_FINAL"] = apply_coco_final(conf, ["High"])
+    conf["IS_COCO_FINAL"] = apply_coco_final(conf, bands)
     # Canonicalize aliases (e.g. 'IBM Consulting' -> 'IBM', 'Ernst & Young (EY)' -> 'EY')
     # before grouping, otherwise the same company's use cases split across its alias
     # spellings count as two separate "peers" and inflate the group size / skew rank.
@@ -1065,15 +1070,24 @@ if len(detail) == 0:
     st.warning(f"No use cases found for **{selected_partner}** in this date range.")
     st.stop()
 
+bands = (confidence_filter or ["High", "Medium", "Low"]) if include_account_coco else []
 if include_account_coco:
     conf_scores = get_usecase_confidence_scores(conn, selected_partner, q_start, q_end)
     if len(conf_scores) > 0:
-        conf_map = conf_scores[["USE_CASE_ID", "CONFIDENCE_BAND"]].set_index("USE_CASE_ID")
+        conf_map = conf_scores[["USE_CASE_ID", "CONFIDENCE_BAND", "Q2_TOKENS"]].set_index("USE_CASE_ID")
         detail["CONFIDENCE_BAND"] = detail["USE_CASE_ID"].map(conf_map["CONFIDENCE_BAND"])
-        bands = confidence_filter or ["High", "Medium", "Low"]
-        is_flag = detail["COCO_SOURCE"].notna()
-        has_conf = detail["CONFIDENCE_BAND"].isin(bands)
-        detail["IS_COCO_ATTACHED"] = is_flag | has_conf
+        detail["Q2_TOKENS"] = detail["USE_CASE_ID"].map(conf_map["Q2_TOKENS"])
+        # get_okr_coco_adoption's IS_COCO_ATTACHED is already just the raw
+        # uc.IS_COCO flag (see _is_coco_expanded()'s docstring) -- rename it
+        # so apply_coco_final (the SAME function _compute_peer_benchmark uses
+        # to score peers) computes IS_COCO_FINAL here too. This used to be
+        # re-derived via COCO_SOURCE.notna() | CONFIDENCE_BAND.isin(bands), a
+        # DIFFERENT and less rigorous rule (it skipped the partner-comment /
+        # token-consumption validation apply_coco_final does) than what peers
+        # were scored with -- making the partner's own % and the peer group's
+        # % apples-to-oranges in _compute_peer_benchmark's ranking.
+        detail["IS_COCO"] = detail["IS_COCO_ATTACHED"]
+        detail["IS_COCO_ATTACHED"] = apply_coco_final(detail, bands)
 
 non_coco = detail[detail["IS_COCO_ATTACHED"] == False].copy()
 coco_ucs = detail[detail["IS_COCO_ATTACHED"] == True].copy()
@@ -1101,7 +1115,7 @@ recipients = st.text_input("Recipients", placeholder="e.g. Sree / Adnan", key="_
 
 if st.button(":material/auto_awesome: Generate Narrative Draft", key="_pse_hybrid_gen_narrative"):
     with st.spinner("Computing benchmark and drafting narrative…"):
-        peer_benchmark = _compute_peer_benchmark(conn, selected_partner, q_start, q_end, coco_pct)
+        peer_benchmark = _compute_peer_benchmark(conn, selected_partner, q_start, q_end, coco_pct, bands)
         regional_breakdown, max_gap_region = _compute_regional_breakdown(detail, target)
         noam_preview_rows = _group_non_coco_by_region(non_coco)
         # Ground the NoAM ask with a real skill rationale too -- scoped to just
@@ -1165,7 +1179,7 @@ else:
     if st.button(f":material/auto_awesome: Generate Report for {non_coco_count} Use Cases",
                  type="primary", use_container_width=True, key="_pse_hybrid_gen_report"):
         with st.spinner("Computing peer benchmark and regional breakdown…"):
-            peer_benchmark = _compute_peer_benchmark(conn, selected_partner, q_start, q_end, coco_pct)
+            peer_benchmark = _compute_peer_benchmark(conn, selected_partner, q_start, q_end, coco_pct, bands)
             regional_breakdown, _ = _compute_regional_breakdown(detail, target)
         with st.spinner(f"Mapping CoCo skills and sanitizing descriptions for {non_coco_count} use cases…"):
             gap_rows_by_region = _build_gap_table_rows(conn, non_coco)
