@@ -5,11 +5,11 @@ Superset of coco_skill_map.py: re-exports everything from it unchanged (the
 deterministic Technical-Use-Case -> skill mapping, migration detection, peer
 group constants, etc.), then adds an AI-driven catalog-matching layer on top,
 grounded in the real 111-skill CoCo catalog (COCO_SKILLS.md) plus the use
-case's sanitized description and SE_COMMENTS.
+case's sanitized description, SE_COMMENTS, and PARTNER_COMMENTS.
 
 Future email tabs should import from THIS module instead of coco_skill_map
-to get both layers. coco_skill_map.py itself stays untouched so existing
-pages (pse_email.py, pse_email_explained.py) are unaffected.
+to get both layers. coco_skill_map.py itself stays untouched for any other
+consumers of the deterministic base layer.
 """
 import json
 import re
@@ -77,7 +77,7 @@ def coco_skill_catalog_prompt_block() -> str:
 _COCO_SKILL_CATALOG_BLOCK = coco_skill_catalog_prompt_block()
 
 
-def build_ai_skill_prompt(desc: str, se_comments: str, deterministic_skills: list) -> str:
+def build_ai_skill_prompt(desc: str, se_comments: str, deterministic_skills: list, partner_comments: str = "") -> str:
     """Build the prompt for one use case's AI summary + rationale + additional-
     skills call. The caller (page file) is responsible for actually invoking
     the LLM and passing the raw response to parse_ai_skill_response().
@@ -98,6 +98,11 @@ def build_ai_skill_prompt(desc: str, se_comments: str, deterministic_skills: lis
             f"\n\nInternal SE notes (context only -- may contain sensitive detail):\n"
             f"{se_comments[:1500]}"
         )
+    if partner_comments:
+        context += (
+            f"\n\nPartner notes (context only -- may contain sensitive detail):\n"
+            f"{partner_comments[:1500]}"
+        )
     return (
         "You are helping a Partner SE prep a partner-facing update for one Salesforce use case.\n\n"
         "Below is the full catalog of Cortex Code (CoCo) skills available to partners. Skills already "
@@ -111,12 +116,12 @@ def build_ai_skill_prompt(desc: str, se_comments: str, deterministic_skills: lis
         f"the skill(s) [{skills_str}] (plus any additional_skills below) would accelerate THIS engagement.\n"
         f"- \"additional_skills\": a JSON object of AT MOST {remaining} catalog skill names -> one-sentence "
         "reason each, for skills from the catalog above -- beyond the ones already tagged -- that are "
-        "genuinely well-supported by the description or SE notes. Use EXACT skill names from the catalog. "
+        "genuinely well-supported by the description, SE notes, or partner notes. Use EXACT skill names from the catalog. "
         "Return an empty object {} if no real capacity remains or nothing else clearly applies -- do not "
         "force matches just to fill the quota.\n\n"
         "ALL text fields must be partner-safe: remove dollar amounts, EACV, competitor names, internal "
         "people/team names, deal-risk commentary, and anything else sensitive, even if it appears in the "
-        "SE notes below. No markdown, no preamble, JSON only.\n\n" + context
+        "SE or partner notes below. No markdown, no preamble, JSON only.\n\n" + context
     )
 
 
@@ -147,11 +152,10 @@ def parse_ai_skill_response(raw_text: str) -> dict:
 
 def merge_additional_skills(skills: list, reasons: dict, additional_skills: dict):
     """Additive merge only -- never removes or overrides deterministic tags.
-    Preserves order (existing skills first, then newly-appended AI skills)
-    rather than re-sorting alphabetically, since callers rely on list order
-    to reflect priority: Snowflake AIM first (if present), then
-    deterministic Technical-Use-Case matches, then AI-suggested skills
-    last -- see cap_skills(). Returns (new_skills_list, new_reasons_dict)."""
+    Appends newly-suggested AI skills after the existing ones; exact final
+    ordering/truncation is then handled by cap_skills(), which ranks by
+    signal count (reason count) rather than list position, with Snowflake
+    AIM always pinned first. Returns (new_skills_list, new_reasons_dict)."""
     skills = list(skills)
     reasons = dict(reasons)
     for skill, reason in additional_skills.items():
@@ -185,20 +189,35 @@ AIM_SOURCE_PATTERNS = [
     ("SAS",            re.compile(r"\bsas\b", re.I)),
     ("Netezza",        re.compile(r"\bnetezza\b", re.I)),
     ("Informatica",    re.compile(r"\binformatica\b", re.I)),
+    # Not part of the official Migrations Support Matrix -- added because these
+    # are Hadoop/Spark-family legacy platforms AIM can also target. See
+    # utils/AIM_SOURCES.md for details.
+    ("Cloudera",       re.compile(r"\bcloudera\b", re.I)),
+    ("Hortonworks",    re.compile(r"\bhortonworks\b", re.I)),
 ]
 
 
-def detect_aim_source(name: str, tech_uc: str, desc: str, se_comments: str):
+def detect_aim_source(name: str, tech_uc: str, desc: str, se_comments: str, partner_comments: str = ""):
     """Deterministic scan (word-boundary regex, no LLM) for a source system
     explicitly supported by Snowflake AIM. See utils/AIM_SOURCES.md for the
     full source table, matching rules, and known caveats. Returns the
     canonical source name of the FIRST match (by matrix column order), or
     None."""
-    combined = " ".join(str(x or "") for x in (name, tech_uc, desc, se_comments))
+    combined = " ".join(str(x or "") for x in (name, tech_uc, desc, se_comments, partner_comments))
     for canonical_name, pattern in AIM_SOURCE_PATTERNS:
         if pattern.search(combined):
             return canonical_name
     return None
+
+
+# Display-name overrides for the AIM rationale sentence. Cloudera/Hortonworks
+# are Hadoop distros, not a query engine/ETL tool in their own right -- the
+# actual AIM-supported engines underneath them are Spark and Hive, so the
+# rationale should name those rather than the distro/vendor name.
+_AIM_SOURCE_DISPLAY_NAME = {
+    "Cloudera": "Spark/Hive",
+    "Hortonworks": "Spark/Hive",
+}
 
 
 def apply_aim_override(skills: list, reasons: dict, aim_source):
@@ -215,19 +234,30 @@ def apply_aim_override(skills: list, reasons: dict, aim_source):
     skills = [s for s in skills if s not in _GENERIC_MIGRATION_SKILLS and s != AIM_SKILL_NAME]
     reasons = {k: v for k, v in reasons.items() if k not in _GENERIC_MIGRATION_SKILLS}
     skills = [AIM_SKILL_NAME] + skills
-    reasons[AIM_SKILL_NAME] = [f"{h(aim_source)} is a supported source in Snowflake AIM for migration."]
+    display_source = _AIM_SOURCE_DISPLAY_NAME.get(aim_source, aim_source)
+    reasons[AIM_SKILL_NAME] = [f"{h(display_source)} is a supported source in Snowflake AIM for migration."]
     return skills, reasons
 
 
 def cap_skills(skills: list, reasons: dict, max_skills: int = MAX_SKILLS_PER_USE_CASE):
-    """Hard cap on skill chips per use case (relevance over quantity). Keeps
-    the FIRST max_skills entries -- by construction the list is already in
-    priority order: Snowflake AIM first if present, then deterministic
-    Technical-Use-Case matches, then AI-suggested skills last (see
-    merge_additional_skills, which preserves this order rather than
-    sorting). Idempotent -- safe to call repeatedly as the list grows
-    across the pipeline."""
-    kept = skills[:max_skills]
+    """Hard cap on skill chips per use case (relevance over quantity).
+    Snowflake AIM is always kept first if present (it's a single,
+    product-specific recommendation, not competing on signal count). Every
+    other skill is ranked by len(reasons[skill]) -- the number of
+    independent signals that matched it (Tech-UC category hits, migration
+    keyword hits, AI-suggested rationale) -- descending, so a skill matched
+    by 3 different Tech-UC categories outranks one matched by only 1, rather
+    than the two being ordered alphabetically. Ties keep the incoming list
+    order (Python's sort is stable), which is deterministic matches before
+    AI-suggested ones (see merge_additional_skills). Idempotent -- safe to
+    call repeatedly as the list/reasons grow across the pipeline."""
+    aim = [s for s in skills if s == AIM_SKILL_NAME]
+    rest = sorted(
+        (s for s in skills if s != AIM_SKILL_NAME),
+        key=lambda s: len(reasons.get(s, [])),
+        reverse=True,
+    )
+    kept = (aim + rest)[:max_skills]
     kept_set = set(kept)
     return kept, {k: v for k, v in reasons.items() if k in kept_set}
 

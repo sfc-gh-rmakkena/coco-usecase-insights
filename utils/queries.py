@@ -735,6 +735,7 @@ def get_okr_coco_adoption(_conn, quarter_start, quarter_end, region=None, includ
         uc.USE_CASE_NAME,
         mdm.USE_CASE_DESCRIPTION,
         mdm.SE_COMMENTS,
+        mdm.PARTNER_COMMENTS,
         uc.ACCOUNT_NAME,
         uc.USE_CASE_STAGE,
         uc.USE_CASE_EACV,

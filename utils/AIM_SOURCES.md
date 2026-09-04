@@ -12,7 +12,9 @@ Source: `utils/Migrations Support Matrix (go_migrations-matrix).xlsx`'s
 deck. The code list (`AIM_SOURCE_PATTERNS` in `coco_skill_map_v2.py`) is the
 16-source Support Matrix column list, not the narrower 11-source marketing
 slide — this was an explicit choice to match actual tracked capability
-rather than the headline pitch.
+rather than the headline pitch. Two additional sources, **Cloudera** and
+**Hortonworks**, were added on top of the Matrix (see rows 17-18 below)
+since they are Hadoop/Spark-family legacy platforms AIM can also target.
 
 ## Behavior
 
@@ -22,11 +24,18 @@ scans, for each non-CoCo use case:
 - `TECHNICAL_USE_CASE`
 - the raw use case description
 - raw `SE_COMMENTS`
+- raw `PARTNER_COMMENTS`
 
 If any pattern below matches, that use case's skill recommendations are
 overridden: the 4 generic migration skills are stripped, and a single
 `Snowflake AIM` recommendation is inserted first, with the rationale
-`"<Source> is a supported source in Snowflake AIM for migration."` This
+`"<Source> is a supported source in Snowflake AIM for migration."` For
+**Cloudera** and **Hortonworks** specifically, the rationale names the
+underlying engine instead of the distro/vendor: `"Spark/Hive is a supported
+source in Snowflake AIM for migration."` (see `_AIM_SOURCE_DISPLAY_NAME` in
+`coco_skill_map_v2.py`) — the detected `aim_source` value itself is still
+the canonical distro name (`"Cloudera"` / `"Hortonworks"`), only the
+rationale sentence's wording is remapped. This
 override is applied twice in the pipeline (once at the deterministic base,
 once again after the AI additional-skills merge) so an AI suggestion can
 never reintroduce a generic migration skill. See `apply_aim_override()` in
@@ -53,9 +62,11 @@ gets flagged, to keep the rationale sentence to one clean line.
 | 11 | Databricks SQL | `databricks sql` (requires "sql", not bare "databricks") | Thin — engine support only |
 | 12 | Spark SQL | `spark sql` (requires "sql", not bare "spark") | Thin — engine support only |
 | 13 | Sybase IQ | `sybase`, `sybase iq` | Thin — engine support only |
-| 14 | SAS | `sas` | Thin — engine support only (see caveat below) |
+| 14 | SAS | `sas` | **Public Preview** (see caveat below) |
 | 15 | Netezza | `netezza` | Thin — engine support only |
 | 16 | Informatica | `informatica` | ETL tool — Informatica2Dbt / Informatica2Sql conversion |
+| 17 | Cloudera | `cloudera` | Not on the Support Matrix — added because Cloudera CDP/CDH is a Hadoop/Spark-family legacy platform AIM can also target |
+| 18 | Hortonworks | `hortonworks` | Not on the Support Matrix — added because Hortonworks HDP is a Hadoop/Spark-family legacy platform AIM can also target |
 
 Note: SSIS is matched under **SQL Server** (its parent platform), not as a
 separate row, since the Support Matrix groups `SSIS2Dbt` under the ETL/BI
@@ -68,7 +79,8 @@ category but SSIS is SQL Server's own ETL tool.
   words (e.g. `\bhive\b` will not match "archive"), but a use case that
   happens to use "SAS" as an unrelated acronym (e.g. a compliance standard
   or someone's initials) could still false-positive. Accepted tradeoff,
-  since the Support Matrix explicitly tracks SAS as a real source.
+  since SAS is now a Public Preview AIM source (previously thin/engine-only
+  Support Matrix coverage) and DB2/Hive are explicitly tracked sources.
 - **Only the first match wins**: a use case mentioning multiple sources
   only gets flagged for whichever appears first in table order above (e.g.
   Redshift is checked before Teradata, which is checked before Oracle — if
@@ -81,17 +93,26 @@ category but SSIS is SQL Server's own ETL tool.
 - **No re-ranking when multiple sources are relevant** — this is a
   single-source detector by design, for a single clean rationale sentence,
   not a full migration-portfolio classifier.
+- **Cloudera / Hortonworks are not on the official Migrations Support
+  Matrix** — they were added as a business decision because both are
+  Hadoop/Spark-family platforms (Cloudera absorbed Hortonworks in 2019;
+  "CDP"/"CDH"/"HDP" are their respective platform names) and mentioning
+  either should surface Snowflake AIM rather than the generic
+  `spark-migration`/`snowpark-connect` skills. Unlike rows 1-16, there is no
+  Support Matrix capability backing this — if that changes, update the
+  "Matrix coverage notes" column above accordingly.
 
 ## Where this is implemented
 
 - `utils/coco_skill_map_v2.py` — `AIM_SOURCE_PATTERNS`, `detect_aim_source()`,
   `apply_aim_override()`, `cap_skills()`, `prioritize_aim_skill()`.
 - `app_pages/pse_email_hybrid.py` — wires detection into
-  `_group_non_coco_by_region()` (deterministic base) and re-applies the
-  override after the AI additional-skills merge in `_build_gap_table_rows()`
-  and the narrative's NoAM top-4 preview block, plus the Action Plan /
-  narrative rollup logic that keeps the aggregated skill list and rationale
-  consistent with whichever use case is AIM-eligible.
+  `_group_non_coco_by_region()` (deterministic base, now also passing
+  `PARTNER_COMMENTS`) and re-applies the override after the AI
+  additional-skills merge in `_build_gap_table_rows()` and the narrative's
+  NoAM top-4 preview block, plus the Action Plan / narrative rollup logic
+  that keeps the aggregated skill list and rationale consistent with
+  whichever use case is AIM-eligible.
 
 If the Migrations Support Matrix changes (new source added, coverage
 matures), update `AIM_SOURCE_PATTERNS` in `coco_skill_map_v2.py` and this

@@ -219,14 +219,7 @@ if st.session_state.exec_email_allowed:
 # PSE Email — DEV only
 if get_env() == "dev":
     _okr_pages.append(
-        st.Page("app_pages/pse_email.py", title="PSE Email", icon=":material/forward_to_inbox:")
-    )
-    _okr_pages.append(
-        st.Page("app_pages/pse_email_explained.py", title="PSE Email (Explained)",
-                icon=":material/rule:")
-    )
-    _okr_pages.append(
-        st.Page("app_pages/pse_email_hybrid.py", title="PSE Email (Hybrid Layout)",
+        st.Page("app_pages/pse_email_hybrid.py", title="PSE CoCo Use Case Insights",
                 icon=":material/mail:")
     )
 
