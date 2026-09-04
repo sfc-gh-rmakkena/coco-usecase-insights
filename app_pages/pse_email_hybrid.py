@@ -769,7 +769,7 @@ def _pdf_styles():
     styles = getSampleStyleSheet()
     blue = HexColor('#29B5E8')
     dark = HexColor('#1E3A5F')
-    font = 'HeiseiKakuGo-W5'
+    font = 'Helvetica'
     return {
         'title': ParagraphStyle('CustomTitle', parent=styles['Title'], fontName=font,
                                  fontSize=20, textColor=dark, spaceAfter=4, alignment=TA_LEFT),
@@ -792,8 +792,19 @@ def _pdf_styles():
     }
 
 
+_CJK_RE = re.compile(r'[\u3000-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uff00-\uffef]')
+
+
 def _wrap_cell(text, style):
-    return Paragraph(html_lib.escape(str(text if text is not None else "")), style)
+    """Paragraph wrapper that auto-switches to the registered CJK font only
+    when the text actually contains CJK characters (e.g. Japanese account/
+    use-case names) -- everything else renders in the report's normal font
+    (Helvetica, i.e. Arial-equivalent) instead of the CJK font unnecessarily
+    being used for every cell in the document."""
+    text = str(text if text is not None else "")
+    if _CJK_RE.search(text):
+        style = ParagraphStyle(f'{style.name}CJK', parent=style, fontName='HeiseiKakuGo-W5')
+    return Paragraph(html_lib.escape(text), style)
 
 
 def _pdf_table_style(header_color=None):
@@ -839,6 +850,21 @@ def _pdf_stage_badge(stage_label, font):
     return t
 
 
+def _pdf_clean_reason(text: str) -> str:
+    """Reason strings are pre-formatted for the HTML renderer (an "AI-matched
+    from use case notes &rarr; " prefix and &rarr;/<b> markup wrapped around
+    already html-escaped dynamic text). Blindly html-escaping that for the
+    PDF turns the markup into visible literal text ("&rarr;", "<b>"). This
+    strips the repetitive AI-matched prefix (redundant in the PDF -- the
+    skill already has its own chip), drops the <b>/</b> tags, replaces the
+    arrow with a plain dash, then unescapes + re-escapes so any remaining
+    entities render as real characters instead of literal markup."""
+    text = text.replace("AI-matched from use case notes &rarr; ", "")
+    text = text.replace("&rarr;", "-")
+    text = re.sub(r"</?b>", "", text)
+    return html_lib.escape(html_lib.unescape(text))
+
+
 def _pdf_skill_chip_flowables(u, font):
     """List of flowables (chip Table + reason Paragraph, repeated per skill)
     for one Gap-table cell -- the PDF equivalent of the HTML chip/reason
@@ -863,7 +889,7 @@ def _pdf_skill_chip_flowables(u, font):
             ('LEFTPADDING', (0, 0), (0, 0), 4), ('RIGHTPADDING', (0, 0), (0, 0), 4),
         ]))
         flows.append(chip)
-        reason = html_lib.escape("; ".join(u["reasons"].get(s, [])))
+        reason = "; ".join(_pdf_clean_reason(r) for r in u["reasons"].get(s, []))
         flows.append(Paragraph(reason, reason_style))
     return flows
 
@@ -973,9 +999,9 @@ def _build_report_pdf_bytes(partner, q_start, q_end, target, coco_count, total_u
             eacv = u["eacv"]
             eacv_str = f"${eacv/1_000_000:.2f}M" if eacv >= 1_000_000 else f"${eacv/1000:.0f}K"
             gap_data.append([
-                Paragraph(html_lib.escape(u["name"]), cell), Paragraph(html_lib.escape(u["account"]), cell),
+                _wrap_cell(u["name"], cell), _wrap_cell(u["account"], cell),
                 _pdf_stage_badge(u["stage_label"], cell.fontName), Paragraph(eacv_str, cell_c),
-                _pdf_skill_chip_flowables(u, cell.fontName), Paragraph(html_lib.escape(u["sanitized_desc"] or "-"), cell),
+                _pdf_skill_chip_flowables(u, cell.fontName), _wrap_cell(u["sanitized_desc"] or "-", cell),
             ])
         gap_table = Table(gap_data, colWidths=gap_col_widths, repeatRows=1)
         gap_table.setStyle(_pdf_table_style())
