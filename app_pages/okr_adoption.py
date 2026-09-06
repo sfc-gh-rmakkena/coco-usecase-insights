@@ -4,7 +4,12 @@ import plotly.graph_objects as go
 from datetime import datetime, date
 from utils.queries import get_okr_partner_summary, get_okr_stage_breakdown, get_okr_coco_adoption, get_partner_credit_consumption, get_usecase_confidence_scores, get_bulk_confidence_scores, get_coco_final_wow, get_coco_final_trend_4w, get_partner_coco_trend_4w, get_partner_weekly_credits_4w, get_partner_surface_trend_4w
 from utils.ask_ai import build_filter_context, build_credit_wow_context, build_uc_pattern_context
-from utils import resolve_partner_filter, resolve_region_theaters, PARTNER_RENAME_MAP, filter_out_partner_own_accounts, apply_coco_final, new_coco_wow, NEW_COCO_WOW_HELP
+from utils import resolve_partner_filter, resolve_region_theaters, PARTNER_RENAME_MAP, filter_out_partner_own_accounts, apply_coco_final
+try:
+    from utils import new_coco_wow, NEW_COCO_WOW_HELP
+except ImportError:
+    def new_coco_wow(df, **kw): return {"LAST_WK_NEW_COCO": 0, "PRIOR_WK_NEW_COCO": 0, "WOW_PCT": None, "WOW_DELTA": 0, "LAST_WK_START": None, "PRIOR_WK_START": None, "BY_PARTNER": __import__('pandas').DataFrame()}
+    NEW_COCO_WOW_HELP = "Newly created CoCo use cases week-over-week (unavailable on this runtime version)."
 from utils import APJ_RSI_REGION_MAP, EMEA_RSI_REGION_MAP, LATAM_RSI_REGION_MAP, PARTNER_ALIASES as _PA_OKR
 
 # Managed partner universe — same as Adoption Metrics default scope

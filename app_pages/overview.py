@@ -3,6 +3,15 @@ import plotly.express as px
 import plotly.graph_objects as go
 from utils.queries import get_adoption_overview, get_adoption_by_partner, get_adoption_by_stage, get_adoption_by_region, get_by_technical_type, get_by_account_gvp, get_bulk_confidence_scores, get_partner_coco_coverage, get_all_uc_counts, get_all_uc_counts_by_theatre, get_partner_metrics_by_theatre, get_all_uc_counts_by_region, get_partner_metrics_by_region, get_apj_rsi_adoption, get_emea_rsi_adoption, get_latam_rsi_adoption, get_gsi_adoption, get_noam_rsi_adoption, get_coco_final_wow
 from utils import resolve_partner_filter, resolve_region_theaters, filter_out_partner_own_accounts, apply_coco_final
+# NEW_COCO constants — imported lazily below to survive cached-runtime deployments
+try:
+    from utils import (NEW_COCO_WK_COL, NEW_COCO_DELTA_COL,
+                       NEW_COCO_WK_LABEL, NEW_COCO_DELTA_LABEL)
+except ImportError:
+    NEW_COCO_WK_COL    = "NEW_COCO_WK"
+    NEW_COCO_DELTA_COL = "NEW_COCO_DELTA"
+    NEW_COCO_WK_LABEL  = "New CoCo UCs (wk)"
+    NEW_COCO_DELTA_LABEL = "\u0394 vs prior wk"
 from utils.config import get_schema
 from utils import APJ_RSI_REGION_MAP, EMEA_RSI_REGION_MAP, LATAM_RSI_REGION_MAP
 from utils import PARTNER_ALIASES as _PA_EARLY
@@ -417,16 +426,163 @@ c6.metric("CoCo Partner Go-Lives",     f"{_coco_go_lives_pct:.1f}%",
           help="IS_COCO_FINAL Stage 7 as % of total IS_COCO_FINAL UCs — deployment rate within CoCo")
 
 if _snapshot_overall:
+    # ── Transition-based new-CoCo KPI tiles ─────────────────────────────────
+    _newly = {}
+    _newly_err = None
+    try:
+        # Inline query — avoids importing from cached /opt/streamlit-runtime/utils/queries.py
+        from utils.config import get_schema as _get_schema
+        _uc_weekly = f"{_get_schema()}.UC_COCO_STATUS_WEEKLY"
+        _mp_sql = _sql_list(_ALL_MANAGED_PARTNERS)   # same partner scope as rest of dashboard
+        _weeks_df = conn.query(
+            f"SELECT DISTINCT WEEK_START FROM {_uc_weekly} ORDER BY WEEK_START DESC LIMIT 3"
+        )
+        if _weeks_df is not None and len(_weeks_df) >= 2:
+            _lm  = str(_weeks_df.iloc[0]["WEEK_START"])[:10]
+            _pm  = str(_weeks_df.iloc[1]["WEEK_START"])[:10]
+            _p2m = str(_weeks_df.iloc[2]["WEEK_START"])[:10] if len(_weeks_df) >= 3 else None
+            # prior_b requires a baseline snapshot (prev2); without it, force empty
+            _prior_b_cte = f"""
+            prior_b AS (
+                SELECT t.USE_CASE_ID FROM {_uc_weekly} t
+                INNER JOIN {_uc_weekly} p ON t.USE_CASE_ID=p.USE_CASE_ID AND p.WEEK_START='{_p2m}'
+                WHERE t.WEEK_START='{_pm}' AND t.IS_COCO_FINAL=TRUE
+                  AND p.IS_COCO_FINAL=FALSE
+                  AND (t.CREATED_DATE<'{_pm}' OR t.CREATED_DATE IS NULL)
+                  AND t.PARTNER_NAME IN ('{_mp_sql}')
+            ),""" if _p2m else "prior_b AS (SELECT NULL::VARCHAR AS USE_CASE_ID WHERE FALSE),"
+            _nq = f"""
+            WITH
+            last_a AS (
+                SELECT USE_CASE_ID FROM {_uc_weekly}
+                WHERE WEEK_START='{_lm}' AND IS_COCO_FINAL=TRUE
+                  AND CREATED_DATE>='{_lm}' AND CREATED_DATE<=DATEADD('day',6,'{_lm}')
+                  AND PARTNER_NAME IN ('{_mp_sql}')
+            ),
+            last_b AS (
+                SELECT t.USE_CASE_ID FROM {_uc_weekly} t
+                LEFT JOIN {_uc_weekly} p ON t.USE_CASE_ID=p.USE_CASE_ID AND p.WEEK_START='{_pm}'
+                WHERE t.WEEK_START='{_lm}' AND t.IS_COCO_FINAL=TRUE
+                  AND (p.IS_COCO_FINAL=FALSE OR p.IS_COCO_FINAL IS NULL)
+                  AND (t.CREATED_DATE<'{_lm}' OR t.CREATED_DATE IS NULL)
+                  AND t.PARTNER_NAME IN ('{_mp_sql}')
+            ),
+            prior_a AS (
+                SELECT USE_CASE_ID FROM {_uc_weekly}
+                WHERE WEEK_START='{_pm}' AND IS_COCO_FINAL=TRUE
+                  AND CREATED_DATE>='{_pm}' AND CREATED_DATE<=DATEADD('day',6,'{_pm}')
+                  AND PARTNER_NAME IN ('{_mp_sql}')
+            ),
+            {_prior_b_cte}
+            lc AS (SELECT USE_CASE_ID FROM last_a  UNION SELECT USE_CASE_ID FROM last_b),
+            pc AS (SELECT USE_CASE_ID FROM prior_a UNION SELECT USE_CASE_ID FROM prior_b),
+            lt AS (SELECT COUNT(DISTINCT USE_CASE_ID) AS N FROM {_uc_weekly} WHERE WEEK_START='{_lm}' AND PARTNER_NAME IN ('{_mp_sql}')),
+            pt AS (SELECT COUNT(DISTINCT USE_CASE_ID) AS N FROM {_uc_weekly} WHERE WEEK_START='{_pm}' AND PARTNER_NAME IN ('{_mp_sql}'))
+            SELECT
+                (SELECT COUNT(*) FROM lc) AS LAST_WK_NEW_COCO,
+                (SELECT COUNT(*) FROM pc) AS PRIOR_WK_NEW_COCO,
+                (SELECT COUNT(*) FROM last_a) AS LAST_WK_BUCKET_A,
+                (SELECT COUNT(*) FROM last_b) AS LAST_WK_BUCKET_B,
+                (SELECT COUNT(*) FROM prior_a) AS PRIOR_WK_BUCKET_A,
+                (SELECT COUNT(*) FROM prior_b) AS PRIOR_WK_BUCKET_B,
+                (SELECT N FROM lt) AS LAST_WK_TOTAL,
+                (SELECT N FROM pt) AS PRIOR_WK_TOTAL,
+                '{_lm}'::DATE AS LAST_WK_START,
+                '{_pm}'::DATE AS PRIOR_WK_START
+            """
+            _nr = conn.query(_nq)
+            if _nr is not None and len(_nr) > 0:
+                _row = _nr.iloc[0]
+                _lt  = int(_row["LAST_WK_TOTAL"]  or 0)
+                _pt2 = int(_row["PRIOR_WK_TOTAL"] or 0)
+                if _lt > 0 or _pt2 > 0:
+                    _ln = int(_row["LAST_WK_NEW_COCO"]  or 0)
+                    _pn = int(_row["PRIOR_WK_NEW_COCO"] or 0)
+                    _newly = {
+                        "LAST_WK_NEW_COCO":  _ln,
+                        "PRIOR_WK_NEW_COCO": _pn,
+                        "LAST_WK_BUCKET_A":  int(_row["LAST_WK_BUCKET_A"]  or 0),
+                        "LAST_WK_BUCKET_B":  int(_row["LAST_WK_BUCKET_B"]  or 0),
+                        "PRIOR_WK_BUCKET_A": int(_row["PRIOR_WK_BUCKET_A"] or 0),
+                        "PRIOR_WK_BUCKET_B": int(_row["PRIOR_WK_BUCKET_B"] or 0),
+                        "LAST_WK_TOTAL":     _lt,
+                        "PRIOR_WK_TOTAL":    _pt2,
+                        "LAST_WK_START":     str(_row["LAST_WK_START"]),
+                        "PRIOR_WK_START":    str(_row["PRIOR_WK_START"]),
+                        "LAST_WK_COCO_SHARE":  round(_ln * 100.0 / _lt,   1) if _lt   > 0 else None,
+                        "PRIOR_WK_COCO_SHARE": round(_pn * 100.0 / _pt2,  1) if _pt2  > 0 else None,
+                    }
+    except Exception as _e:
+        _newly = {}
+        _newly_err = str(_e)
+    if _newly_err:
+        st.warning(f"DEBUG: {_newly_err}")
+
     n1, n2, n3 = st.columns(3)
-    n1.metric("WoW Δ CoCo UCs", f"{int(_snapshot_overall['WOW_COCO_UCS']):+d}",
-              help="Net change in Q3-scoped CoCo use cases vs the prior weekly snapshot. This matches the Executive Email and partner scorecards.")
-    n2.metric("WoW Δ Total UCs", f"{int(_snapshot_overall['WOW_TOTAL_UCS']):+d}",
-              help="Net change in all Q3-scoped partner use cases vs the prior weekly snapshot.")
-    n3.metric("WoW Δ CoCo %", f"{float(_snapshot_overall['WOW_COCO_PCT']):+.1f}pp",
-              help="Percentage-point change in Q3-scoped CoCo adoption vs the prior weekly snapshot.")
+
+    if _newly:
+        _lw  = _newly["LAST_WK_NEW_COCO"]
+        _pw  = _newly["PRIOR_WK_NEW_COCO"]
+        _a_lw = _newly.get("LAST_WK_BUCKET_A", 0)
+        _b_lw = _newly.get("LAST_WK_BUCKET_B", 0)
+        _wow_pct = round((_lw - _pw) * 100.0 / _pw, 1) if _pw > 0 else None
+        _wow_str = f"{_wow_pct:+.1f}% WoW" if _wow_pct is not None else "—"
+
+        _share_lw = _newly.get("LAST_WK_COCO_SHARE")
+        _share_pw = _newly.get("PRIOR_WK_COCO_SHARE")
+        _share_delta = (
+            f"↑ {_share_pw:.0f}% prior week" if _share_pw is not None else None
+        )
+
+        n1.metric(
+            "New CoCo UCs (last full week)",
+            f"{_lw:,}",
+            _wow_str,
+            help=(
+                f"New CoCo UCs during {_newly['LAST_WK_START']} – "
+                f"two buckets, deduplicated:\n"
+                f"  • {_a_lw} newly created this week with IS_COCO_FINAL=True "
+                f"(AI flag / SE comment + active consumption)\n"
+                f"  • {_b_lw} existing UCs that flipped False→True "
+                f"(consumption crossed High confidence threshold)\n"
+                "IS_COCO_FINAL = (AI flag OR SE comments OR band=High) "
+                "AND NOT (partner comment only AND no tokens AND no band)"
+            ),
+        )
+        n2.metric(
+            "New CoCo UCs (prior week)",
+            f"{_pw:,}",
+            f"{_lw - _pw:+d} UCs",
+            help=(
+                f"Same two-bucket metric for prior week ({_newly['PRIOR_WK_START']}): "
+                f"{_newly.get('PRIOR_WK_BUCKET_A', 0)} newly created + "
+                f"{_newly.get('PRIOR_WK_BUCKET_B', 0)} flipped."
+            ),
+        )
+        if _share_lw is not None:
+            n3.metric(
+                "CoCo New UC%",
+                f"{_share_lw:.0f}%",
+                _share_delta,
+                help=(
+                    "Combined new CoCo UCs (A+B) as % of total UCs in scope. "
+                    "Higher = stronger week-on-week CoCo momentum."
+                ),
+            )
+    else:
+        # Transition data not yet available (runtime loading new code) — show nothing
+        # rather than the misleading +143 WoW Δ which counts all new UCs entering the
+        # Q3 population, not genuine CoCo transitions.
+        n1.metric("New CoCo UCs (last full week)", "—",
+                  help="Transition-based metric loading. Data will appear once the "
+                       "runtime picks up the updated utils/queries.py.")
+        n2.metric("New CoCo UCs (prior week)", "—")
+        n3.metric("CoCo New UC%", "—")
+
     st.caption(
-        f"Weekly snapshot comparison: {_snapshot_overall['WEEK_START']} vs {_snapshot_overall['PREV_WEEK']}. "
-        "These are snapshot deltas, not CREATED_DATE counts."
+        f"Weekly snapshot: {_snapshot_overall.get('WEEK_START', '—')} vs "
+        f"{_snapshot_overall.get('PREV_WEEK', '—')}. "
+        "New CoCo UCs = state transition (False→True), not CREATED_DATE."
     )
 
 st.divider()
@@ -575,6 +731,21 @@ def _build_partner_theatre_from_bulk(bc):
                           grp['TOTAL_PARTNER_UCS'].replace(0, float('nan'))).round(1).fillna(0)
     grp['COCO_GO_LIVE_PCT'] = (grp['DEPLOYED_COCO'] * 100.0 /
                                 grp['COCO_UCS'].replace(0, float('nan'))).round(1).fillna(0)
+    # Transition-based new-CoCo columns — lazy import survives cached-runtime deployments
+    try:
+        import streamlit as _st
+        from utils.queries import get_newly_coco_by_group as _get_ncg_t
+        _ncg = _get_ncg_t(_st.session_state.conn, 'THEATER_NAME')
+        if len(_ncg) > 0 and 'THEATER_NAME' in grp.columns:
+            grp = grp.merge(_ncg, on='THEATER_NAME', how='left')
+            for _c in (NEW_COCO_WK_COL, NEW_COCO_DELTA_COL):
+                grp[_c] = pd.to_numeric(grp[_c], errors='coerce').fillna(0).astype(int)
+        else:
+            grp[NEW_COCO_WK_COL] = 0
+            grp[NEW_COCO_DELTA_COL] = 0
+    except (ImportError, Exception):
+        grp[NEW_COCO_WK_COL] = 0
+        grp[NEW_COCO_DELTA_COL] = 0
     # Token aggregation: IS_COCO_FINAL accounts only, deduped per (theatre, account)
     _tok_cols = ['LAST7_TOKENS', 'PRIOR7_TOKENS']
     if all(c in _bc.columns for c in _tok_cols) and 'ACCOUNT_NAME_UPPER' in _bc.columns:
@@ -594,7 +765,8 @@ def _build_partner_theatre_from_bulk(bc):
 
 
 def _build_partner_region_from_bulk(bc):
-    """Derive per-region partner CoCo metrics from bulk_conf (IS_COCO_FINAL)."""
+    """Derive per-region partner CoCo metrics from bulk_conf (IS_COCO_FINAL). Includes
+    transition-based NEW_COCO_WK / NEW_COCO_DELTA columns from UC_COCO_STATUS_WEEKLY."""
     _bc = bc.copy()
     # LATAM RSI partners must be bucketed as 'LATAM' regardless of their THEATER_NAME
     # (e.g. SEIDOR ANALYTICS has a NoAM theater but is LATAM-scoped)
@@ -620,6 +792,22 @@ def _build_partner_region_from_bulk(bc):
                           grp['TOTAL_PARTNER_UCS'].replace(0, float('nan'))).round(1).fillna(0)
     grp['COCO_GO_LIVE_PCT'] = (grp['DEPLOYED_COCO'] * 100.0 /
                                 grp['COCO_UCS'].replace(0, float('nan'))).round(1).fillna(0)
+    # Transition-based new-CoCo columns — lazy import survives cached-runtime deployments
+    try:
+        import streamlit as _st
+        from utils.queries import get_newly_coco_by_group as _get_ncg_r
+        _ncg = _get_ncg_r(_st.session_state.conn, 'REGION_NAME')
+        if len(_ncg) > 0 and 'REGION' in grp.columns:
+            _ncg = _ncg.rename(columns={'REGION_NAME': 'REGION'})
+            grp = grp.merge(_ncg, on='REGION', how='left')
+            for _c in (NEW_COCO_WK_COL, NEW_COCO_DELTA_COL):
+                grp[_c] = pd.to_numeric(grp[_c], errors='coerce').fillna(0).astype(int)
+        else:
+            grp[NEW_COCO_WK_COL] = 0
+            grp[NEW_COCO_DELTA_COL] = 0
+    except (ImportError, Exception):
+        grp[NEW_COCO_WK_COL] = 0
+        grp[NEW_COCO_DELTA_COL] = 0
     # Token aggregation: IS_COCO_FINAL accounts only, deduped per (region, account)
     _tok_cols = ['LAST7_TOKENS', 'PRIOR7_TOKENS']
     if all(c in _bc.columns for c in _tok_cols) and 'ACCOUNT_NAME_UPPER' in _bc.columns:
@@ -658,7 +846,11 @@ with st.expander(":material/table: Breakdown by Theatre", expanded=True):
     if len(_theatre_mdm) > 0:
         _t = _theatre_mdm.set_index("THEATER_NAME")[["ALL_USE_CASES", "ALL_GO_LIVES"]]
         if len(_theatre_partner) > 0:
-            _tp_cols = ["TOTAL_PARTNER_UCS", "COCO_UCS", "DEPLOYED_ALL", "GO_LIVE_PCT", "DEPLOYED_COCO", "COCO_GO_LIVE_PCT"]
+            _tp_cols = ["TOTAL_PARTNER_UCS", "COCO_UCS"]
+            _t_has_new = all(c in _theatre_partner.columns for c in (NEW_COCO_WK_COL, NEW_COCO_DELTA_COL))
+            if _t_has_new:
+                _tp_cols += [NEW_COCO_WK_COL, NEW_COCO_DELTA_COL]
+            _tp_cols += ["DEPLOYED_ALL", "GO_LIVE_PCT", "DEPLOYED_COCO", "COCO_GO_LIVE_PCT"]
             _t_has_tokens = all(c in _theatre_partner.columns for c in ['LAST7_TOKENS', 'TOKENS_WOW_PCT'])
             if _t_has_tokens:
                 _tp_cols += ['LAST7_TOKENS', 'TOKENS_WOW_PCT']
@@ -672,15 +864,21 @@ with st.expander(":material/table: Breakdown by Theatre", expanded=True):
             _theatre_combined["GO_LIVE_PCT"] = 0.0
             _theatre_combined["DEPLOYED_COCO"] = 0
             _theatre_combined["COCO_GO_LIVE_PCT"] = 0.0
+            _t_has_new = False
             _t_has_tokens = False
-        _theatre_combined.columns = ["Theatre", "Overall UCs", "Go Live UCs",
-                                      "Total Partner UCs", "Partner CoCo UCs", "_dep_all", "_pct_all", "_dep_coco", "_pct_coco"] + (
-                                     ["Last 7d Tokens", "7D Tokens WoW%"] if _t_has_tokens else [])
+        _theatre_combined.columns = (
+            ["Theatre", "Overall UCs", "Go Live UCs", "Total Partner UCs", "Partner CoCo UCs"]
+            + ([NEW_COCO_WK_LABEL, NEW_COCO_DELTA_LABEL] if _t_has_new else [])
+            + ["_dep_all", "_pct_all", "_dep_coco", "_pct_coco"]
+            + (["Last 7d Tokens", "7D Tokens WoW%"] if _t_has_tokens else [])
+        )
         _theatre_combined = _theatre_combined.drop(columns=["Overall UCs", "Go Live UCs"])
         _theatre_combined[["_dep_all", "_dep_coco", "_pct_all", "_pct_coco"]] = \
             _theatre_combined[["_dep_all", "_dep_coco", "_pct_all", "_pct_coco"]].fillna(0)
         _t_total_ucs  = int(_theatre_combined["Total Partner UCs"].sum())
         _t_coco_ucs   = int(_theatre_combined["Partner CoCo UCs"].sum())
+        _t_new_coco   = int(_theatre_combined[NEW_COCO_WK_LABEL].sum()) if _t_has_new else 0
+        _t_new_delta  = int(_theatre_combined[NEW_COCO_DELTA_LABEL].sum()) if _t_has_new else 0
         _t_dep_all    = int(_theatre_combined["_dep_all"].sum())
         _t_dep_coco   = int(_theatre_combined["_dep_coco"].sum())
         _t_pct_all    = _t_dep_all  * 100.0 / _t_total_ucs if _t_total_ucs > 0 else 0.0
@@ -700,6 +898,7 @@ with st.expander(":material/table: Breakdown by Theatre", expanded=True):
             "Theatre": "TOTAL",
             "Total Partner UCs": _t_total_ucs,
             "Partner CoCo UCs": _t_coco_ucs,
+            **({NEW_COCO_WK_LABEL: _t_new_coco, NEW_COCO_DELTA_LABEL: _t_new_delta} if _t_has_new else {}),
             "Total Partner Go-Lives": f"{_t_dep_all} ({_t_pct_all:.1f}%)",
             "CoCo Partner Go-Lives": f"{_t_dep_coco} ({_t_pct_coco:.1f}%)",
             **({
@@ -708,11 +907,21 @@ with st.expander(":material/table: Breakdown by Theatre", expanded=True):
             } if _t_has_tokens else {}),
         }])
         _t_col_cfg = {}
+        if _t_has_new:
+            _t_col_cfg.update({
+                NEW_COCO_WK_LABEL:    st.column_config.NumberColumn(
+                    NEW_COCO_WK_LABEL, format="%d",
+                    help="Use cases that TRANSITIONED into CoCo status this week (False→True). "
+                         "Source: UC_COCO_STATUS_WEEKLY."),
+                NEW_COCO_DELTA_LABEL: st.column_config.NumberColumn(
+                    NEW_COCO_DELTA_LABEL, format="%+d",
+                    help="Newly-CoCo count this week minus prior week."),
+            })
         if _t_has_tokens:
-            _t_col_cfg = {
+            _t_col_cfg.update({
                 "Last 7d Tokens": st.column_config.NumberColumn(format="%d", help="Token usage in last 7 rolling days — IS_COCO_FINAL accounts only"),
                 "7D Tokens WoW%": st.column_config.NumberColumn(format="%+.1f%%", help="Week-over-week % change in tokens (last 7d vs prior 7d)"),
-            }
+            })
         _t_df = pd.concat([_theatre_combined, _theatre_total], ignore_index=True)
         def _t_wow_bg(val):
             if pd.isna(val) or val == 0: return ''
@@ -745,7 +954,11 @@ with st.expander(":material/public: Breakdown by Region", expanded=True):
     if len(_region_mdm) > 0:
         _r = _region_mdm.set_index("REGION")[["ALL_USE_CASES", "ALL_GO_LIVES"]]
         if len(_region_partner) > 0:
-            _rp_cols = ["TOTAL_PARTNER_UCS", "COCO_UCS", "DEPLOYED_ALL", "GO_LIVE_PCT", "DEPLOYED_COCO", "COCO_GO_LIVE_PCT"]
+            _rp_cols = ["TOTAL_PARTNER_UCS", "COCO_UCS"]
+            _r_has_new = all(c in _region_partner.columns for c in (NEW_COCO_WK_COL, NEW_COCO_DELTA_COL))
+            if _r_has_new:
+                _rp_cols += [NEW_COCO_WK_COL, NEW_COCO_DELTA_COL]
+            _rp_cols += ["DEPLOYED_ALL", "GO_LIVE_PCT", "DEPLOYED_COCO", "COCO_GO_LIVE_PCT"]
             _r_has_tokens = all(c in _region_partner.columns for c in ['LAST7_TOKENS', 'TOKENS_WOW_PCT'])
             if _r_has_tokens:
                 _rp_cols += ['LAST7_TOKENS', 'TOKENS_WOW_PCT']
@@ -762,15 +975,21 @@ with st.expander(":material/public: Breakdown by Region", expanded=True):
             _region_combined["GO_LIVE_PCT"] = 0.0
             _region_combined["DEPLOYED_COCO"] = 0
             _region_combined["COCO_GO_LIVE_PCT"] = 0.0
+            _r_has_new    = False
             _r_has_tokens = False
-        _region_combined.columns = ["Region", "Overall UCs", "Go Live UCs",
-                                     "Total Partner UCs", "Partner CoCo UCs", "_dep_all", "_pct_all", "_dep_coco", "_pct_coco"] + (
-                                    ["Last 7d Tokens", "7D Tokens WoW%"] if _r_has_tokens else [])
+        _region_combined.columns = (
+            ["Region", "Overall UCs", "Go Live UCs", "Total Partner UCs", "Partner CoCo UCs"]
+            + ([NEW_COCO_WK_LABEL, NEW_COCO_DELTA_LABEL] if _r_has_new else [])
+            + ["_dep_all", "_pct_all", "_dep_coco", "_pct_coco"]
+            + (["Last 7d Tokens", "7D Tokens WoW%"] if _r_has_tokens else [])
+        )
         _region_combined = _region_combined.drop(columns=["Overall UCs", "Go Live UCs"])
         _region_combined[["_dep_all", "_dep_coco", "_pct_all", "_pct_coco"]] = \
             _region_combined[["_dep_all", "_dep_coco", "_pct_all", "_pct_coco"]].fillna(0)
         _r_total_ucs  = int(_region_combined["Total Partner UCs"].sum())
         _r_coco_ucs   = int(_region_combined["Partner CoCo UCs"].sum())
+        _r_new_coco   = int(_region_combined[NEW_COCO_WK_LABEL].sum()) if _r_has_new else 0
+        _r_new_delta  = int(_region_combined[NEW_COCO_DELTA_LABEL].sum()) if _r_has_new else 0
         _r_dep_all    = int(_region_combined["_dep_all"].sum())
         _r_dep_coco   = int(_region_combined["_dep_coco"].sum())
         _r_pct_all    = _r_dep_all  * 100.0 / _r_total_ucs if _r_total_ucs > 0 else 0.0
@@ -790,6 +1009,7 @@ with st.expander(":material/public: Breakdown by Region", expanded=True):
             "Region": "TOTAL",
             "Total Partner UCs": _r_total_ucs,
             "Partner CoCo UCs": _r_coco_ucs,
+            **({NEW_COCO_WK_LABEL: _r_new_coco, NEW_COCO_DELTA_LABEL: _r_new_delta} if _r_has_new else {}),
             "Total Partner Go-Lives": f"{_r_dep_all} ({_r_pct_all:.1f}%)",
             "CoCo Partner Go-Lives": f"{_r_dep_coco} ({_r_pct_coco:.1f}%)",
             **({
@@ -798,11 +1018,21 @@ with st.expander(":material/public: Breakdown by Region", expanded=True):
             } if _r_has_tokens else {}),
         }])
         _r_col_cfg = {}
+        if _r_has_new:
+            _r_col_cfg.update({
+                NEW_COCO_WK_LABEL:    st.column_config.NumberColumn(
+                    NEW_COCO_WK_LABEL, format="%d",
+                    help="Use cases that TRANSITIONED into CoCo status this week (False→True). "
+                         "Source: UC_COCO_STATUS_WEEKLY."),
+                NEW_COCO_DELTA_LABEL: st.column_config.NumberColumn(
+                    NEW_COCO_DELTA_LABEL, format="%+d",
+                    help="Newly-CoCo count this week minus prior week."),
+            })
         if _r_has_tokens:
-            _r_col_cfg = {
+            _r_col_cfg.update({
                 "Last 7d Tokens": st.column_config.NumberColumn(format="%d", help="Token usage in last 7 rolling days — IS_COCO_FINAL accounts only"),
                 "7D Tokens WoW%": st.column_config.NumberColumn(format="%+.1f%%", help="Week-over-week % change in tokens (last 7d vs prior 7d)"),
-            }
+            })
         _r_df = pd.concat([_region_combined, _region_total], ignore_index=True)
         def _r_wow_bg(val):
             if pd.isna(val) or val == 0: return ''

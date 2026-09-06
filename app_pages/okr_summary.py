@@ -2,7 +2,12 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 from utils.queries import get_partner_coco_coverage, get_okr_stage_breakdown, get_partner_credit_consumption, get_bulk_confidence_scores, get_coco_final_wow
-from utils import apply_coco_final, new_coco_wow, NEW_COCO_WOW_HELP
+from utils import apply_coco_final
+try:
+    from utils import new_coco_wow, NEW_COCO_WOW_HELP
+except ImportError:
+    def new_coco_wow(df, **kw): return {"LAST_WK_NEW_COCO": 0, "PRIOR_WK_NEW_COCO": 0, "WOW_PCT": None, "WOW_DELTA": 0, "LAST_WK_START": None, "PRIOR_WK_START": None, "BY_PARTNER": __import__('pandas').DataFrame()}
+    NEW_COCO_WOW_HELP = "Newly created CoCo use cases week-over-week (unavailable on this runtime version)."
 from utils.cortex_helpers import cortex_complete
 from utils.ask_ai import build_filter_context, build_credit_wow_context, build_uc_pattern_context
 from utils import resolve_partner_filter, resolve_region_theaters, PARTNER_RENAME_MAP, filter_out_partner_own_accounts

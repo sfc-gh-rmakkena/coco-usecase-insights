@@ -26,6 +26,20 @@ entities:
       - environment.yml
       - app_pages/
       - utils/
+  coco_usecase_deep_dive:
+    type: streamlit
+    identifier:
+      name: COCO_USECASE_DEEP_DIVE
+      database: TEMP
+      schema: COCO_USECASE_DEEP_DIVE
+    stage: STREAMLIT
+    query_warehouse: COCO_PARTNER_ADOPTION_WH
+    main_file: streamlit_app.py
+    artifacts:
+      - streamlit_app.py
+      - environment.yml
+      - app_pages/
+      - utils/
   coco_usecase_insights_dev2:
     type: streamlit
     identifier:

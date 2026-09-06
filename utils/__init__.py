@@ -407,12 +407,13 @@ NEW_COCO_DELTA_COL = "NEW_COCO_DELTA"
 NEW_COCO_WK_LABEL = "New CoCo UCs (wk)"
 NEW_COCO_DELTA_LABEL = "Δ vs prior wk"
 NEW_COCO_WK_HELP = (
-    "CoCo use cases CREATED during the last completed Mon-Sun week. Population is "
-    "stages 3-7, so a use case counts only once it has reached Technical/Business "
-    "Validation — new-and-qualified, not all new pipeline."
+    "Use cases that TRANSITIONED into CoCo status during the last completed Mon-Sun "
+    "week — SE/partner comment added, AI feature flag enabled, or account consumption "
+    "crossed the High confidence threshold for the first time. Source: "
+    "UC_COCO_STATUS_WEEKLY snapshot comparison."
 )
 NEW_COCO_DELTA_HELP = (
-    "Change vs the week before: last completed week's new CoCo use cases minus the "
+    "Change vs the week before: last completed week's newly-CoCo use cases minus the "
     "prior week's. Shown as a raw count rather than a percentage because weekly "
     "volumes are small."
 )
@@ -496,6 +497,40 @@ def merge_new_coco(display_df, uc_df, group_col, left_key=None,
 
     right = by_group.rename(columns=dict(zip(keys, lkeys)))
     out = out.merge(right, on=lkeys, how="left")
+    for _c in (NEW_COCO_WK_COL, NEW_COCO_DELTA_COL):
+        out[_c] = pd.to_numeric(out[_c], errors="coerce").fillna(0).astype(int)
+    return out
+
+
+def merge_newly_coco(display_df, conn, group_col, left_key=None):
+    """Attach NEW_COCO_WK / NEW_COCO_DELTA to a display frame using the
+    transition-based UC_COCO_STATUS_WEEKLY snapshot (False→True this week).
+
+    Preferred over merge_new_coco() when the snapshot table has data.
+    Falls back silently to zero-filled columns when the table is empty or
+    the query fails, so callers never need to guard against missing columns.
+
+    group_col: column in UC_COCO_STATUS_WEEKLY to group by
+               ('THEATER_NAME' | 'PARTNER_NAME' | 'REGION_NAME')
+    left_key:  matching column on display_df when it differs from group_col
+    """
+    import pandas as pd
+    from utils.queries import get_newly_coco_by_group
+
+    if display_df is None or len(display_df) == 0:
+        return display_df
+
+    out = display_df.copy()
+    lkey = left_key if left_key is not None else group_col
+
+    by_group = get_newly_coco_by_group(conn, group_col)
+    if len(by_group) == 0 or lkey not in out.columns:
+        out[NEW_COCO_WK_COL]    = 0
+        out[NEW_COCO_DELTA_COL] = 0
+        return out
+
+    right = by_group.rename(columns={group_col: lkey})
+    out = out.merge(right, on=lkey, how="left")
     for _c in (NEW_COCO_WK_COL, NEW_COCO_DELTA_COL):
         out[_c] = pd.to_numeric(out[_c], errors="coerce").fillna(0).astype(int)
     return out

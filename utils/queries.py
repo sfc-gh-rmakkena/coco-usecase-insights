@@ -6,8 +6,9 @@ SCHEMA = get_schema()
 DT_OKR = f"{SCHEMA}.DT_OKR_USE_CASES"
 
 # Q3 FY27 snapshot tables (fresh start Aug 1 2026)
-_OKR_TARGET_TABLE   = f"{SCHEMA}.COCO_OKR_TARGET_WEEKLY_Q3"
-_SNAPSHOT_TABLE     = f"{SCHEMA}.IS_COCO_FINAL_WEEKLY_SNAPSHOT_Q3"
+_OKR_TARGET_TABLE       = f"{SCHEMA}.COCO_OKR_TARGET_WEEKLY_Q3"
+_SNAPSHOT_TABLE         = f"{SCHEMA}.IS_COCO_FINAL_WEEKLY_SNAPSHOT_Q3"
+_UC_COCO_WEEKLY_TABLE   = f"{SCHEMA}.UC_COCO_STATUS_WEEKLY"
 
 def _use_case_base(start_date=None, end_date=None):
     """Generate USE_CASE_BASE CTE.
@@ -2675,3 +2676,378 @@ def get_pc_usecase_counts(_conn):
             df[c] = pd.to_numeric(df[c], errors="coerce")
     return df
 
+
+# ── Transition-based new-CoCo detection (UC_COCO_STATUS_WEEKLY) ──────────────
+# Two buckets:
+#   A – Newly CREATED UCs this week that already qualify as IS_COCO_FINAL=True
+#       (CREATED_DATE in last completed Mon-Sun week)
+#   B – Existing UCs that FLIPPED IS_COCO_FINAL False→True this week
+#       (state transition, not new-creation)
+# Combined = A ∪ B (deduplicated, a UC can only count once)
+# IS_COCO_FINAL mirrors apply_coco_final():
+#   (AI_flag OR SE_comments OR confidence_band='High')
+#   AND NOT (PARTNER_COMMENTS only AND Q2_TOKENS=0 AND band!='High')
+
+def get_newly_coco_counts(_conn):
+    """Two-bucket new-CoCo counts for the last two completed weeks.
+
+    Returns a dict with keys:
+        LAST_WK_NEW_COCO        – combined A+B (deduplicated) last completed week
+        PRIOR_WK_NEW_COCO       – same for the week before
+        LAST_WK_BUCKET_A        – newly created UCs with IS_COCO_FINAL=True (last wk)
+        LAST_WK_BUCKET_B        – existing UCs that flipped False→True (last wk)
+        PRIOR_WK_BUCKET_A       – Bucket A prior week
+        PRIOR_WK_BUCKET_B       – Bucket B prior week
+        LAST_WK_TOTAL           – total UCs in snapshot (last week)
+        PRIOR_WK_TOTAL          – total UCs in snapshot (prior week)
+        LAST_WK_COCO_SHARE      – % of total that are newly CoCo (last wk)
+        PRIOR_WK_COCO_SHARE     – same prior week
+        LAST_WK_START / PRIOR_WK_START – Monday dates
+
+    Returns {} when the table has < 2 distinct WEEK_START values.
+    """
+    try:
+        # Use the two most recent weeks actually in the table — not date arithmetic
+        # from today, which breaks when the table hasn't been refreshed yet this week.
+        weeks_df = _conn.query(
+            f"SELECT DISTINCT WEEK_START FROM {_UC_COCO_WEEKLY_TABLE} ORDER BY WEEK_START DESC LIMIT 3"
+        )
+        if weeks_df is None or len(weeks_df) < 2:
+            return {}
+    except Exception:
+        return {}
+
+    last_monday  = str(weeks_df.iloc[0]["WEEK_START"])[:10]
+    prior_monday = str(weeks_df.iloc[1]["WEEK_START"])[:10]
+    prev2_monday = str(weeks_df.iloc[2]["WEEK_START"])[:10] if len(weeks_df) >= 3 else None
+
+    # For Bucket B prior week we need 3 snapshots; if only 2 exist, prior_wk_b must be empty
+    prior_b_cte = f"""
+    prior_wk_b AS (
+        SELECT t.USE_CASE_ID
+        FROM {_UC_COCO_WEEKLY_TABLE} t
+        INNER JOIN {_UC_COCO_WEEKLY_TABLE} p
+            ON t.USE_CASE_ID = p.USE_CASE_ID AND p.WEEK_START = '{prev2_monday}'
+        WHERE t.WEEK_START    = '{prior_monday}'
+          AND t.IS_COCO_FINAL = TRUE
+          AND p.IS_COCO_FINAL = FALSE
+          AND (t.CREATED_DATE < '{prior_monday}' OR t.CREATED_DATE IS NULL)
+    ),""" if prev2_monday else "prior_wk_b AS (SELECT NULL::VARCHAR AS USE_CASE_ID WHERE FALSE),"
+
+    query = f"""
+    WITH
+    -- ── Bucket A: newly CREATED this week, already IS_COCO_FINAL=True ──────
+    last_wk_a AS (
+        SELECT USE_CASE_ID
+        FROM {_UC_COCO_WEEKLY_TABLE}
+        WHERE WEEK_START    = '{last_monday}'
+          AND IS_COCO_FINAL = TRUE
+          AND CREATED_DATE >= '{last_monday}'
+          AND CREATED_DATE <= DATEADD('day', 6, '{last_monday}')
+    ),
+    prior_wk_a AS (
+        SELECT USE_CASE_ID
+        FROM {_UC_COCO_WEEKLY_TABLE}
+        WHERE WEEK_START    = '{prior_monday}'
+          AND IS_COCO_FINAL = TRUE
+          AND CREATED_DATE >= '{prior_monday}'
+          AND CREATED_DATE <= DATEADD('day', 6, '{prior_monday}')
+    ),
+    -- ── Bucket B: existing UCs that FLIPPED False→True this week ────────────
+    last_wk_b AS (
+        SELECT t.USE_CASE_ID
+        FROM {_UC_COCO_WEEKLY_TABLE} t
+        LEFT JOIN {_UC_COCO_WEEKLY_TABLE} p
+            ON t.USE_CASE_ID = p.USE_CASE_ID AND p.WEEK_START = '{prior_monday}'
+        WHERE t.WEEK_START    = '{last_monday}'
+          AND t.IS_COCO_FINAL = TRUE
+          AND (p.IS_COCO_FINAL = FALSE OR p.IS_COCO_FINAL IS NULL)
+          AND (t.CREATED_DATE < '{last_monday}' OR t.CREATED_DATE IS NULL)
+    ),
+    {prior_b_cte}
+    -- ── Combined A ∪ B (deduplicated) ────────────────────────────────────────
+    last_wk_combined  AS (SELECT USE_CASE_ID FROM last_wk_a  UNION SELECT USE_CASE_ID FROM last_wk_b),
+    prior_wk_combined AS (SELECT USE_CASE_ID FROM prior_wk_a UNION SELECT USE_CASE_ID FROM prior_wk_b),
+    -- ── Totals for CoCo share denominator ────────────────────────────────────
+    last_total  AS (SELECT COUNT(DISTINCT USE_CASE_ID) AS N FROM {_UC_COCO_WEEKLY_TABLE} WHERE WEEK_START = '{last_monday}'),
+    prior_total AS (SELECT COUNT(DISTINCT USE_CASE_ID) AS N FROM {_UC_COCO_WEEKLY_TABLE} WHERE WEEK_START = '{prior_monday}')
+    SELECT
+        (SELECT COUNT(*) FROM last_wk_combined)  AS LAST_WK_NEW_COCO,
+        (SELECT COUNT(*) FROM prior_wk_combined) AS PRIOR_WK_NEW_COCO,
+        (SELECT COUNT(*) FROM last_wk_a)         AS LAST_WK_BUCKET_A,
+        (SELECT COUNT(*) FROM last_wk_b)         AS LAST_WK_BUCKET_B,
+        (SELECT COUNT(*) FROM prior_wk_a)        AS PRIOR_WK_BUCKET_A,
+        (SELECT COUNT(*) FROM prior_wk_b)        AS PRIOR_WK_BUCKET_B,
+        (SELECT N FROM last_total)               AS LAST_WK_TOTAL,
+        (SELECT N FROM prior_total)              AS PRIOR_WK_TOTAL,
+        '{last_monday}'::DATE                    AS LAST_WK_START,
+        '{prior_monday}'::DATE                   AS PRIOR_WK_START
+    """
+    try:
+        df = _conn.query(query)
+        if df is None or len(df) == 0:
+            return {}
+        row         = df.iloc[0]
+        last_new    = int(row["LAST_WK_NEW_COCO"]   or 0)
+        prior_new   = int(row["PRIOR_WK_NEW_COCO"]  or 0)
+        last_total  = int(row["LAST_WK_TOTAL"]  or 0)
+        prior_total = int(row["PRIOR_WK_TOTAL"] or 0)
+        if last_total == 0 and prior_total == 0:
+            return {}
+        return {
+            "LAST_WK_NEW_COCO":    last_new,
+            "PRIOR_WK_NEW_COCO":   prior_new,
+            "LAST_WK_BUCKET_A":    int(row["LAST_WK_BUCKET_A"]  or 0),
+            "LAST_WK_BUCKET_B":    int(row["LAST_WK_BUCKET_B"]  or 0),
+            "PRIOR_WK_BUCKET_A":   int(row["PRIOR_WK_BUCKET_A"] or 0),
+            "PRIOR_WK_BUCKET_B":   int(row["PRIOR_WK_BUCKET_B"] or 0),
+            "LAST_WK_TOTAL":       last_total,
+            "PRIOR_WK_TOTAL":      prior_total,
+            "LAST_WK_START":       str(row["LAST_WK_START"]),
+            "PRIOR_WK_START":      str(row["PRIOR_WK_START"]),
+            "LAST_WK_COCO_SHARE":  round(last_new  * 100.0 / last_total,  1) if last_total  > 0 else None,
+            "PRIOR_WK_COCO_SHARE": round(prior_new * 100.0 / prior_total, 1) if prior_total > 0 else None,
+        }
+    except Exception:
+        return {}
+
+
+def get_newly_coco_by_group(_conn, group_col: str):
+    """Per-group two-bucket newly-CoCo counts for the last completed week.
+
+    Bucket A = newly created UCs with IS_COCO_FINAL=True this week.
+    Bucket B = existing UCs that flipped False→True this week.
+    NEW_COCO_WK  = A + B (deduplicated per group).
+    NEW_COCO_DELTA = last week minus prior week.
+
+    group_col: 'THEATER_NAME' | 'PARTNER_NAME' (must exist in UC_COCO_STATUS_WEEKLY).
+    Returns empty DataFrame on error or insufficient data.
+    """
+    import pandas as pd
+
+    cols = [group_col, "NEW_COCO_WK", "NEW_COCO_DELTA"]
+    if group_col not in ("THEATER_NAME", "PARTNER_NAME", "REGION_NAME"):
+        return pd.DataFrame(columns=cols)
+
+    # Use the two most recent weeks actually in the table
+    try:
+        weeks_df = _conn.query(
+            f"SELECT DISTINCT WEEK_START FROM {_UC_COCO_WEEKLY_TABLE} ORDER BY WEEK_START DESC LIMIT 3"
+        )
+        if weeks_df is None or len(weeks_df) < 2:
+            return pd.DataFrame(columns=cols)
+    except Exception:
+        return pd.DataFrame(columns=cols)
+
+    last_monday  = str(weeks_df.iloc[0]["WEEK_START"])[:10]
+    prior_monday = str(weeks_df.iloc[1]["WEEK_START"])[:10]
+    prev2_monday = str(weeks_df.iloc[2]["WEEK_START"])[:10] if len(weeks_df) >= 3 else None
+    prior_b_join = f"AND p.WEEK_START = '{prev2_monday}'" if prev2_monday else "AND 1=0"
+
+    query = f"""
+    WITH
+    last_wk_a AS (
+        SELECT {group_col}, USE_CASE_ID
+        FROM {_UC_COCO_WEEKLY_TABLE}
+        WHERE WEEK_START = '{last_monday}' AND IS_COCO_FINAL = TRUE
+          AND CREATED_DATE >= '{last_monday}' AND CREATED_DATE <= DATEADD('day',6,'{last_monday}')
+    ),
+    last_wk_b AS (
+        SELECT t.{group_col}, t.USE_CASE_ID
+        FROM {_UC_COCO_WEEKLY_TABLE} t
+        LEFT JOIN {_UC_COCO_WEEKLY_TABLE} p
+            ON t.USE_CASE_ID = p.USE_CASE_ID AND p.WEEK_START = '{prior_monday}'
+        WHERE t.WEEK_START = '{last_monday}' AND t.IS_COCO_FINAL = TRUE
+          AND (p.IS_COCO_FINAL = FALSE OR p.IS_COCO_FINAL IS NULL)
+          AND (t.CREATED_DATE < '{last_monday}' OR t.CREATED_DATE IS NULL)
+    ),
+    last_wk_combined AS (SELECT {group_col}, USE_CASE_ID FROM last_wk_a UNION SELECT {group_col}, USE_CASE_ID FROM last_wk_b),
+    last_agg AS (SELECT {group_col}, COUNT(*) AS NEW_COCO FROM last_wk_combined GROUP BY {group_col}),
+    prior_wk_a AS (
+        SELECT {group_col}, USE_CASE_ID
+        FROM {_UC_COCO_WEEKLY_TABLE}
+        WHERE WEEK_START = '{prior_monday}' AND IS_COCO_FINAL = TRUE
+          AND CREATED_DATE >= '{prior_monday}' AND CREATED_DATE <= DATEADD('day',6,'{prior_monday}')
+    ),
+    prior_wk_b AS (
+        SELECT t.{group_col}, t.USE_CASE_ID
+        FROM {_UC_COCO_WEEKLY_TABLE} t
+        LEFT JOIN {_UC_COCO_WEEKLY_TABLE} p
+            ON t.USE_CASE_ID = p.USE_CASE_ID {prior_b_join}
+        WHERE t.WEEK_START = '{prior_monday}' AND t.IS_COCO_FINAL = TRUE
+          AND (p.IS_COCO_FINAL = FALSE OR p.IS_COCO_FINAL IS NULL)
+          AND (t.CREATED_DATE < '{prior_monday}' OR t.CREATED_DATE IS NULL)
+    ),
+    prior_wk_combined AS (SELECT {group_col}, USE_CASE_ID FROM prior_wk_a UNION SELECT {group_col}, USE_CASE_ID FROM prior_wk_b),
+    prior_agg AS (SELECT {group_col}, COUNT(*) AS NEW_COCO FROM prior_wk_combined GROUP BY {group_col})
+    SELECT
+        COALESCE(l.{group_col}, p.{group_col})          AS {group_col},
+        COALESCE(l.NEW_COCO, 0)                          AS NEW_COCO_WK,
+        COALESCE(l.NEW_COCO, 0) - COALESCE(p.NEW_COCO, 0) AS NEW_COCO_DELTA
+    FROM last_agg l
+    FULL OUTER JOIN prior_agg p USING ({group_col})
+    ORDER BY NEW_COCO_WK DESC
+    """
+    try:
+        df = _conn.query(query)
+        if df is None or len(df) == 0:
+            return pd.DataFrame(columns=cols)
+        for c in ("NEW_COCO_WK", "NEW_COCO_DELTA"):
+            df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0).astype(int)
+        return df[cols]
+    except Exception:
+        return pd.DataFrame(columns=cols)
+
+    """Count UCs that transitioned IS_COCO_FINAL False→True in each of the
+    last two completed Mon-Sun weeks, sourced from UC_COCO_STATUS_WEEKLY.
+
+    Returns a dict:
+        LAST_WK_NEW_COCO   – UCs newly CoCo in the last completed week
+        PRIOR_WK_NEW_COCO  – same for the week before
+        LAST_WK_NEW_TOTAL  – total UCs that entered/changed in last week (all)
+        PRIOR_WK_NEW_TOTAL – same prior week
+        LAST_WK_START      – date of last week Monday
+        PRIOR_WK_START     – date of prior week Monday
+        LAST_WK_COCO_SHARE – % of new UCs that are CoCo (last week)
+        PRIOR_WK_COCO_SHARE – % of new UCs that are CoCo (prior week)
+
+    Returns an empty dict when the snapshot table has fewer than 2 distinct
+    WEEK_START values (not enough data for a comparison).
+    """
+    from datetime import date, timedelta as _td
+    today = date.today()
+    this_monday = today - _td(days=today.weekday())
+    last_monday  = this_monday - _td(days=7)   # Aug 24
+    prior_monday = this_monday - _td(days=14)  # Aug 17
+    prev2_monday = this_monday - _td(days=21)  # Aug 10  (needed for prior-week transition)
+
+    query = f"""
+    WITH
+    -- Transitions: IS_COCO_FINAL False→True between consecutive weeks
+    last_wk_new AS (
+        SELECT t.USE_CASE_ID
+        FROM {_UC_COCO_WEEKLY_TABLE} t
+        LEFT JOIN {_UC_COCO_WEEKLY_TABLE} p
+            ON t.USE_CASE_ID = p.USE_CASE_ID
+           AND p.WEEK_START  = '{prior_monday}'
+        WHERE t.WEEK_START    = '{last_monday}'
+          AND t.IS_COCO_FINAL = TRUE
+          AND (p.IS_COCO_FINAL = FALSE OR p.IS_COCO_FINAL IS NULL)
+    ),
+    prior_wk_new AS (
+        SELECT t.USE_CASE_ID
+        FROM {_UC_COCO_WEEKLY_TABLE} t
+        LEFT JOIN {_UC_COCO_WEEKLY_TABLE} p
+            ON t.USE_CASE_ID = p.USE_CASE_ID
+           AND p.WEEK_START  = '{prev2_monday}'
+        WHERE t.WEEK_START    = '{prior_monday}'
+          AND t.IS_COCO_FINAL = TRUE
+          AND (p.IS_COCO_FINAL = FALSE OR p.IS_COCO_FINAL IS NULL)
+    ),
+    -- Total UCs present each week (for CoCo share denominator)
+    last_wk_total  AS (SELECT COUNT(DISTINCT USE_CASE_ID) AS N FROM {_UC_COCO_WEEKLY_TABLE} WHERE WEEK_START = '{last_monday}'),
+    prior_wk_total AS (SELECT COUNT(DISTINCT USE_CASE_ID) AS N FROM {_UC_COCO_WEEKLY_TABLE} WHERE WEEK_START = '{prior_monday}')
+    SELECT
+        (SELECT COUNT(*) FROM last_wk_new)  AS LAST_WK_NEW_COCO,
+        (SELECT COUNT(*) FROM prior_wk_new) AS PRIOR_WK_NEW_COCO,
+        (SELECT N FROM last_wk_total)       AS LAST_WK_TOTAL,
+        (SELECT N FROM prior_wk_total)      AS PRIOR_WK_TOTAL,
+        '{last_monday}'::DATE               AS LAST_WK_START,
+        '{prior_monday}'::DATE              AS PRIOR_WK_START
+    """
+    try:
+        df = _conn.query(query)
+        if df is None or len(df) == 0:
+            return {}
+        row = df.iloc[0]
+        last_new   = int(row["LAST_WK_NEW_COCO"]  or 0)
+        prior_new  = int(row["PRIOR_WK_NEW_COCO"] or 0)
+        last_total = int(row["LAST_WK_TOTAL"]  or 0)
+        prior_total= int(row["PRIOR_WK_TOTAL"] or 0)
+        # Only return data if we actually have rows in the snapshot for both weeks
+        if last_total == 0 and prior_total == 0:
+            return {}
+        return {
+            "LAST_WK_NEW_COCO":    last_new,
+            "PRIOR_WK_NEW_COCO":   prior_new,
+            "LAST_WK_TOTAL":       last_total,
+            "PRIOR_WK_TOTAL":      prior_total,
+            "LAST_WK_START":       str(row["LAST_WK_START"]),
+            "PRIOR_WK_START":      str(row["PRIOR_WK_START"]),
+            "LAST_WK_COCO_SHARE":  round(last_new  * 100.0 / last_total,  1) if last_total  > 0 else None,
+            "PRIOR_WK_COCO_SHARE": round(prior_new * 100.0 / prior_total, 1) if prior_total > 0 else None,
+        }
+    except Exception:
+        return {}
+
+
+@st.cache_data(ttl=timedelta(hours=1))
+def get_newly_coco_by_group(_conn, group_col: str):
+    """Per-group count of UCs that transitioned IS_COCO_FINAL False→True in
+    the last completed week vs the week before.
+
+    group_col: 'THEATER_NAME' | 'PARTNER_NAME' | 'REGION_NAME' (must exist in
+               UC_COCO_STATUS_WEEKLY).
+
+    Returns a DataFrame with columns [group_col, NEW_COCO_WK, NEW_COCO_DELTA].
+    NEW_COCO_WK   = newly-CoCo count last completed week
+    NEW_COCO_DELTA = last week minus prior week (signed int)
+
+    Returns empty DataFrame if the snapshot table has insufficient data.
+    """
+    import pandas as pd
+    from datetime import date, timedelta as _td
+
+    today = date.today()
+    this_monday  = today - _td(days=today.weekday())
+    last_monday  = this_monday - _td(days=7)
+    prior_monday = this_monday - _td(days=14)
+    prev2_monday = this_monday - _td(days=21)
+
+    cols = [group_col, "NEW_COCO_WK", "NEW_COCO_DELTA"]
+
+    if group_col not in ("THEATER_NAME", "PARTNER_NAME", "REGION_NAME"):
+        return pd.DataFrame(columns=cols)
+
+    query = f"""
+    WITH
+    last_wk_new AS (
+        SELECT t.{group_col}, COUNT(*) AS NEW_COCO
+        FROM {_UC_COCO_WEEKLY_TABLE} t
+        LEFT JOIN {_UC_COCO_WEEKLY_TABLE} p
+            ON t.USE_CASE_ID = p.USE_CASE_ID
+           AND p.WEEK_START  = '{prior_monday}'
+        WHERE t.WEEK_START    = '{last_monday}'
+          AND t.IS_COCO_FINAL = TRUE
+          AND (p.IS_COCO_FINAL = FALSE OR p.IS_COCO_FINAL IS NULL)
+        GROUP BY t.{group_col}
+    ),
+    prior_wk_new AS (
+        SELECT t.{group_col}, COUNT(*) AS NEW_COCO
+        FROM {_UC_COCO_WEEKLY_TABLE} t
+        LEFT JOIN {_UC_COCO_WEEKLY_TABLE} p
+            ON t.USE_CASE_ID = p.USE_CASE_ID
+           AND p.WEEK_START  = '{prev2_monday}'
+        WHERE t.WEEK_START    = '{prior_monday}'
+          AND t.IS_COCO_FINAL = TRUE
+          AND (p.IS_COCO_FINAL = FALSE OR p.IS_COCO_FINAL IS NULL)
+        GROUP BY t.{group_col}
+    )
+    SELECT
+        COALESCE(l.{group_col}, p.{group_col})  AS {group_col},
+        COALESCE(l.NEW_COCO, 0)                  AS NEW_COCO_WK,
+        COALESCE(l.NEW_COCO, 0) - COALESCE(p.NEW_COCO, 0) AS NEW_COCO_DELTA
+    FROM last_wk_new  l
+    FULL OUTER JOIN prior_wk_new p USING ({group_col})
+    ORDER BY NEW_COCO_WK DESC
+    """
+    try:
+        df = _conn.query(query)
+        if df is None or len(df) == 0:
+            return pd.DataFrame(columns=cols)
+        df = df.rename(columns={"NEW_COCO_WK": "NEW_COCO_WK", "NEW_COCO_DELTA": "NEW_COCO_DELTA"})
+        for c in ("NEW_COCO_WK", "NEW_COCO_DELTA"):
+            df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0).astype(int)
+        return df[cols]
+    except Exception:
+        return pd.DataFrame(columns=cols)
