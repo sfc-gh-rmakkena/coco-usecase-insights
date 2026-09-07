@@ -451,12 +451,10 @@ def _build_narrative_draft(conn, partner, recipients, coco_pct, coco_count, tota
         gap = round(peer_benchmark["target"] - coco_pct, 1)
         global_row = next((r for r in regional_breakdown if r["REGION"] == "Global"), None)
         ucs_needed = global_row["GAP"] if global_row else 0
-        rank_str = (f"{partner} ranks {peer_benchmark['rank']} of {peer_benchmark['total_in_group']} "
-                    f"{peer_benchmark['group_label']} on OKR attainment")
         if gap <= 0:
-            peer_line = f"{rank_str} and has already hit the {peer_benchmark['target']}% target — great work keeping pace!"
+            peer_line = f"{partner} has already hit the {peer_benchmark['target']}% target — great work keeping pace!"
         else:
-            peer_line = (f"{rank_str}, sitting {gap} points behind the {peer_benchmark['target']}% target"
+            peer_line = (f"{partner} currently sits {gap} points behind the {peer_benchmark['target']}% target"
                          + (f" — closing this gap requires {ucs_needed} more CoCo-attached use cases this quarter."
                             if ucs_needed else "."))
     # NoAM is the only region PSE can proactively drive, so the narrative
@@ -608,18 +606,15 @@ def _build_report_html(partner, q_start, q_end, target, coco_count, total_ucs, c
         gap = round(peer_benchmark["target"] - coco_pct, 1)
         global_row = next((r for r in regional_breakdown if r["REGION"] == "Global"), None)
         ucs_needed = global_row["GAP"] if global_row else 0
-        rank_str = (f"{_h(partner)} ranks <b>{peer_benchmark['rank']} of {peer_benchmark['total_in_group']}</b> "
-                    f"{_h(peer_benchmark['group_label'])} on OKR attainment")
         if gap <= 0:
-            detail = f"and has already hit the {peer_benchmark['target']}% target &mdash; great work keeping pace!"
+            detail = f"{_h(partner)} has already hit the {peer_benchmark['target']}% target &mdash; great work keeping pace!"
         else:
-            detail = (f", sitting <b>{gap} points</b> behind the {peer_benchmark['target']}% target"
-                      + (f", closing this gap requires <b>{ucs_needed} more</b> CoCo-attached use cases this quarter."
+            detail = (f"{_h(partner)} currently sits <b>{gap} points</b> behind the {peer_benchmark['target']}% target"
+                      + (f" &mdash; closing this gap requires <b>{ucs_needed} more</b> CoCo-attached use cases this quarter."
                          if ucs_needed else "."))
         peer_html = f"""
 <div style="border:1px solid #e5e7eb;border-radius:6px;padding:12px 14px;font-size:12.5px;color:#374151;margin-top:16px;">
-  <b style="color:#0f172a;">OKR ranking (anonymized):</b> {rank_str} {detail}
-  Peer identities are not disclosed.
+  <b style="color:#0f172a;">OKR Target:</b> {detail}
 </div>"""
 
     region_rows_html = ""
@@ -952,16 +947,14 @@ def _build_report_pdf_bytes(partner, q_start, q_end, target, coco_count, total_u
         gap = round(peer_benchmark["target"] - coco_pct, 1)
         global_row = next((r for r in regional_breakdown if r["REGION"] == "Global"), None)
         ucs_needed = global_row["GAP"] if global_row else 0
-        rank_str = (f"{partner} ranks <b>{peer_benchmark['rank']} of {peer_benchmark['total_in_group']}</b> "
-                    f"{peer_benchmark['group_label']} on OKR attainment")
         if gap <= 0:
-            detail = f"and has already hit the {peer_benchmark['target']}% target &mdash; great work keeping pace!"
+            detail = f"{partner} has already hit the {peer_benchmark['target']}% target &mdash; great work keeping pace!"
         else:
-            detail = (f", sitting <b>{gap} points</b> behind the {peer_benchmark['target']}% target"
-                      + (f", closing this gap requires <b>{ucs_needed} more</b> CoCo-attached use cases this quarter."
+            detail = (f"{partner} currently sits <b>{gap} points</b> behind the {peer_benchmark['target']}% target"
+                      + (f" &mdash; closing this gap requires <b>{ucs_needed} more</b> CoCo-attached use cases this quarter."
                          if ucs_needed else "."))
         story.append(Paragraph(
-            f"<b>OKR ranking (anonymized):</b> {rank_str} {detail} Peer identities are not disclosed.",
+            f"<b>OKR Target:</b> {detail}",
             styles['body']))
         story.append(Spacer(1, 0.1 * inch))
 
