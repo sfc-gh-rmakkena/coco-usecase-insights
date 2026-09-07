@@ -13,19 +13,71 @@ Deterministic dict lookup — no LLM call, no drift from the source skill.
 """
 
 import html as html_lib
+import re
 
 from utils import (
     APJ_RSI_REGION_MAP, EMEA_RSI_REGION_MAP, LATAM_RSI_REGION_MAP,
     PARTNER_ALIASES as _PA,
 )
 
+# All named-technology keywords below are unambiguous signals on their own
+# (a bare mention of "teradata" or "hadoop" is never anything OTHER than a
+# migration source). "migrat" is deliberately NOT a bare substring here --
+# see _MIGRATION_CONTEXT_RE below -- because "migrat*" alone is genuinely
+# ambiguous outside a data/platform context (e.g. "staging migration" in a
+# credit-risk/IFRS9 use case means loans moving between risk stages, not a
+# database migration; Santander-Consumer - Risk Analytics Cortex was
+# incorrectly tagged migration-guide this way).
 MIGRATION_KEYWORDS = [
-    "migrat", "hadoop", "dbx", "emr", "spark", "sas replacement",
+    "hadoop", "dbx", "emr", "spark", "sas replacement",
     "databricks replacement", "mysql", "mongodb", "oracle", "teradata",
     "redshift", "sql server", "netezza", "edw", "hana",
 ]
 
 SPARK_KEYWORDS = ["spark", "dbx", "emr", "hadoop", "databricks"]
+
+# "migrat*" only counts as a real migration signal when it appears near a
+# data/platform noun -- this is what distinguishes "migrating our data
+# warehouse to Snowflake" (real) from "staging migration" in a risk/
+# accounting sense (not real). Symmetric (context word can come before or
+# after "migrat*") within a short window so it still catches natural
+# phrasing like "database migration" and "migrating this workload".
+_MIGRATION_CONTEXT_WORDS = (
+    r"database|data\s*warehouse|warehouse|platform|workload"
+    r"|legacy\s*\w*|application|infrastructure|environment|stack|etl|pipeline"
+    r"|schema|table|cluster|on-?prem\w*"
+)
+_MIGRATION_RE = re.compile(
+    rf"\bmigrat\w*\b[\s\w,-]{{0,40}}?\b(?:{_MIGRATION_CONTEXT_WORDS})\b"
+    rf"|\b(?:{_MIGRATION_CONTEXT_WORDS})\b[\s\w,-]{{0,40}}?\bmigrat\w*\b",
+    re.I,
+)
+
+
+def detect_migration(name: str, tech_uc: str, extra_text: str = ""):
+    """Return (is_migration, list_of_signals). `extra_text` (e.g. SE_COMMENTS
+    and/or PARTNER_COMMENTS, concatenated by the caller) widens the keyword
+    scan beyond the structured name/tech_uc fields, since SEs and partners
+    often note the actual legacy platform being replaced in free text that
+    never makes it into the Technical Use Case taxonomy field.
+
+    "migrat*" requires nearby data/platform context (_MIGRATION_RE) rather
+    than a bare substring match, so a generic use of the word outside an
+    IT-migration sense (e.g. credit-risk "staging migration") doesn't
+    falsely trigger migration-guide/Snowflake AIM."""
+    combined = f"{name} {tech_uc} {extra_text}".lower()
+    signals = []
+    for kw in MIGRATION_KEYWORDS:
+        if kw in combined:
+            signals.append(kw)
+    migration_match = _MIGRATION_RE.search(combined)
+    if migration_match:
+        signals.append(migration_match.group(0).strip())
+    if "Analytics: Migrations" in tech_uc:
+        if "Analytics:Migrations" not in signals:
+            signals.append("Analytics:Migrations")
+    return bool(signals), signals
+
 
 TECH_UC_SKILL_MAP = {
     "DE: Ingestion":                                          ["openflow", "snowpipe-streaming", "snowpark-python"],
@@ -49,23 +101,6 @@ TECH_UC_SKILL_MAP = {
     "Platform: Observability":                                 ["workload-performance-analysis", "data-quality"],
     "Platform: Horizon Catalog":                               ["lineage", "data-governance"],
 }
-
-
-def detect_migration(name: str, tech_uc: str, extra_text: str = ""):
-    """Return (is_migration, list_of_signals). `extra_text` (e.g. SE_COMMENTS
-    and/or PARTNER_COMMENTS, concatenated by the caller) widens the keyword
-    scan beyond the structured name/tech_uc fields, since SEs and partners
-    often note the actual legacy platform being replaced in free text that
-    never makes it into the Technical Use Case taxonomy field."""
-    combined = f"{name} {tech_uc} {extra_text}".lower()
-    signals = []
-    for kw in MIGRATION_KEYWORDS:
-        if kw in combined:
-            signals.append(kw)
-    if "Analytics: Migrations" in tech_uc:
-        if "Analytics:Migrations" not in signals:
-            signals.append("Analytics:Migrations")
-    return bool(signals), signals
 
 
 def map_coco_skills(tech_uc: str, is_migration: bool, migration_signals: list) -> list:
