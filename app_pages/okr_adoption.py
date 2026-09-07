@@ -50,6 +50,65 @@ stage_breakdown = get_okr_stage_breakdown(conn, region=region, start_date=q_star
 adoption_wow = get_coco_final_wow(conn)
 credit_data = get_partner_credit_consumption(conn, base_summary['PARTNER_NAME'].tolist(), q_start)
 
+# ── Gross new CoCo UCs per partner from UC_COCO_STATUS_WEEKLY ─────────────
+# Inline SQL — bypasses cached /opt/streamlit-runtime/utils/queries.py
+_gross_new_df = pd.DataFrame()
+_gross_last_wk = "—"
+try:
+    from utils.config import get_schema as _gcfg
+    _uc_wkly = f"{_gcfg()}.UC_COCO_STATUS_WEEKLY"
+    _wks = conn.query(
+        f"SELECT DISTINCT WEEK_START FROM {_uc_wkly} ORDER BY WEEK_START DESC LIMIT 2"
+    )
+    if _wks is not None and len(_wks) >= 2:
+        _lm = str(_wks.iloc[0]["WEEK_START"])[:10]
+        _pm = str(_wks.iloc[1]["WEEK_START"])[:10]
+        _gross_last_wk = _lm
+        _gq = f"""
+        WITH
+        last_a AS (
+            SELECT PARTNER_NAME, USE_CASE_ID FROM {_uc_wkly}
+            WHERE WEEK_START='{_lm}' AND IS_COCO_FINAL=TRUE
+              AND CREATED_DATE>='{_lm}' AND CREATED_DATE<=DATEADD('day',6,'{_lm}')
+        ),
+        last_b AS (
+            SELECT t.PARTNER_NAME, t.USE_CASE_ID FROM {_uc_wkly} t
+            LEFT JOIN {_uc_wkly} p ON t.USE_CASE_ID=p.USE_CASE_ID AND p.WEEK_START='{_pm}'
+            WHERE t.WEEK_START='{_lm}' AND t.IS_COCO_FINAL=TRUE
+              AND (p.IS_COCO_FINAL=FALSE OR p.IS_COCO_FINAL IS NULL)
+              AND (t.CREATED_DATE<'{_lm}' OR t.CREATED_DATE IS NULL)
+        ),
+        prior_a AS (
+            SELECT PARTNER_NAME, USE_CASE_ID FROM {_uc_wkly}
+            WHERE WEEK_START='{_pm}' AND IS_COCO_FINAL=TRUE
+              AND CREATED_DATE>='{_pm}' AND CREATED_DATE<=DATEADD('day',6,'{_pm}')
+        ),
+        prior_b AS (
+            SELECT NULL::VARCHAR AS PARTNER_NAME, NULL::VARCHAR AS USE_CASE_ID WHERE FALSE
+        ),
+        last_combined  AS (SELECT PARTNER_NAME, USE_CASE_ID FROM last_a  UNION SELECT PARTNER_NAME, USE_CASE_ID FROM last_b),
+        prior_combined AS (SELECT PARTNER_NAME, USE_CASE_ID FROM prior_a UNION SELECT PARTNER_NAME, USE_CASE_ID FROM prior_b),
+        last_agg  AS (SELECT PARTNER_NAME, COUNT(*) AS NEW_COCO FROM last_combined  GROUP BY PARTNER_NAME),
+        prior_agg AS (SELECT PARTNER_NAME, COUNT(*) AS NEW_COCO FROM prior_combined GROUP BY PARTNER_NAME)
+        SELECT
+            COALESCE(l.PARTNER_NAME, p.PARTNER_NAME)  AS PARTNER_NAME,
+            COALESCE(l.NEW_COCO, 0)                   AS NEW_GROSS_COCO_UCS,
+            COALESCE(p.NEW_COCO, 0)                   AS NEW_GROSS_COCO_PRIOR
+        FROM last_agg l
+        FULL OUTER JOIN prior_agg p USING (PARTNER_NAME)
+        """
+        _gross_new_df = conn.query(_gq)
+        if _gross_new_df is not None and len(_gross_new_df) > 0:
+            _gross_new_df['PARTNER_NAME'] = _gross_new_df['PARTNER_NAME'].replace(PARTNER_RENAME_MAP)
+            _gross_new_df = _gross_new_df.groupby('PARTNER_NAME', as_index=False).sum()
+            _gross_new_df['NEW_GROSS_COCO_WOW_PCT'] = (
+                (_gross_new_df['NEW_GROSS_COCO_UCS'] - _gross_new_df['NEW_GROSS_COCO_PRIOR'])
+                * 100.0
+                / _gross_new_df['NEW_GROSS_COCO_PRIOR'].replace(0, float('nan'))
+            ).round(1)
+except Exception:
+    _gross_new_df = pd.DataFrame()
+
 if len(base_summary) == 0:
     st.info("No use cases found for the selected date range.")
     st.stop()
@@ -295,25 +354,6 @@ c5.metric("CoCo Use Cases", f"{int(overall_coco)}/{int(overall_total)}", wow_coc
     help=f"Total IS_COCO_FINAL use cases vs total tracked")
 c6.metric("Total EACV", f"${filtered['TOTAL_EACV'].sum()/1_000_000:.1f}M")
 
-if _new_wow['LAST_WK_START'] is not None:
-    _fp = filtered['PARTNER_NAME'].tolist()
-    _bp = _new_wow['BY_PARTNER']
-    _bp = _bp[_bp['PARTNER_NAME'].isin(_fp)] if len(_bp) > 0 else _bp
-    _lw = int(_bp['LAST_WK_NEW_COCO'].sum()) if len(_bp) > 0 else 0
-    _pw = int(_bp['PRIOR_WK_NEW_COCO'].sum()) if len(_bp) > 0 else 0
-    _pc = round((_lw - _pw) * 100.0 / _pw, 1) if _pw > 0 else None
-    n1, n2 = st.columns(2)
-    n1.metric("New CoCo UCs (last full week)", f"{_lw:,}",
-              f"{_pc:+.1f}% WoW" if _pc is not None else "WoW n/a (prior week 0)",
-              help=NEW_COCO_WOW_HELP)
-    n2.metric("New CoCo UCs (prior week)", f"{_pw:,}", f"{_lw - _pw:+d} UCs")
-    st.caption(
-        f"New-use-case weeks compared: {_new_wow['LAST_WK_START']} vs {_new_wow['PRIOR_WK_START']} "
-        "(completed Mon-Sun weeks, counted by CREATED_DATE). Scoped to the partners tracked on "
-        "this page, so counts can differ from Adoption Metrics, which uses the managed-partner "
-        "slice. Counts new use cases already at Stage 3+; volumes are small, so read counts with the %."
-    )
-
 st.divider()
 
 # --- Stage Breakdown (from Coverage page) ---
@@ -424,17 +464,44 @@ else:
     display_df['WOW_COCO_PCT'] = None
     display_df['WOW_COCO_UCS'] = None
 
+# Merge gross new CoCo UCs from UC_COCO_STATUS_WEEKLY
+if len(_gross_new_df) > 0:
+    display_df = display_df.merge(
+        _gross_new_df[['PARTNER_NAME', 'NEW_GROSS_COCO_UCS', 'NEW_GROSS_COCO_WOW_PCT']],
+        on='PARTNER_NAME', how='left'
+    )
+    display_df['NEW_GROSS_COCO_UCS'] = display_df['NEW_GROSS_COCO_UCS'].fillna(0).astype(int)
+else:
+    display_df['NEW_GROSS_COCO_UCS']     = None
+    display_df['NEW_GROSS_COCO_WOW_PCT'] = None
+
 # Merge Q2 Credits / Tokens (Coverage page approach)
 _display_cols = ['PARTNER_NAME', 'TOTAL_USE_CASES', 'COCO_USE_CASES', 'COCO_PCT', 'WOW_COCO_PCT', 'WOW_COCO_UCS',
-                 'LAST_WK_NEW_COCO', 'NEW_COCO_WOW_PCT',
+                 'NEW_GROSS_COCO_UCS', 'NEW_GROSS_COCO_WOW_PCT',
                  'NON_COCO_USE_CASES', 'TOTAL_EACV', 'COCO_EACV', 'SE_COMMENTS', 'PSE_COMMENTS', 'FEATURE_FLAG']
 _col_cfg = {
     'PARTNER_NAME':      st.column_config.TextColumn("Partner", width="medium"),
     'TOTAL_USE_CASES':   st.column_config.NumberColumn("Total UCs", format="%d"),
     'COCO_USE_CASES':    st.column_config.NumberColumn("CoCo UCs", format="%d"),
     'COCO_PCT':          st.column_config.ProgressColumn("CoCo %", min_value=0, max_value=100, format="%.1f%%"),
-    'WOW_COCO_PCT':      st.column_config.NumberColumn("WoW Δ%", format="%+.1f%%", help="Week-over-week change in CoCo adoption %"),
-    'WOW_COCO_UCS':      st.column_config.NumberColumn("WoW Δ UCs", format="%+d", help="Week-over-week change in CoCo use case count"),
+    'WOW_COCO_PCT':      st.column_config.NumberColumn("WoW CoCo Δ%", format="%+.1f%%", help="Week-over-week change in CoCo adoption %"),
+    'WOW_COCO_UCS':      st.column_config.NumberColumn("WoW Δ CoCo UCs", format="%+d", help="Week-over-week change in CoCo use case count"),
+    'NEW_GROSS_COCO_UCS': st.column_config.NumberColumn(
+        "New Gross CoCo UCs",
+        format="%d",
+        help=(
+            f"UCs newly qualifying as CoCo in the week of {_gross_last_wk} "
+            "(source: UC_COCO_STATUS_WEEKLY). "
+            "Bucket A: UCs created that week with IS_COCO_FINAL=True. "
+            "Bucket B: existing UCs that flipped IS_COCO_FINAL False→True. "
+            "All partners — filter by managed partner list for comparison."
+        ),
+    ),
+    'NEW_GROSS_COCO_WOW_PCT': st.column_config.NumberColumn(
+        "New Gross CoCo WoW%",
+        format="%+.1f%%",
+        help="Week-over-week % change in gross new CoCo UCs. Blank when prior week = 0.",
+    ),
     'LAST_WK_NEW_COCO':  st.column_config.NumberColumn("New CoCo UCs", format="%d", help="CoCo use cases created during the last completed Mon-Sun week"),
     'NEW_COCO_WOW_PCT':  st.column_config.NumberColumn("New CoCo WoW%", format="%+.1f%%", help=NEW_COCO_WOW_HELP),
     'NON_COCO_USE_CASES':st.column_config.NumberColumn("Non-CoCo", format="%d"),
@@ -573,12 +640,14 @@ if selected_partner:
             conf_scores = get_usecase_confidence_scores(conn, selected_partner, q_start, q_end)
             if len(conf_scores) > 0:
                 partner_detail = partner_detail.copy()
-                conf_map = conf_scores[['USE_CASE_ID', 'CONFIDENCE_BAND']].set_index('USE_CASE_ID')
+                conf_map = conf_scores[['USE_CASE_ID', 'CONFIDENCE_BAND', 'Q2_TOKENS']].set_index('USE_CASE_ID')
                 partner_detail['CONFIDENCE_BAND'] = partner_detail['USE_CASE_ID'].map(conf_map['CONFIDENCE_BAND'])
+                partner_detail['Q2_TOKENS'] = partner_detail['USE_CASE_ID'].map(conf_map['Q2_TOKENS']).fillna(0)
+                partner_detail['IS_COCO'] = partner_detail['IS_COCO_ATTACHED']  # pre-override value = raw IS_COCO
                 bands = confidence_filter if confidence_filter else ['High', 'Medium', 'Low']
-                is_flag = partner_detail['COCO_SOURCE'].notna()
-                has_conf = partner_detail['CONFIDENCE_BAND'].isin(bands)
-                partner_detail['IS_COCO_ATTACHED'] = is_flag | has_conf
+                # Use apply_coco_final so PSE Comment UCs without measured token consumption
+                # are excluded — same rule as the scorecard tile (p_stats['COCO_USE_CASES'])
+                partner_detail['IS_COCO_ATTACHED'] = apply_coco_final(partner_detail, bands)
 
                 def _rebuild_flags(row):
                     parts = []
