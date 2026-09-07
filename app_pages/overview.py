@@ -36,6 +36,22 @@ def _sql_list(values):
     return "','".join(str(v).replace("'", "''") for v in sorted(set(values)))
 
 
+def _new_coco_geo_filter_sql(alias=''):
+    """SQL geo filter for UC_COCO_STATUS_WEEKLY (no REGION_NAME column).
+    NOAM RSI: theater-restricted. APJ/EMEA/LATAM: partner-name scoped only.
+    alias: table alias prefix e.g. 't' → 't.PARTNER_NAME'. Pass '' for unaliased CTEs."""
+    p  = f"{alias}.PARTNER_NAME"  if alias else "PARTNER_NAME"
+    th = f"{alias}.THEATER_NAME"  if alias else "THEATER_NAME"
+    _noam_th = "'AMSExpansion','USMajors','AMSAcquisition','USPubSec'"
+    _apj_latam_emea = _APJ_RSI_PARTNER_NAMES | _EMEA_RSI_PARTNER_NAMES | _LATAM_RSI_PARTNER_NAMES
+    parts = [
+        f"{p} IN ('{_sql_list(_GSI_PARTNER_NAMES)}')",                                    # GSI: global
+        f"({p} IN ('{_sql_list(_NOAM_RSI_PARTNER_NAMES)}') AND {th} IN ({_noam_th}))",    # NOAM RSI: NOAM theaters only
+        f"{p} IN ('{_sql_list(_apj_latam_emea)}')",                                        # APJ/EMEA/LATAM: partner-scoped
+    ]
+    return "(\n                  " + "\n                  OR ".join(parts) + "\n                )"
+
+
 @st.cache_data(ttl=30 * 60)
 def _get_gsi_noam_snapshot_trend(_conn, gsi_names, noam_names):
     """Weekly GSI/NOAM adoption trend from the Q3 snapshot table.
@@ -433,7 +449,8 @@ if _snapshot_overall:
         # Inline query — avoids importing from cached /opt/streamlit-runtime/utils/queries.py
         from utils.config import get_schema as _get_schema
         _uc_weekly = f"{_get_schema()}.UC_COCO_STATUS_WEEKLY"
-        _mp_sql = _sql_list(_ALL_MANAGED_PARTNERS)   # same partner scope as rest of dashboard
+        _geo_bare = _new_coco_geo_filter_sql('')   # no alias — for direct table CTEs
+        _geo_t    = _new_coco_geo_filter_sql('t')  # t. alias — for joined CTEs
         _weeks_df = conn.query(
             f"SELECT DISTINCT WEEK_START FROM {_uc_weekly} ORDER BY WEEK_START DESC LIMIT 3"
         )
@@ -449,7 +466,7 @@ if _snapshot_overall:
                 WHERE t.WEEK_START='{_pm}' AND t.IS_COCO_FINAL=TRUE
                   AND p.IS_COCO_FINAL=FALSE
                   AND (t.CREATED_DATE<'{_pm}' OR t.CREATED_DATE IS NULL)
-                  AND t.PARTNER_NAME IN ('{_mp_sql}')
+                  AND {_geo_t}
             ),""" if _p2m else "prior_b AS (SELECT NULL::VARCHAR AS USE_CASE_ID WHERE FALSE),"
             _nq = f"""
             WITH
@@ -457,7 +474,7 @@ if _snapshot_overall:
                 SELECT USE_CASE_ID FROM {_uc_weekly}
                 WHERE WEEK_START='{_lm}' AND IS_COCO_FINAL=TRUE
                   AND CREATED_DATE>='{_lm}' AND CREATED_DATE<=DATEADD('day',6,'{_lm}')
-                  AND PARTNER_NAME IN ('{_mp_sql}')
+                  AND {_geo_bare}
             ),
             last_b AS (
                 SELECT t.USE_CASE_ID FROM {_uc_weekly} t
@@ -465,19 +482,19 @@ if _snapshot_overall:
                 WHERE t.WEEK_START='{_lm}' AND t.IS_COCO_FINAL=TRUE
                   AND (p.IS_COCO_FINAL=FALSE OR p.IS_COCO_FINAL IS NULL)
                   AND (t.CREATED_DATE<'{_lm}' OR t.CREATED_DATE IS NULL)
-                  AND t.PARTNER_NAME IN ('{_mp_sql}')
+                  AND {_geo_t}
             ),
             prior_a AS (
                 SELECT USE_CASE_ID FROM {_uc_weekly}
                 WHERE WEEK_START='{_pm}' AND IS_COCO_FINAL=TRUE
                   AND CREATED_DATE>='{_pm}' AND CREATED_DATE<=DATEADD('day',6,'{_pm}')
-                  AND PARTNER_NAME IN ('{_mp_sql}')
+                  AND {_geo_bare}
             ),
             {_prior_b_cte}
             lc AS (SELECT USE_CASE_ID FROM last_a  UNION SELECT USE_CASE_ID FROM last_b),
             pc AS (SELECT USE_CASE_ID FROM prior_a UNION SELECT USE_CASE_ID FROM prior_b),
-            lt AS (SELECT COUNT(DISTINCT USE_CASE_ID) AS N FROM {_uc_weekly} WHERE WEEK_START='{_lm}' AND PARTNER_NAME IN ('{_mp_sql}')),
-            pt AS (SELECT COUNT(DISTINCT USE_CASE_ID) AS N FROM {_uc_weekly} WHERE WEEK_START='{_pm}' AND PARTNER_NAME IN ('{_mp_sql}'))
+            lt AS (SELECT COUNT(DISTINCT USE_CASE_ID) AS N FROM {_uc_weekly} WHERE WEEK_START='{_lm}' AND {_geo_bare}),
+            pt AS (SELECT COUNT(DISTINCT USE_CASE_ID) AS N FROM {_uc_weekly} WHERE WEEK_START='{_pm}' AND {_geo_bare})
             SELECT
                 (SELECT COUNT(*) FROM lc) AS LAST_WK_NEW_COCO,
                 (SELECT COUNT(*) FROM pc) AS PRIOR_WK_NEW_COCO,

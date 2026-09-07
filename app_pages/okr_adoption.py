@@ -54,9 +54,27 @@ credit_data = get_partner_credit_consumption(conn, base_summary['PARTNER_NAME'].
 # Inline SQL — bypasses cached /opt/streamlit-runtime/utils/queries.py
 _gross_new_df = pd.DataFrame()
 _gross_last_wk = "—"
+
+def _okr_geo_filter_sql(alias=''):
+    """SQL geo filter for UC_COCO_STATUS_WEEKLY (no REGION_NAME column).
+    NOAM RSI: theater-restricted. APJ/EMEA/LATAM: partner-name scoped only."""
+    p  = f"{alias}.PARTNER_NAME"  if alias else "PARTNER_NAME"
+    th = f"{alias}.THEATER_NAME"  if alias else "THEATER_NAME"
+    _noam_th = "'AMSExpansion','USMajors','AMSAcquisition','USPubSec'"
+    def _sl(vals): return "','".join(str(v).replace("'","''") for v in sorted(set(vals)))
+    _apj_latam_emea = set(APJ_RSI_REGION_MAP.keys()) | set(EMEA_RSI_REGION_MAP.keys()) | set(LATAM_RSI_REGION_MAP.keys())
+    parts = [
+        f"{p} IN ('{_sl(_GSI_OKR)}')",
+        f"({p} IN ('{_sl(_NOAM_OKR)}') AND {th} IN ({_noam_th}))",
+        f"{p} IN ('{_sl(_apj_latam_emea)}')",
+    ]
+    return "(\n              " + "\n              OR ".join(parts) + "\n            )"
+
 try:
     from utils.config import get_schema as _gcfg
     _uc_wkly = f"{_gcfg()}.UC_COCO_STATUS_WEEKLY"
+    _geo_bare = _okr_geo_filter_sql('')
+    _geo_t    = _okr_geo_filter_sql('t')
     _wks = conn.query(
         f"SELECT DISTINCT WEEK_START FROM {_uc_wkly} ORDER BY WEEK_START DESC LIMIT 2"
     )
@@ -70,6 +88,7 @@ try:
             SELECT PARTNER_NAME, USE_CASE_ID FROM {_uc_wkly}
             WHERE WEEK_START='{_lm}' AND IS_COCO_FINAL=TRUE
               AND CREATED_DATE>='{_lm}' AND CREATED_DATE<=DATEADD('day',6,'{_lm}')
+              AND {_geo_bare}
         ),
         last_b AS (
             SELECT t.PARTNER_NAME, t.USE_CASE_ID FROM {_uc_wkly} t
@@ -77,11 +96,13 @@ try:
             WHERE t.WEEK_START='{_lm}' AND t.IS_COCO_FINAL=TRUE
               AND (p.IS_COCO_FINAL=FALSE OR p.IS_COCO_FINAL IS NULL)
               AND (t.CREATED_DATE<'{_lm}' OR t.CREATED_DATE IS NULL)
+              AND {_geo_t}
         ),
         prior_a AS (
             SELECT PARTNER_NAME, USE_CASE_ID FROM {_uc_wkly}
             WHERE WEEK_START='{_pm}' AND IS_COCO_FINAL=TRUE
               AND CREATED_DATE>='{_pm}' AND CREATED_DATE<=DATEADD('day',6,'{_pm}')
+              AND {_geo_bare}
         ),
         prior_b AS (
             SELECT NULL::VARCHAR AS PARTNER_NAME, NULL::VARCHAR AS USE_CASE_ID WHERE FALSE
