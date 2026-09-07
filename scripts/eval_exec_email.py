@@ -363,8 +363,7 @@ def check_cross_table(text):
 
 
 def check_notable_wins(text):
-    """Notable Wins section: 1-4 bullets (groups without a win are omitted),
-    correct format, and ONLY Stage 7/6/4 use cases mentioned."""
+    """Validate deterministic, last-completed-week stage advancements."""
     out = []
     m = re.search(r"##\s*NOTABLE WINS(.*?)(?=\n##\s|$)", text, re.DOTALL | re.IGNORECASE)
     if not m:
@@ -374,8 +373,9 @@ def check_notable_wins(text):
     section = m.group(1)
     bullets  = [l.strip() for l in section.splitlines() if l.strip().startswith("-")]
 
-    out.append(("NOTABLE_WINS", "at least 1 win bullet present",
-                len(bullets) >= 1, f"found {len(bullets)} bullets"))
+    no_moves = bool(re.search(r"no qualifying managed-partner stage advances", section, re.IGNORECASE))
+    out.append(("NOTABLE_WINS", "1-4 win bullets, or explicit no-movement statement",
+                no_moves or 1 <= len(bullets) <= 4, f"found {len(bullets)} bullets"))
 
     # No "No notable win" placeholders allowed — groups should be omitted instead
     for b in bullets:
@@ -392,24 +392,25 @@ def check_notable_wins(text):
                     has_bold and has_anchor,
                     "expected '**Partner**... CoCo at Account'"))
 
-    # Stage check: only Stage 7 Deployed or Stage 4 Won may appear — no other stages
-    _FORBIDDEN_STAGES = re.compile(
-        r"stage\s*[35]\b|implementation\s+in\s+progress"
-        r"|tech(?:nical)?[/ ]+biz|validation|in\s+progress",
-        re.IGNORECASE,
-    )
+        has_transition = bool(re.search(r"from\s+stage\s*\d+\s+to\s+stage\s*(?:4|6|7)\b", b, re.IGNORECASE))
+        has_week = "last completed week" in b.lower()
+        has_date = bool(re.search(r"\b20\d{2}-\d{2}-\d{2}\b", b))
+        out.append(("NOTABLE_WINS", f"verified weekly transition: {b[:60]}",
+                    has_transition and has_week and has_date,
+                    "expected previous stage, destination stage, movement date, and last-completed-week basis"))
+
+    # The previous stage may be 3 or 5; validate only the movement destination.
     _ALLOWED_STAGES = re.compile(
-        r"stage\s*7|deployed|stage\s*6|implementation\s+complete|stage\s*4|won|migration\s+plan|no\s+notable\s+win",
+        r"to\s+stage\s*(?:4|6|7)\b",
         re.IGNORECASE,
     )
     for b in bullets:
         if re.search(r"no\s+notable\s+win", b, re.IGNORECASE):
             continue  # placeholder bullet — no stage to check
-        has_forbidden = bool(_FORBIDDEN_STAGES.search(b))
         has_allowed   = bool(_ALLOWED_STAGES.search(b))
-        out.append(("NOTABLE_WINS", f"only Deployed/Won stage in bullet: {b[:60]}",
-                    has_allowed and not has_forbidden,
-                    "bullet references a non-Deployed/Won stage (only Stage 7 or Stage 4 allowed)"))
+        out.append(("NOTABLE_WINS", f"qualifying destination stage in bullet: {b[:60]}",
+                    has_allowed,
+                    "destination must be Stage 4, Stage 6, or Stage 7"))
 
     return out
 

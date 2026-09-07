@@ -15,6 +15,7 @@ from utils.queries import (
     get_coco_uc_weekly_counts,
     get_partners_at_target_trend_4w, save_okr_target_count,
     get_partner_velocity_data, get_account_coco_credits,
+    get_stage_advancements,
 )
 from utils.cortex_helpers import cortex_complete
 from utils import APJ_RSI_REGION_MAP, EMEA_RSI_REGION_MAP, LATAM_RSI_REGION_MAP, PARTNER_ALIASES as _PA_EMAIL, apply_coco_final
@@ -1393,6 +1394,24 @@ def _ensure_wow_summary_bullet(email_text, wow_coco_ucs, wow_total_ucs, wow_coco
 
     return f"## EXECUTIVE SUMMARY\n{bullet}\n\n{email_text}"
 
+
+def _replace_notable_wins(email_text, notable_wins_text):
+    """Use deterministic, movement-verified wins instead of model-authored claims."""
+    import re
+
+    pattern = r"##\s*(?:\*\*)?NOTABLE WINS(?:\*\*)?[^\n]*\n.*?(?=\n##\s|\Z)"
+    replacement = notable_wins_text.strip()
+    if re.search(pattern, email_text, flags=re.IGNORECASE | re.DOTALL):
+        return re.sub(pattern, replacement, email_text, count=1, flags=re.IGNORECASE | re.DOTALL)
+
+    next_section = re.search(
+        r"\n##\s*(?:\*\*)?OKR PROGRESS", email_text, flags=re.IGNORECASE
+    )
+    if next_section:
+        idx = next_section.start()
+        return f"{email_text[:idx]}\n\n{replacement}{email_text[idx:]}"
+    return f"{email_text.rstrip()}\n\n{replacement}"
+
 _gsi_partners_df   = _group_partners('GSI')
 _noam_partners_df  = _group_partners('NOAM RSI')
 _apj_partners_df   = _group_partners('APJ RSI')
@@ -1448,24 +1467,23 @@ if len(managed_stage_data) > 0 and len(managed_bulk_conf) > 0:
     _prior_start = _this_week_start - pd.Timedelta(days=14)
     _prior_end = _this_week_start - pd.Timedelta(days=8)
     _stage_move_lookup = {}
-    _ids = tuple(stage_coco['USE_CASE_ID'].dropna().unique())
-    if _ids:
-        _ids_sql = "','".join(str(i).replace("'", "''") for i in _ids)
-        _moveins = conn.query(f"""
-            SELECT USE_CASE_ID, MAX(MOVEIN_DATE) AS MOVED_IN
-            FROM MDM.MDM_INTERFACES.FACT_USE_CASE_STAGE_MOVEMENT
-            WHERE MOVEIN_DATE BETWEEN '{_prior_start}' AND '{_last_end}'
-              AND USE_CASE_ID IN ('{_ids_sql}')
-            GROUP BY USE_CASE_ID
-        """)
-        if len(_moveins) > 0:
-            _moveins['MOVED_IN'] = pd.to_datetime(_moveins['MOVED_IN'], errors='coerce').dt.date
-            _stage_moves = stage_coco.merge(_moveins, on='USE_CASE_ID', how='inner')
-            _stage_moves = _stage_moves[_stage_moves['IS_COCO_FINAL']]
-            if len(_stage_moves) > 0:
-                _stage_moves['_last'] = ((_stage_moves['MOVED_IN'] >= _last_start) & (_stage_moves['MOVED_IN'] <= _last_end)).astype(int)
-                _stage_moves['_prior'] = ((_stage_moves['MOVED_IN'] >= _prior_start) & (_stage_moves['MOVED_IN'] <= _prior_end)).astype(int)
-                _stage_move_lookup = _stage_moves.groupby('STAGE_GROUP')[['_last', '_prior']].sum().to_dict('index')
+    _moveins = get_stage_advancements(conn, _prior_start, _last_end)
+    if len(_moveins) > 0:
+        _moveins['MOVEIN_DATE'] = pd.to_datetime(_moveins['MOVEIN_DATE'], errors='coerce').dt.date
+        _stage_moves = stage_coco[stage_coco['IS_COCO_FINAL']].merge(
+            _moveins, on='USE_CASE_ID', how='inner'
+        )
+        if len(_stage_moves) > 0:
+            _stage_moves['STAGE_GROUP'] = _stage_moves['MOVEIN_STAGE_NUM'].map({
+                3: 'Validation (3)',
+                4: 'Won (4)',
+                5: 'Implementation (5-6)',
+                6: 'Implementation (5-6)',
+                7: 'Deployed (7)',
+            })
+            _stage_moves['_last'] = ((_stage_moves['MOVEIN_DATE'] >= _last_start) & (_stage_moves['MOVEIN_DATE'] <= _last_end)).astype(int)
+            _stage_moves['_prior'] = ((_stage_moves['MOVEIN_DATE'] >= _prior_start) & (_stage_moves['MOVEIN_DATE'] <= _prior_end)).astype(int)
+            _stage_move_lookup = _stage_moves.groupby('STAGE_GROUP')[['_last', '_prior']].sum().to_dict('index')
 
     for _, sg in stage_merged.iterrows():
         eacv = sg.get('TOTAL_EACV', 0) or 0
@@ -1827,91 +1845,58 @@ if len(recent_wins_data) > 0:
 else:
     recent_wins_ctx = "  No new deployments, competitive wins, or pipeline moves in the last 7 days.\n"
 
-# Notable wins by region — one fresh IS_COCO_FINAL UC per group.
-# Fresh means the use case's latest stage movement into Stage 4/6/7 happened during
-# the last completed Mon-Sun week. This prevents the weekly CEO email from repeating
-# the same quarter-to-date wins every run.
+# Notable wins by region — one genuine forward stage movement per group from the
+# last completed Mon-Sun week. The movement fact's destination and previous stage
+# are authoritative; current-stage dates are not used as a proxy.
 notable_wins_by_region_ctx = ""
+notable_wins_markdown = "## NOTABLE WINS (managed partners only)\n"
 if len(managed_bulk_conf) > 0 and 'IS_COCO_FINAL' in managed_bulk_conf.columns and '_GROUP' in managed_bulk_conf.columns:
-    # Only Deployed (Stage 7), Implementation Complete (Stage 6), or Won (Stage 4) qualify as notable wins
-    _WIN_STAGES = {'7 - Deployed', '6 - Implementation Complete', '4 - Use Case Won / Migration Plan'}
-    _stage_pri_map = {
-        '7 - Deployed': 1,
-        '6 - Implementation Complete': 2,
-        '4 - Use Case Won / Migration Plan': 3,
-    }
-    _cf = managed_bulk_conf[
-        managed_bulk_conf['IS_COCO_FINAL'] &
-        managed_bulk_conf['USE_CASE_STAGE'].isin(_WIN_STAGES)
-    ].copy()
-    _fresh_ids = [str(i) for i in _cf['USE_CASE_ID'].dropna().tolist()]
-    if _fresh_ids:
-        _this_week_start = pd.Timestamp.now().date() - pd.Timedelta(days=pd.Timestamp.now().date().weekday())
-        _last_week_start = _this_week_start - pd.Timedelta(days=7)
-        _last_week_end = _this_week_start - pd.Timedelta(days=1)
-        _ids_sql = "','".join(i.replace("'", "''") for i in _fresh_ids)
-        _stage_moves = conn.query(f"""
-            SELECT USE_CASE_ID, MAX(MOVEIN_DATE) AS LATEST_MOVEIN_DATE
-            FROM MDM.MDM_INTERFACES.FACT_USE_CASE_STAGE_MOVEMENT
-            WHERE USE_CASE_ID IN ('{_ids_sql}')
-            GROUP BY USE_CASE_ID
-        """)
-        if len(_stage_moves) > 0:
-            _stage_moves['LATEST_MOVEIN_DATE'] = pd.to_datetime(_stage_moves['LATEST_MOVEIN_DATE'], errors='coerce').dt.date
-            _cf = _cf.merge(_stage_moves, on='USE_CASE_ID', how='left')
-            _cf = _cf[
-                (_cf['LATEST_MOVEIN_DATE'] >= _last_week_start)
-                & (_cf['LATEST_MOVEIN_DATE'] <= _last_week_end)
-            ]
-        else:
-            _cf = _cf.iloc[0:0]
-    else:
-        _cf = _cf.iloc[0:0]
-
-    _cf['_spri'] = _cf['USE_CASE_STAGE'].map(_stage_pri_map).fillna(3)
-    _cf['_eacv'] = pd.to_numeric(_cf['USE_CASE_EACV'], errors='coerce').fillna(0)
-    _cf = _cf.sort_values(['_GROUP', '_spri', '_eacv'], ascending=[True, True, False])
+    _this_week_start = pd.Timestamp.now().date() - pd.Timedelta(days=pd.Timestamp.now().date().weekday())
+    _last_week_start = _this_week_start - pd.Timedelta(days=7)
+    _last_week_end = _this_week_start - pd.Timedelta(days=1)
+    _stage_moves = get_stage_advancements(conn, _last_week_start, _last_week_end)
+    _stage_moves = _stage_moves[_stage_moves['MOVEIN_STAGE_NUM'].isin([4, 6, 7])].copy()
+    _cf = managed_bulk_conf[managed_bulk_conf['IS_COCO_FINAL']].merge(
+        _stage_moves, on='USE_CASE_ID', how='inner'
+    )
+    _stage_pri_map = {7: 1, 6: 2, 4: 3}
+    _stage_label_map = {7: 'Stage 7 Deployed', 6: 'Stage 6 Implementation Complete', 4: 'Stage 4 Won'}
+    _cf['_spri'] = _cf['MOVEIN_STAGE_NUM'].map(_stage_pri_map).fillna(4)
+    _cf['_eacv'] = pd.to_numeric(_cf['MOVEIN_USE_CASE_EACV'], errors='coerce').fillna(0)
+    _cf = _cf.sort_values(
+        ['_GROUP', '_spri', '_eacv', 'MOVEIN_DATE', 'USE_CASE_ID'],
+        ascending=[True, True, False, False, True],
+    )
     _best = _cf.drop_duplicates(subset=['_GROUP'], keep='first')
-
-    # Fetch GO_LIVE_DATE and COMPETITORS for the selected UCs
-    _best_ids = [str(i) for i in _best['USE_CASE_ID'].dropna().tolist()]
-    _uc_detail = pd.DataFrame()
-    if _best_ids:
-        _ids_sql = "','".join(_best_ids)
-        _uc_detail = conn.query(f"""
-            SELECT USE_CASE_ID, GO_LIVE_DATE, DECISION_DATE, COMPETITORS
-            FROM TEMP.COCO_PARTNER_ADOPTION.DT_OKR_USE_CASES
-            WHERE USE_CASE_ID IN ('{_ids_sql}')
-        """)
-
+    _win_bullets = []
     for _grp in ['GSI', 'NOAM RSI', 'APJ RSI', 'EMEA RSI']:
         _row = _best[_best['_GROUP'] == _grp]
         if len(_row) == 0:
-            notable_wins_by_region_ctx += f"  [{_grp}] No deployed, implementation complete, or won IS_COCO_FINAL use case found.\n"
             continue
         r = _row.iloc[0]
         eacv = float(r.get('_eacv', 0) or 0)
-        stage_short = str(r.get('USE_CASE_STAGE', '')).split(' - ', 1)[-1]
-        date_str = comp_str = ""
-        if len(_uc_detail) > 0:
-            _det = _uc_detail[_uc_detail['USE_CASE_ID'] == r['USE_CASE_ID']]
-            if len(_det) > 0:
-                d = _det.iloc[0]
-                if pd.notna(r.get('LATEST_MOVEIN_DATE')):
-                    date_str = f", moved into stage {r['LATEST_MOVEIN_DATE']}"
-                elif pd.notna(d.get('GO_LIVE_DATE')):
-                    date_str = f", deployed {d['GO_LIVE_DATE']}"
-                elif pd.notna(d.get('DECISION_DATE')):
-                    date_str = f", decision {d['DECISION_DATE']}"
-                if d.get('COMPETITORS') and str(d['COMPETITORS']).strip():
-                    comp_str = f", displacing {d['COMPETITORS']}"
+        stage_label = _stage_label_map[int(r['MOVEIN_STAGE_NUM'])]
+        comp = r.get('COMPETITORS')
+        comp_str = f", displacing {comp}" if pd.notna(comp) and str(comp).strip() else ""
+        movement_date = pd.to_datetime(r['MOVEIN_DATE']).date()
         notable_wins_by_region_ctx += (
             f"  [{_grp}] {r['PARTNER_NAME']} @ {r['ACCOUNT_NAME']}: "
-            f"{stage_short}, ${eacv/1000:.0f}K EACV, {r.get('TECHNICAL_USE_CASE','N/A')}"
-            f"{date_str}{comp_str}\n"
+            f"{stage_label}, ${eacv/1000:.0f}K EACV, {r.get('TECHNICAL_USE_CASE','N/A')}, "
+            f"advanced from Stage {int(r['PREV_STAGE_NUM'])} on {movement_date}{comp_str}\n"
         )
+        _win_bullets.append(
+            f"- **{_grp} — {r['PARTNER_NAME']}** advanced CoCo at {r['ACCOUNT_NAME']} "
+            f"from Stage {int(r['PREV_STAGE_NUM'])} to {stage_label} on {movement_date} "
+            f"during the last completed week, ${eacv/1000:.0f}K EACV{comp_str}."
+        )
+    if _win_bullets:
+        notable_wins_markdown += "\n".join(_win_bullets)
+    else:
+        notable_wins_by_region_ctx = f"  No qualifying forward stage movement from {_last_week_start} through {_last_week_end}.\n"
+        notable_wins_markdown += f"No qualifying managed-partner stage advances occurred from {_last_week_start} through {_last_week_end}."
 else:
     notable_wins_by_region_ctx = "  IS_COCO_FINAL data not available.\n"
+    notable_wins_markdown += "Notable-win data is unavailable."
 
 # Pipeline WoW context (use case count change vs prior week)
 def _fmt_wow(val):
@@ -1957,8 +1942,6 @@ data_context = f"""
 === Q3 (Aug-Oct 2026) | MANAGED PARTNERS (GSI + NOAM RSI + APJ RSI + EMEA RSI + LATAM RSI) | Stages 3-7 ===
 NOTE: Q3 = Aug 1 – Oct 31, 2026. GSIs report globally; NOAM RSIs = NoAM theaters only; APJ/EMEA/LATAM RSIs = their respective geo regions.
 
-GLOBAL REFERENCE (all partners, Q3, Stages 3-7, with account-level attribution): {int(go['COCO_USE_CASES'])} CoCo UCs | {int(go['TOTAL_PARTNERS'])} partners | ${go['TOTAL_EACV']/1_000_000:.1f}M EACV | {go['COCO_PCT']}% CoCo adoption
-
 MANAGED PARTNERS Q3 HEADLINE:
   Total Partners in Scope: 49 (← USE THIS NUMBER for "X managed partners" — DO NOT use Active Partners count)
   CoCo Use Cases: {managed_coco_ucs} (THIS is the CoCo number for the opening sentence)
@@ -1976,21 +1959,8 @@ No Q3 Activity ({managed_inactive_partners} partners): {', '.join(managed_inacti
 OKR HEADLINE — WEEKLY SNAPSHOT ROLLUPS:
 {okr_headline_ctx}
 
-MANAGED PARTNER COCO COVERAGE (Q3, by region):
-  Overall: {managed_total_ucs} total UCs, {managed_coco_ucs} CoCo, {managed_coco_pct}%
-{regional_coco_ctx}
-
 PIPELINE (Managed Partners, Q3, all UCs — weekly columns are stage movement from FACT_USE_CASE_STAGE_MOVEMENT.MOVEIN_DATE):
 {stage_ctx}
-
-PIPELINE WoW (all CoCo partners, use case count change vs prior week):
-{pipeline_wow_ctx}
-
-COCO CREDIT CONSUMPTION (Q3, managed partners):
-{credit_ctx}
-
-REGIONAL BREAKDOWN (Managed and Unmanaged):
-{region_ctx}
 
 PARTNER SCORECARD BY GROUP (Q3, target 75% CoCo adoption):
 {gsi_partner_ctx}
@@ -1998,21 +1968,6 @@ PARTNER SCORECARD BY GROUP (Q3, target 75% CoCo adoption):
 {apj_partner_ctx}
 {emea_partner_ctx}
 {latam_partner_ctx}
-
-COCO ADOPTION WoW — OVERALL (from weekly snapshot table):
-{adoption_wow_ctx}
-
-COCO ADOPTION WoW — PER MANAGED PARTNER (sorted by CoCo %):
-{adoption_wow_partner_ctx}
-
-PARTNER WORKLOAD MIX (managed partners only):
-{partner_wl_ctx}
-
-OKR PROGRESS — 6 GSIs WoW (CoCo engagement, all regions combined — LW=last week, PW=prior week):
-{gsi_wow_ctx}
-
-OKR PROGRESS — NoAM SIs WoW (CoCo engagement — LW=last week, PW=prior week):
-{noam_si_wow_ctx}
 
 OKR PROGRESS — REGIONAL BREAKDOWN (5 groups; GSI/NOAM goal=75%, APJ/EMEA/LATAM goal=50%.
 Weekly rollups come from the latest two IS_COCO_FINAL weekly snapshots and are net changes in
@@ -2031,13 +1986,7 @@ WHERE ADOPTION IS CONCENTRATED — theatre and use-case-type splits (counts firs
 GSI GEO SPLIT (GSI partners only, by region and by theatre):
 {gsi_geo_ctx}
 
-COMMENT HIGHLIGHTS (managed partners only, Top 10 by EACV):
-{comment_ctx}
-
-RECENT ACTIVITY — LAST 7 DAYS (deployments, competitive wins, pipeline moves):
-{recent_wins_ctx}
-
-NOTABLE WINS BY REGION (one IS_COCO_FINAL UC per group — best stage then highest EACV):
+NOTABLE WINS BY REGION (verified forward stage movements in the last completed Mon-Sun week only):
 {notable_wins_by_region_ctx}
 """
 
@@ -2381,14 +2330,7 @@ Follow this EXACT structure with 9 sections:
 - Bullet 7: "**Top Skills used:** [top 3 Skills]"
 - Bullet 8: "**[Detailed Partner CoCo usecase dashboard](https://app.snowflake.com/sfcogsops/snowhouse_aws_us_west_2/#/streamlit-apps/TEMP.COCO_PARTNER_ADOPTION.COCO_USECASE_INSIGHTS)**"
 
-## NOTABLE WINS (managed partners only)
-- 1–4 bullets — one per region group that has a fresh qualifying win. Use data from "NOTABLE WINS BY REGION" in context.
-- Fresh means the context row says it moved into Stage 7, Stage 6, or Stage 4 during the last completed week. Do NOT repeat old quarter-to-date wins.
-- Format each as: "**[Group] Partner** advanced CoCo at Account — Stage 7 Deployed, Stage 6 Implementation Complete, OR Stage 4 Won, $EACVK EACV[, displacing Competitor if present]"
-- Each bullet must say this is last-completed-week movement, so the section is clearly weekly and not a repeat of older wins.
-- ONLY include context rows with an actual partner/account. If the context says "No deployed, implementation complete, or won IS_COCO_FINAL use case found" for a group, omit that group entirely.
-- Groups in order (if present): GSI, NOAM RSI, APJ RSI, EMEA RSI
-- Do NOT use RECENT ACTIVITY data or COMMENT HIGHLIGHTS for this section
+{notable_wins_markdown}
 
 ## OKR PROGRESS — REGIONAL BREAKDOWN
 | Group | Scope | Total Partners | Total UCs | CoCo UCs | CoCo % | WoW Δ Total UCs | WoW Δ CoCo UCs | WoW Δ CoCo % | Partners Meeting Goal% |
@@ -2646,7 +2588,8 @@ Write the executive briefing:"""
     else:
         response_placeholder = st.empty()
         response_placeholder.info("Generating executive briefing with Cortex Complete...")
-        full_response = cortex_complete(conn, "claude-sonnet-4-5", full_prompt)
+        full_response = cortex_complete(conn, "claude-sonnet-4-5", full_prompt, max_tokens=8192)
+        full_response = _replace_notable_wins(full_response, notable_wins_markdown)
         full_response = _ensure_wow_summary_bullet(full_response, _book_delta_coco, _book_delta_total, _book_delta_pct)
         import re as _re
         _display = _re.sub(r'\$(\d)', r'\\$\1', full_response)

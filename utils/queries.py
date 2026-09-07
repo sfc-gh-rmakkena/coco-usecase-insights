@@ -1796,6 +1796,29 @@ def get_recent_wins(_conn, partners, start_date, end_date, days_back=7):
     """
     return _conn.query(query)
 
+
+@st.cache_data(ttl=timedelta(minutes=30))
+def get_stage_advancements(_conn, start_date, end_date):
+    """Return genuine forward stage movements in an inclusive date window."""
+    query = f"""
+    SELECT
+        USE_CASE_ID,
+        MOVEIN_STAGE_NUM,
+        PREV_STAGE_NUM,
+        MOVEIN_DATE,
+        MOVEIN_USE_CASE_EACV
+    FROM MDM.MDM_INTERFACES.FACT_USE_CASE_STAGE_MOVEMENT
+    WHERE MOVEIN_DATE BETWEEN '{start_date}' AND '{end_date}'
+      AND PREV_STAGE_NUM IS NOT NULL
+      AND MOVEIN_STAGE_NUM > PREV_STAGE_NUM
+      AND MOVEIN_STAGE_NUM BETWEEN 3 AND 7
+    QUALIFY ROW_NUMBER() OVER (
+        PARTITION BY USE_CASE_ID, MOVEIN_STAGE_NUM
+        ORDER BY MOVEIN_DATE DESC, USE_CASE_ID
+    ) = 1
+    """
+    return _conn.query(query)
+
 @st.cache_data(ttl=timedelta(minutes=30))
 def get_adoption_trend_4w(_conn, partners: tuple, region: str = "NoAM") -> list:
     """Return [(week_label, coco_pct), ...] for last 4 weeks from OKR_PARTNER_WEEKLY_ADOPTION.
