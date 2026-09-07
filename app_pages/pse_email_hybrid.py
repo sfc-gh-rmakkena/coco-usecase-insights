@@ -235,8 +235,21 @@ def _sanitize_one(conn, uc_id: str, desc: str, se_comments: str, skills: list, p
     source_text = " ".join(str(x or "") for x in (name, desc, se_comments, partner_comments))
     grounded_skill_context = filter_grounded_skills(parsed["deterministic_skill_context"], source_text)
     grounded_additional_skills = filter_grounded_skills(parsed["additional_skills"], source_text)
+    # The freeform "rationale" sentence is generated in the same call, before
+    # grounding is applied, so it can reference a skill by name that the
+    # filter above then drops (e.g. "...the recommended document-intelligence
+    # skill..." when document-intelligence didn't survive grounding) --
+    # leaving a partner-facing sentence that contradicts the actual chips
+    # shown. Same "drop rather than force" pattern as the skill filter
+    # itself: if the rationale names a dropped skill, blank it out rather
+    # than risk a contradictory or stale claim.
+    dropped_skills = (set(parsed["deterministic_skill_context"]) | set(parsed["additional_skills"])) \
+        - set(grounded_skill_context) - set(grounded_additional_skills)
+    rationale = parsed["rationale"]
+    if rationale and any(re.search(re.escape(s), rationale, re.I) for s in dropped_skills):
+        rationale = ""
     return (uc_id, desc, se_comments, partner_comments, name, tuple(skills or []),
-            parsed["summary"], parsed["rationale"], grounded_skill_context, grounded_additional_skills)
+            parsed["summary"], rationale, grounded_skill_context, grounded_additional_skills)
 
 
 def _sanitize_descriptions_batch(conn, items: list) -> dict:
