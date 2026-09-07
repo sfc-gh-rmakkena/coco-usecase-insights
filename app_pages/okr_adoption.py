@@ -530,12 +530,20 @@ if selected_partner:
             conf_scores = get_usecase_confidence_scores(conn, selected_partner, q_start, q_end)
             if len(conf_scores) > 0:
                 partner_detail = partner_detail.copy()
-                conf_map = conf_scores[['USE_CASE_ID', 'CONFIDENCE_BAND']].set_index('USE_CASE_ID')
+                conf_map = conf_scores[['USE_CASE_ID', 'CONFIDENCE_BAND', 'Q2_TOKENS']].set_index('USE_CASE_ID')
                 partner_detail['CONFIDENCE_BAND'] = partner_detail['USE_CASE_ID'].map(conf_map['CONFIDENCE_BAND'])
+                partner_detail['Q2_TOKENS'] = partner_detail['USE_CASE_ID'].map(conf_map['Q2_TOKENS'])
                 bands = confidence_filter if confidence_filter else ['High', 'Medium', 'Low']
-                is_flag = partner_detail['COCO_SOURCE'].notna()
-                has_conf = partner_detail['CONFIDENCE_BAND'].isin(bands)
-                partner_detail['IS_COCO_ATTACHED'] = is_flag | has_conf
+                # get_okr_coco_adoption's IS_COCO_ATTACHED is already just the raw
+                # uc.IS_COCO flag -- rename it so apply_coco_final (the SAME
+                # function used to compute the tile's summary/COCO_USE_CASES
+                # above) scores this consistently. This used to be re-derived via
+                # COCO_SOURCE.notna() | CONFIDENCE_BAND.isin(bands), a DIFFERENT
+                # and less rigorous rule (it skipped the partner-comment /
+                # token-consumption validation apply_coco_final does), causing
+                # the "CoCo Attached" tile and the tab grid below it to disagree.
+                partner_detail['IS_COCO'] = partner_detail['IS_COCO_ATTACHED']
+                partner_detail['IS_COCO_ATTACHED'] = apply_coco_final(partner_detail, bands)
 
                 def _rebuild_flags(row):
                     parts = []
