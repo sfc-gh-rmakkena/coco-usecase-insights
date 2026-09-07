@@ -1,0 +1,41 @@
+{
+  "anchors": [
+    {
+      "use_case_id": "aPaVI00000iG8Hd0AK",
+      "label": "Thomson Reuters - Content Playground",
+      "name": "Thomson Reuters - Content Playground",
+      "technical_use_case": "AI: Cortex AI Functions",
+      "description": "Self-service platform that enables Content Operators to evaluate newly acquired non-basis content or legacy content through playgrounds, quality checks, NER (Named Entity Recognition) processing, and content acquisition channels. The system supports the complete lifecycle from content ingestion to production deployment.",
+      "se_comments": "2026-09-02-JCY - Deloitte confirmed Implementation complete. On-track, no assist required\n\n2026-08-20 - JCY - Working to track down the owner on this one, made contact with Ravi Rao, understand Public Records has taken over the development he's no longer involved. \n\n2026-05-25 - MW - Deloitte-driven, latest update = done in august, 75% complete now.",
+      "partner_comments": "",
+      "deterministic_skills": [
+        "cortex-ai-functions"
+      ],
+      "human_labels": {
+        "document-intelligence": false,
+        "ai-functions-pipeline-builder": false,
+        "data-quality": true
+      },
+      "notes": "Hard negative anchor. The use case describes NER/quality-check workflows over 'content' -- never a file, PDF, form, or stage. document-intelligence and ai-functions-pipeline-builder must never survive filter_grounded_skills() for this use case, even if the model finds a real verbatim quote (e.g. 'evaluate newly acquired non-basis content...through playgrounds, quality checks') -- that quote is real text but shares no concrete term with document-intelligence's actual file/PDF/stage vocabulary.",
+      "raw_llm_response": "```json\n{\n  \"summary\": \"Thomson Reuters is building a self-service content evaluation platform that enables operators to test and quality-check newly acquired and legacy content before production deployment, supporting the full lifecycle from ingestion through NER processing to go-live.\",\n  \"rationale\": \"The tagged AI functions skill and recommended document-intelligence skill directly address the NER processing and quality-check workflows central to this content evaluation pipeline.\",\n  \"deterministic_skill_context\": {\n    \"cortex-ai-functions\": {\n      \"reason\": \"Supports the NER processing and quality checks that operators run on acquired content\",\n      \"evidence\": \"NER (Named Entity Recognition) processing, and content acquisition channels\"\n    }\n  },\n  \"additional_skills\": {\n    \"document-intelligence\": {\n      \"reason\": \"Applies AI extraction and classification to the newly acquired non-basis content and legacy content during evaluation\",\n      \"evidence\": \"evaluate newly acquired non-basis content or legacy content through playgrounds, quality checks\"\n    },\n    \"data-quality\": {\n      \"reason\": \"Monitors and enforces the quality checks operators perform before promoting content to production\",\n      \"evidence\": \"quality checks\"\n    }\n  }\n}\n```"
+    },
+    {
+      "use_case_id": "aPaVI00000iH6kL0AS",
+      "label": "Onbase - Document AI",
+      "name": "Onbase - Document AI",
+      "technical_use_case": "AI: Cortex AI Functions",
+      "description": "HL have multiple digital documents for customer letters for and engagements that they want to leverage AI to extract data insights from these documents to support their customer single view.",
+      "se_comments": "21/07/26 JS: Spoke to James Brake (head of analytics) who also confirmed they're now going ahead with this following the solution we proposed earlier in the year. UAT testing still going well, can consider this a tech win",
+      "partner_comments": "",
+      "deterministic_skills": [
+        "cortex-ai-functions"
+      ],
+      "human_labels": {
+        "document-intelligence": true,
+        "ai-functions-pipeline-builder": true
+      },
+      "notes": "Hard positive anchor -- the control case that must NOT get collaterally broken by tightening the grounding checks. Real documents (customer letters/engagements) are explicitly named.",
+      "raw_llm_response": "```json\n{\n  \"summary\": \"The partner maintains multiple digital documents for customer letters and engagements and wants to leverage AI to extract data insights from these documents to support their customer single view.\",\n  \"rationale\": \"The tagged skills directly address the document AI extraction and processing workflow described in the use case.\",\n  \"deterministic_skill_context\": {\n    \"cortex-ai-functions\": {\n      \"reason\": \"Enables extraction of structured data insights from the digital documents for customer letters and engagements\",\n      \"evidence\": \"leverage AI to extract data insights from these documents\"\n    }\n  },\n  \"additional_skills\": {\n    \"document-intelligence\": {\n      \"reason\": \"Applies AI extraction and parsing functions to the digital documents for customer letters\",\n      \"evidence\": \"multiple digital documents for customer letters and engagements\"\n    },\n    \"ai-functions-pipeline-builder\": {\n      \"reason\": \"Builds incremental document processing pipelines to continuously extract insights as new customer documents arrive\",\n      \"evidence\": \"multiple digital documents for customer letters and engagements\"\n    }\n  }\n}\n```"
+    }
+  ]
+}

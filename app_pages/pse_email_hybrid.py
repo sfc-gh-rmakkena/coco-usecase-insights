@@ -49,6 +49,7 @@ from utils.coco_skill_map_v2 import (
     map_coco_skills_explained, theater_label as _theater_label, h as _h,
     MANAGED_PARTNERS, GSI_LIST, GSI_NAMES, NOAM_RSI_NAMES,
     build_ai_skill_prompt, parse_ai_skill_response, merge_additional_skills,
+    filter_grounded_skills,
     detect_aim_source, apply_aim_override, cap_skills, prioritize_aim_skill,
     AIM_SKILL_NAME, MAX_SKILLS_PER_USE_CASE,
 )
@@ -214,15 +215,28 @@ def _sanitize_one(conn, uc_id: str, desc: str, se_comments: str, skills: list, p
     title -- often the single most explicit signal (e.g. a name like
     "Semantic Views for X" directly names the needed CoCo capability), which
     the deterministic layer never sees since it only maps TECHNICAL_USE_CASE.
+
+    Also returns a grounded, use-case-specific "reason" per already-tagged
+    (deterministic) skill -- a sanitized detail actually pulled from this
+    use case, instead of the generic "Tech UC category -> X" template --
+    wherever the model can point at real supporting text; falls back to no
+    addition (template stays as-is) when it can't.
     """
     prompt = build_ai_skill_prompt(desc, se_comments, skills, partner_comments, name)
     try:
         raw = cortex_complete(conn, "claude-sonnet-4-5", prompt, max_tokens=_SANITIZE_MAX_TOKENS).strip()
-        parsed = parse_ai_skill_response(raw)
+        parsed = parse_ai_skill_response(raw, deterministic_skills=skills)
     except Exception:
-        parsed = {"summary": "", "rationale": "", "additional_skills": {}}
+        parsed = {"summary": "", "rationale": "", "deterministic_skill_context": {}, "additional_skills": {}}
+    # Deterministic grounding backstop: drop any AI-suggested skill/context
+    # whose evidence quote isn't actually present in the real use case text
+    # -- this is what catches the "content" -> document-intelligence style
+    # thematic-association false positive regardless of which skill it is.
+    source_text = " ".join(str(x or "") for x in (name, desc, se_comments, partner_comments))
+    grounded_skill_context = filter_grounded_skills(parsed["deterministic_skill_context"], source_text)
+    grounded_additional_skills = filter_grounded_skills(parsed["additional_skills"], source_text)
     return (uc_id, desc, se_comments, partner_comments, name, tuple(skills or []),
-            parsed["summary"], parsed["rationale"], parsed["additional_skills"])
+            parsed["summary"], parsed["rationale"], grounded_skill_context, grounded_additional_skills)
 
 
 def _sanitize_descriptions_batch(conn, items: list) -> dict:
@@ -236,7 +250,8 @@ def _sanitize_descriptions_batch(conn, items: list) -> dict:
 
     items: list of (use_case_id, description, se_comments, partner_comments,
     name, skills) tuples.
-    Returns {use_case_id: {"summary": ..., "rationale": ..., "additional_skills": {...}}}.
+    Returns {use_case_id: {"summary": ..., "rationale": ..., "skill_context":
+    {...}, "additional_skills": {...}}}.
     """
     cache = st.session_state.setdefault("_pse_hybrid_sanitize_cache", {})
     result = {}
@@ -249,7 +264,7 @@ def _sanitize_descriptions_batch(conn, items: list) -> dict:
         skills_key = tuple(skills or [])
         cache_key = (desc, se_comments, partner_comments, name, skills_key)
         if not desc and not se_comments and not partner_comments:
-            result[uc_id] = {"summary": "", "rationale": "", "additional_skills": {}}
+            result[uc_id] = {"summary": "", "rationale": "", "skill_context": {}, "additional_skills": {}}
         elif cache_key in cache:
             result[uc_id] = cache[cache_key]
         else:
@@ -262,17 +277,18 @@ def _sanitize_descriptions_batch(conn, items: list) -> dict:
             for future in as_completed(futures):
                 try:
                     (uc_id, desc, se_comments, partner_comments, name, skills_key,
-                     summary, rationale, additional_skills) = future.result()
+                     summary, rationale, skill_context, additional_skills) = future.result()
                 except Exception:
                     continue
-                entry = {"summary": summary, "rationale": rationale, "additional_skills": additional_skills}
+                entry = {"summary": summary, "rationale": rationale, "skill_context": skill_context,
+                         "additional_skills": additional_skills}
                 cache[(desc, se_comments, partner_comments, name, skills_key)] = entry
                 result[uc_id] = entry
 
     # Anything that failed outright still gets a defined value so downstream
     # rendering never KeyErrors.
     for uc_id, _desc, _se, _partner, _name, _skills_key in to_fetch:
-        result.setdefault(uc_id, {"summary": "", "rationale": "", "additional_skills": {}})
+        result.setdefault(uc_id, {"summary": "", "rationale": "", "skill_context": {}, "additional_skills": {}})
 
     return result
 
@@ -328,6 +344,19 @@ def _group_non_coco_by_region(non_coco_df: pd.DataFrame) -> dict:
     return by_region
 
 
+def _splice_skill_context(reasons: dict, skill_context: dict) -> dict:
+    """Append a grounded, use-case-specific reason line to each already-
+    tagged skill's reason list (only for skills present in `reasons` --
+    e.g. not one the AIM override or cap already dropped). This is purely
+    additive text alongside the existing generic template reason (e.g.
+    "Tech UC category -> X"), so a skill missing real supporting text
+    just keeps its generic reason with no addition."""
+    for skill, reason in (skill_context or {}).items():
+        if skill in reasons and reason:
+            reasons[skill].append(f"Use case detail &rarr; {_h(reason)}")
+    return reasons
+
+
 def _build_gap_table_rows(conn, non_coco_df: pd.DataFrame):
     """Per-region list of UC row dicts for the gap table, each with skill+reason,
     a sanitized description, an AI-grounded skill rationale, and any validated
@@ -344,9 +373,10 @@ def _build_gap_table_rows(conn, non_coco_df: pd.DataFrame):
               for row in all_rows]
     sanitized_map = _sanitize_descriptions_batch(conn, items)
     for row in all_rows:
-        entry = sanitized_map.get(row["uc_id"], {"summary": "", "rationale": "", "additional_skills": {}})
+        entry = sanitized_map.get(row["uc_id"], {"summary": "", "rationale": "", "skill_context": {}, "additional_skills": {}})
         row["sanitized_desc"] = entry["summary"]
         row["skill_rationale"] = entry["rationale"]
+        row["reasons"] = _splice_skill_context(row["reasons"], entry.get("skill_context", {}))
         row["skills"], row["reasons"] = merge_additional_skills(
             row["skills"], row["reasons"], entry.get("additional_skills", {})
         )
@@ -1144,8 +1174,9 @@ if st.button(":material/auto_awesome: Generate Narrative Draft", key="_pse_hybri
                           for r in noam_top]
             noam_sanitized = _sanitize_descriptions_batch(conn, noam_items)
             for r in noam_top:
-                entry = noam_sanitized.get(r["uc_id"], {"rationale": "", "additional_skills": {}})
+                entry = noam_sanitized.get(r["uc_id"], {"rationale": "", "skill_context": {}, "additional_skills": {}})
                 r["skill_rationale"] = entry.get("rationale", "")
+                r["reasons"] = _splice_skill_context(r["reasons"], entry.get("skill_context", {}))
                 r["skills"], r["reasons"] = merge_additional_skills(
                     r["skills"], r["reasons"], entry.get("additional_skills", {})
                 )

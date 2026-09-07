@@ -11,6 +11,7 @@ Future email tabs should import from THIS module instead of coco_skill_map
 to get both layers. coco_skill_map.py itself stays untouched for any other
 consumers of the deterministic base layer.
 """
+import difflib
 import json
 import re
 from pathlib import Path
@@ -66,11 +67,24 @@ COCO_SKILL_NAMES = frozenset(s["name"].lower() for s in COCO_SKILL_CATALOG)
 
 def coco_skill_catalog_prompt_block() -> str:
     """Condensed catalog as prompt-ready text, built once at import time and
-    reused verbatim across all per-use-case AI calls."""
+    reused verbatim across all per-use-case AI calls. Includes each skill's
+    scope-bounded `summary` (not just its bare API `surface`) so the model
+    can see WHAT a skill is actually for, not just which functions it
+    touches -- without this, a skill's surface line alone (e.g. AI_EXTRACT,
+    AI_PARSE_DOCUMENT) invites thematic-association matches on any use case
+    that merely mentions a related word, even when the skill's real scope
+    (e.g. "a single file or one-time batch on a stage") doesn't apply."""
     lines = []
     for s in COCO_SKILL_CATALOG:
         ucs = "; ".join(s["use_cases"])
-        lines.append(f"- {s['name']}: {s['surface']}" + (f" (e.g. {ucs})" if ucs else ""))
+        parts = [s["name"] + ":"]
+        if s["summary"]:
+            parts.append(s["summary"])
+        if s["surface"]:
+            parts.append(f"[drives: {s['surface']}]")
+        if ucs:
+            parts.append(f"(e.g. {ucs})")
+        lines.append("- " + " ".join(parts))
     return "\n".join(lines)
 
 
@@ -114,45 +128,226 @@ def build_ai_skill_prompt(desc: str, se_comments: str, deterministic_skills: lis
         f"deterministically tagged for this use case ({len(deterministic_skills)} of a "
         f"{MAX_SKILLS_PER_USE_CASE}-skill maximum already used): [{skills_str}].\n\n"
         f"CoCo skill catalog:\n{_COCO_SKILL_CATALOG_BLOCK}\n\n"
-        "Return ONLY a JSON object with exactly three keys:\n"
+        "Return ONLY a JSON object with exactly four keys:\n"
         "- \"summary\": 1-2 short sentences suitable for sharing externally with a partner, focused only "
         "on the business problem or goal.\n"
         f"- \"rationale\": one short sentence, grounded in the concrete technical detail below, on why "
         f"the skill(s) [{skills_str}] (plus any additional_skills below) would accelerate THIS engagement.\n"
-        f"- \"additional_skills\": a JSON object of AT MOST {remaining} catalog skill names -> one-sentence "
-        "reason each, for skills from the catalog above -- beyond the ones already tagged -- that are "
-        "genuinely well-supported by the use case name, description, SE notes, or partner notes. Use EXACT skill names from the catalog. "
-        "Return an empty object {} if no real capacity remains or nothing else clearly applies -- do not "
-        "force matches just to fill the quota.\n\n"
+        f"- \"deterministic_skill_context\": a JSON object mapping EACH already-tagged skill "
+        f"[{skills_str}] -> {{\"reason\": a sanitized, one-sentence explanation of WHY this specific skill "
+        "matters for THIS use case, \"evidence\": a short phrase copied VERBATIM from the use case name/"
+        "description/SE notes/partner notes below}. If you cannot find a real, specific quote supporting a "
+        "tagged skill, use empty strings for both its reason and evidence -- do not fabricate one.\n"
+        f"- \"additional_skills\": a JSON object of AT MOST {remaining} catalog skill names -> "
+        "{\"reason\": a sanitized, one-sentence explanation, \"evidence\": a short phrase copied VERBATIM "
+        "from the use case name/description/SE notes/partner notes below}, for skills from the catalog "
+        "above -- beyond the ones already tagged -- whose scope is genuinely matched by that exact "
+        "evidence text. Use EXACT skill names from the catalog.\n\n"
+        "For BOTH \"reason\" fields above: never restate the skill's generic catalog capability (e.g. "
+        "'extracts structured data from documents') -- instead name the specific thing IN THIS use case "
+        "(a technology, workflow step, artifact, or pain point actually mentioned) that the skill would "
+        "help with. If the only support you can offer is generic, leave the reason empty rather than "
+        "writing boilerplate.\n\n"
+        "CRITICAL -- evidence must be a real quote, not a paraphrase or inference: a topical word alone is "
+        "NEVER sufficient evidence. Match on a named technology, artifact, or concrete action, never on "
+        "thematic vibes. For example: the word \"content\" alone is NOT evidence of file/document "
+        "processing (that requires an actual file/PDF/form/stage mention); the word \"insights\" alone is "
+        "NOT evidence of machine learning (that requires an actual model/training/prediction mention); the "
+        "word \"data\" alone is NOT evidence of data governance (that requires an actual policy/masking/"
+        "classification mention). If you cannot copy a real, specific quote that concretely supports a "
+        "skill's actual scope, leave that skill's reason/evidence empty (for deterministic_skill_context) "
+        "or omit it entirely (for additional_skills) -- do not force matches just to fill the quota.\n\n"
         "ALL text fields must be partner-safe: remove dollar amounts, EACV, competitor names, internal "
         "people/team names, deal-risk commentary, and anything else sensitive, even if it appears in the "
         "SE or partner notes below. No markdown, no preamble, JSON only.\n\n" + context
     )
 
 
-def parse_ai_skill_response(raw_text: str) -> dict:
-    """Parse + validate the AI's JSON response. Any additional_skills name not
-    found in the real catalog (case-insensitive) is silently dropped -- the
-    anti-hallucination guardrail. Also hard-caps additional_skills at
-    MAX_SKILLS_PER_USE_CASE as a safety net (the real enforcement of the
-    overall per-use-case cap happens downstream via cap_skills(), which
-    accounts for deterministic skills too). Returns {"summary":,
-    "rationale":, "additional_skills": {name: reason}} -- all empty on any
-    parse failure."""
+def _parse_reason_evidence_map(raw_obj, limit: int, valid_names: frozenset) -> dict:
+    """Shared parsing for any {skill_name: {"reason":, "evidence":}} JSON
+    object (also accepts a bare string value as a legacy/non-compliant
+    shape, degrading to evidence=""). Drops any skill name not found in
+    `valid_names` (case-insensitive) -- the anti-hallucination guardrail,
+    shared by both deterministic_skill_context (validated against the
+    already-tagged deterministic skills, since the model can't invent a
+    name there) and additional_skills (validated against the full AI
+    catalog)."""
+    out = {}
+    if not isinstance(raw_obj, dict):
+        return out
+    for k, v in list(raw_obj.items())[:limit]:
+        if str(k).strip().lower() not in valid_names:
+            continue
+        if isinstance(v, dict):
+            reason = str(v.get("reason", "")).strip()
+            evidence = str(v.get("evidence", "")).strip()
+        else:
+            reason = str(v).strip()
+            evidence = ""
+        out[str(k).strip()] = {"reason": reason, "evidence": evidence}
+    return out
+
+
+def parse_ai_skill_response(raw_text: str, deterministic_skills: list = None) -> dict:
+    """Parse + validate the AI's JSON response.
+
+    `deterministic_skills` (the skills already tagged for this use case,
+    the same list passed to build_ai_skill_prompt) is used to validate
+    deterministic_skill_context keys -- NOT the AI catalog names, since
+    the deterministic layer's skill tags (utils/coco_skill_map.py's
+    TECH_UC_SKILL_MAP) can differ from the AI-facing catalog's names due
+    to naming drift (e.g. "cortex-ai-functions" vs. the catalog's
+    "cortex-ai-function-studio") -- the model never invents this field's
+    keys, it only fills in reasons for skills we already handed it, so the
+    real anti-hallucination check is "was this skill actually tagged for
+    this use case", not "does it match the AI catalog's current name".
+    Falls back to COCO_SKILL_NAMES if omitted (legacy/backward-compat).
+
+    additional_skills IS validated against the AI catalog names
+    (COCO_SKILL_NAMES) since those ARE model-selected -- any name not
+    found in the real 111-skill catalog (case-insensitive) is silently
+    dropped, the original anti-hallucination guardrail. additional_skills
+    is also hard-capped at MAX_SKILLS_PER_USE_CASE as a safety net (the
+    real enforcement of the overall per-use-case cap happens downstream
+    via cap_skills(), which accounts for deterministic skills too);
+    deterministic_skill_context has no such cap since it should map 1:1
+    with however many skills were already tagged.
+
+    Each value is expected to be {"reason": ..., "evidence": ...} per the
+    current prompt, but a bare string is also accepted (legacy shape /
+    model non-compliance) and degrades to reason=<string>, evidence="" --
+    which downstream filter_grounded_skills() will then always drop, since
+    there's no evidence to check. This never crashes on a malformed shape;
+    it just yields no evidence, which is treated as ungrounded.
+
+    Returns {"summary":, "rationale":, "deterministic_skill_context":
+    {name: {"reason":, "evidence":}}, "additional_skills": {name:
+    {"reason":, "evidence":}}} -- all empty on any parse failure."""
     try:
         raw = re.sub(r"^```(?:json)?|```$", "", (raw_text or "").strip(), flags=re.MULTILINE).strip()
         parsed = json.loads(raw)
         summary = str(parsed.get("summary", "")).strip()
         rationale = str(parsed.get("rationale", "")).strip()
-        raw_additional = parsed.get("additional_skills", {}) or {}
-        additional_skills = {}
-        if isinstance(raw_additional, dict):
-            for k, v in list(raw_additional.items())[:MAX_SKILLS_PER_USE_CASE]:
-                if str(k).strip().lower() in COCO_SKILL_NAMES:
-                    additional_skills[str(k).strip()] = str(v).strip()
-        return {"summary": summary, "rationale": rationale, "additional_skills": additional_skills}
+        det_valid_names = (
+            frozenset(s.strip().lower() for s in deterministic_skills)
+            if deterministic_skills else COCO_SKILL_NAMES
+        )
+        deterministic_skill_context = _parse_reason_evidence_map(
+            parsed.get("deterministic_skill_context", {}) or {}, limit=20, valid_names=det_valid_names
+        )
+        additional_skills = _parse_reason_evidence_map(
+            parsed.get("additional_skills", {}) or {}, limit=MAX_SKILLS_PER_USE_CASE, valid_names=COCO_SKILL_NAMES
+        )
+        return {
+            "summary": summary, "rationale": rationale,
+            "deterministic_skill_context": deterministic_skill_context,
+            "additional_skills": additional_skills,
+        }
     except Exception:
-        return {"summary": "", "rationale": "", "additional_skills": {}}
+        return {"summary": "", "rationale": "", "deterministic_skill_context": {}, "additional_skills": {}}
+
+
+_WHITESPACE_RE = re.compile(r"\s+")
+_PUNCT_RE = re.compile(r"[^\w\s]")
+
+
+def _normalize_for_match(text: str) -> str:
+    text = _PUNCT_RE.sub(" ", (text or "").strip().lower())
+    return _WHITESPACE_RE.sub(" ", text).strip()
+
+
+def is_evidence_grounded(evidence: str, source_text: str, threshold: float = 0.6) -> bool:
+    """Deterministic backstop against fabricated/paraphrased 'evidence'
+    quotes -- the structural fix for the Thomson Reuters failure mode,
+    where the model's justification shared almost no real text with the
+    actual use case. Normalizes both strings (lowercase, collapsed
+    whitespace); returns True immediately on an exact substring match.
+    Otherwise falls back to difflib.SequenceMatcher.find_longest_match and
+    requires the longest common contiguous run to cover >= `threshold` of
+    the evidence text -- tolerant of minor reformatting (quote marks,
+    punctuation) while still rejecting a quote that isn't really there.
+    Empty/missing evidence is never grounded."""
+    evidence_n = _normalize_for_match(evidence)
+    source_n = _normalize_for_match(source_text)
+    if not evidence_n or not source_n:
+        return False
+    if evidence_n in source_n:
+        return True
+    matcher = difflib.SequenceMatcher(None, evidence_n, source_n, autojunk=False)
+    match = matcher.find_longest_match(0, len(evidence_n), 0, len(source_n))
+    return (match.size / len(evidence_n)) >= threshold
+
+
+_STOPWORDS = frozenset({
+    "this", "that", "these", "those", "with", "from", "they", "their", "have",
+    "will", "would", "could", "should", "about", "into", "through", "during",
+    "before", "after", "while", "when", "where", "which", "what", "there",
+    "here", "then", "than", "also", "were", "being", "been", "each", "other",
+    "some", "such", "only", "more", "most", "very", "just", "over", "under",
+    "between", "across", "within", "still", "even",
+})
+_TOKEN_RE = re.compile(r"[a-z0-9]{4,}")
+
+
+def _significant_terms(text: str) -> set:
+    return {t for t in _TOKEN_RE.findall(_normalize_for_match(text)) if t not in _STOPWORDS}
+
+
+def _skill_reference_terms(skill_name: str) -> set:
+    """Significant terms drawn from a skill's OWN name, summary, and
+    representative use cases -- the vocabulary of concrete
+    technologies/artifacts/actions that skill actually covers. Used as a
+    second, still skill-agnostic backstop (see has_scope_term_overlap): a
+    REAL quote can still be the wrong evidence for a skill if it shares no
+    concrete term with that skill's own scope (e.g. "content" is real text
+    but shares nothing with document-intelligence's actual vocabulary of
+    file/PDF/stage/scanned/invoice/contract)."""
+    skill = next((s for s in COCO_SKILL_CATALOG if s["name"].lower() == skill_name.strip().lower()), None)
+    if not skill:
+        return set()
+    text = (skill["name"].replace("-", " ").replace(":", " ") + " " + skill["summary"]
+            + " " + " ".join(skill["use_cases"]))
+    return _significant_terms(text)
+
+
+def has_scope_term_overlap(evidence: str, skill_name: str) -> bool:
+    """True if `evidence` shares at least one concrete term (allowing for
+    simple pluralization via substring containment, e.g. "document" vs.
+    "documents") with `skill_name`'s own catalog vocabulary. This is what
+    catches a real, verbatim quote used to justify the WRONG skill -- e.g.
+    Thomson Reuters' genuine "content ... through playgrounds, quality
+    checks" quote passes is_evidence_grounded() (it's real text) but fails
+    this check for document-intelligence (shares no term with that skill's
+    file/PDF/stage vocabulary); Onbase's genuine "digital documents for
+    customer letters" quote passes both (shares "document"). No catalog
+    entry for skill_name (e.g. a deterministic-only tag not present in the
+    AI catalog) => no overlap required (returns True), since that skill's
+    real scope vocabulary isn't available to check against."""
+    ref_terms = _skill_reference_terms(skill_name)
+    if not ref_terms:
+        return True
+    ev_terms = _significant_terms(evidence)
+    return any(et in rt or rt in et for et in ev_terms for rt in ref_terms)
+
+
+def filter_grounded_skills(additional_skills: dict, source_text: str) -> dict:
+    """Drops any AI-suggested skill whose evidence quote isn't actually
+    grounded in the use case's real text (is_evidence_grounded) OR doesn't
+    share a concrete term with that skill's own catalog scope
+    (has_scope_term_overlap) -- same anti-hallucination pattern as the
+    existing catalog-name check in parse_ai_skill_response(), but checking
+    the JUSTIFICATION rather than just the skill name. Returns a flat
+    {name: reason} dict, matching the shape merge_additional_skills()
+    already expects, so no downstream changes are needed."""
+    grounded = {}
+    for skill, payload in (additional_skills or {}).items():
+        if isinstance(payload, dict):
+            reason, evidence = payload.get("reason", ""), payload.get("evidence", "")
+        else:
+            reason, evidence = str(payload), ""
+        if is_evidence_grounded(evidence, source_text) and has_scope_term_overlap(evidence, skill):
+            grounded[skill] = reason
+    return grounded
 
 
 def merge_additional_skills(skills: list, reasons: dict, additional_skills: dict):
@@ -160,7 +355,9 @@ def merge_additional_skills(skills: list, reasons: dict, additional_skills: dict
     Appends newly-suggested AI skills after the existing ones; exact final
     ordering/truncation is then handled by cap_skills(), which ranks by
     signal count (reason count) rather than list position, with Snowflake
-    AIM always pinned first. Returns (new_skills_list, new_reasons_dict)."""
+    AIM always pinned first. `additional_skills` is expected to already be
+    a flat {name: reason} dict (post filter_grounded_skills()). Returns
+    (new_skills_list, new_reasons_dict)."""
     skills = list(skills)
     reasons = dict(reasons)
     for skill, reason in additional_skills.items():
