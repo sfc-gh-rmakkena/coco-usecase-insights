@@ -358,6 +358,32 @@ def _build_gap_table_rows(conn, non_coco_df: pd.DataFrame):
     return by_region
 
 
+def _named_accounts(rows_full: list, top_ucs: list) -> list:
+    """Ordered, deduped account names from `top_ucs`, excluding any account
+    whose non-CoCo use cases (across the FULL region list `rows_full`, not
+    just the top-N slice) are ALL already stage 7 (Deployed).
+
+    A Deployed-but-not-CoCo-attached use case has nothing left to actively
+    push -- naming that account in a "let's go deeper" ask would be
+    misleading. If the account has at least one non-Deployed (POC/
+    Implementation) use case too, there's still a real opportunity there,
+    so the name stays in."""
+    all_deployed = {}
+    for u in rows_full:
+        acct = u.get("account", "") or u["name"]
+        all_deployed.setdefault(acct, True)
+        if u.get("stage_label") != "Deployed":
+            all_deployed[acct] = False
+    accounts = []
+    for u in top_ucs:
+        acct = u.get("account", "") or u["name"]
+        if all_deployed.get(acct, False):
+            continue
+        if acct not in accounts:
+            accounts.append(acct)
+    return accounts
+
+
 def _build_action_plan(regional_breakdown, gap_rows_by_region, partner):
     """Numbered action items grounded in the partner's actual regional gaps.
 
@@ -383,13 +409,9 @@ def _build_action_plan(regional_breakdown, gap_rows_by_region, partner):
     )
 
     if noam_row and noam_row["REMAINING"] > 0:
-        top_ucs = sorted(gap_rows_by_region.get("NoAM", []),
-                          key=lambda x: x["eacv"], reverse=True)[:4]
-        accounts = []
-        for u in top_ucs:
-            acct = u.get("account", "") or u["name"]
-            if acct not in accounts:
-                accounts.append(acct)
+        rows_full = gap_rows_by_region.get("NoAM", [])
+        top_ucs = sorted(rows_full, key=lambda x: x["eacv"], reverse=True)[:4]
+        accounts = _named_accounts(rows_full, top_ucs)
         names = ", ".join(accounts) if accounts else "the accounts below"
         skills = []
         for u in top_ucs:
@@ -472,13 +494,9 @@ def _build_narrative_draft(conn, partner, recipients, coco_pct, coco_count, tota
     # itself -- that detail lives only in the attached report/table.
     noam_line = ""
     if noam_row and noam_row["REMAINING"] > 0:
-        top_ucs = sorted(gap_rows_by_region.get("NoAM", []),
-                          key=lambda x: x["eacv"], reverse=True)[:4]
-        accounts = []
-        for u in top_ucs:
-            acct = u.get("account", "") or u["name"]
-            if acct not in accounts:
-                accounts.append(acct)
+        rows_full = gap_rows_by_region.get("NoAM", [])
+        top_ucs = sorted(rows_full, key=lambda x: x["eacv"], reverse=True)[:4]
+        accounts = _named_accounts(rows_full, top_ucs)
         names = ", ".join(accounts) if accounts else "the accounts below"
         noam_line = (
             f"We'd like to go deeper into {partner}'s NoAM accounts -- {names} -- with the delivery "
