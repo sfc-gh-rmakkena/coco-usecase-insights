@@ -477,7 +477,7 @@ else:
 
 # Merge Q2 Credits / Tokens (Coverage page approach)
 _display_cols = ['PARTNER_NAME', 'TOTAL_USE_CASES', 'COCO_USE_CASES', 'COCO_PCT', 'WOW_COCO_PCT', 'WOW_COCO_UCS',
-                 'NEW_GROSS_COCO_UCS', 'NEW_GROSS_COCO_WOW_PCT',
+                 'NEW_GROSS_COCO_UCS',
                  'NON_COCO_USE_CASES', 'TOTAL_EACV', 'COCO_EACV', 'SE_COMMENTS', 'PSE_COMMENTS', 'FEATURE_FLAG']
 _col_cfg = {
     'PARTNER_NAME':      st.column_config.TextColumn("Partner", width="medium"),
