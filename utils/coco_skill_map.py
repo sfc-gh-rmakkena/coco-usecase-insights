@@ -80,20 +80,44 @@ def detect_migration(name: str, tech_uc: str, extra_text: str = ""):
 
 
 TECH_UC_SKILL_MAP = {
+    # Skill tags below are renamed/deduped (2026-09-08) to the REAL current
+    # names in utils/COCO_SKILLS.md -- this map used to contain 11 legacy
+    # names (cortex-agent, cortex-ai-functions, semantic-view,
+    # agent-optimization, dashboard, developing-with-streamlit,
+    # dbt-data-modeling, rec-interactive, snowconvert-assessment,
+    # snowpark-connect) that is_catalog_skill() silently DROPPED for every
+    # use case whose only deterministic signal was one of them -- e.g.
+    # "AI: Cortex AI Functions" produced skills=[] for every such use case
+    # (see Thomson Reuters - Content Playground), leaving the entire result
+    # dependent on the AI-suggested layer's own stochastic guess. Renames
+    # grounded 1:1 in COCO_SKILLS.md's own skill descriptions (not guessed):
+    # cortex-agent/semantic-view/agent-optimization -> agent-studio (that
+    # skill's own summary covers Semantic Views AND Cortex Agents, and its
+    # nested `agent` sub-skill has an `optimize` sub-sub-skill);
+    # cortex-ai-functions -> cortex-ai-function-studio (exact rename);
+    # dashboard/developing-with-streamlit -> developing-with-streamlit-in-
+    # snowflake (dashboards are built via Streamlit in this ecosystem;
+    # developing-with-streamlit is documented as a SUB-skill of the -in-
+    # snowflake skill, not standalone); dbt-data-modeling ->
+    # dbt-projects-on-snowflake. rec-interactive/snowconvert-assessment/
+    # snowpark-connect are dropped outright as pure duplicates -- each was
+    # already co-listed alongside its real modern equivalent
+    # (snowflake-interactive/migration-guide/spark-migration respectively)
+    # in every place it appeared, so dropping it loses no signal.
     "DE: Ingestion":                                          ["openflow", "snowpipe-streaming", "snowpark-python"],
-    "DE: Transformation":                                     ["snowpark-python", "dynamic-tables", "dbt-data-modeling"],
+    "DE: Transformation":                                     ["snowpark-python", "dynamic-tables", "dbt-projects-on-snowflake"],
     "DE: Interoperable Storage":                               ["iceberg", "dynamic-tables"],
-    "Analytics: Applied Analytics":                            ["semantic-view", "dashboard"],
-    "Analytics: Interactive Analytics":                        ["rec-interactive", "snowflake-interactive"],
-    "Analytics: Business Intelligence":                        ["semantic-view", "dashboard", "snowflake-notebooks"],
-    "Analytics: Migrations":                                   ["migration-guide", "snowconvert-assessment"],
+    "Analytics: Applied Analytics":                            ["agent-studio", "developing-with-streamlit-in-snowflake"],
+    "Analytics: Interactive Analytics":                        ["snowflake-interactive"],
+    "Analytics: Business Intelligence":                        ["agent-studio", "developing-with-streamlit-in-snowflake", "snowflake-notebooks"],
+    "Analytics: Migrations":                                   ["migration-guide"],
     "Analytics: Lakehouse Analytics":                          ["iceberg", "snowflake-notebooks"],
     "AI: Machine Learning":                                    ["machine-learning"],
-    "AI: Conversational Assistants":                           ["cortex-agent"],
-    "AI: Cortex AI Functions":                                 ["cortex-ai-functions"],
-    "AI: Agents":                                              ["cortex-agent", "agent-optimization"],
-    "AI: Snowflake Intelligence & Agents":                     ["cortex-agent", "agent-optimization"],
-    "Apps & Collab: Build":                                    ["native-app-provider", "developing-with-streamlit"],
+    "AI: Conversational Assistants":                           ["agent-studio"],
+    "AI: Cortex AI Functions":                                 ["cortex-ai-function-studio"],
+    "AI: Agents":                                              ["agent-studio"],
+    "AI: Snowflake Intelligence & Agents":                     ["agent-studio"],
+    "Apps & Collab: Build":                                    ["native-app-provider", "developing-with-streamlit-in-snowflake"],
     "Apps & Collab: External Collaboration":                   ["data-cleanrooms", "data-sharing"],
     "Platform: Storage":                                       ["iceberg", "storage-lifecycle-policy"],
     "Platform: Compliance, Security, Discovery & Governance":  ["data-governance", "trust-center", "lineage"],
@@ -112,9 +136,9 @@ def map_coco_skills(tech_uc: str, is_migration: bool, migration_signals: list) -
             if key in part:
                 skills.update(skill_list)
     if is_migration:
-        skills.update(["migration-guide", "snowconvert-assessment"])
+        skills.update(["migration-guide"])
         if any(kw in " ".join(migration_signals) for kw in SPARK_KEYWORDS):
-            skills.update(["spark-migration", "snowpark-connect"])
+            skills.update(["spark-migration"])
     return sorted(skills)
 
 
@@ -166,14 +190,14 @@ def map_coco_skills_explained(name: str, tech_uc: str, se_comments: str = "",
 
     if is_mig:
         kw_list = ", ".join(signals)
-        for s in ("migration-guide", "snowconvert-assessment"):
+        for s in ("migration-guide",):
             reasons.setdefault(s, []).append(
                 f"Migration detected &rarr; keyword(s) <b>{h(kw_list)}</b> in UC name / tech field / description / SE or partner notes"
             )
         joined = " ".join(signals)
         spark_hits = [kw for kw in SPARK_KEYWORDS if kw in joined]
         if spark_hits:
-            for s in ("spark-migration", "snowpark-connect"):
+            for s in ("spark-migration",):
                 reasons.setdefault(s, []).append(
                     f"Spark-family migration &rarr; matched <b>{h(', '.join(spark_hits))}</b>"
                 )

@@ -17,44 +17,57 @@
           "deterministic",
           "first_pass",
           "grounding_judge",
+          "gpa_rank",
           "tagged_output"
         ],
-        "note": "Follow one use case from raw fields through two Cortex calls and GPA ranking to capped skill chips."
+        "note": "Follow one use case from raw fields through two parallel Cortex REST calls, LLM-as-judge grounding, and GPA ranking to capped skill chips."
       },
       {
-        "id": "catalog-boundary",
-        "label": "Catalog boundary",
+        "id": "parallel-dispatch",
+        "label": "Parallel dispatch",
         "focus": [
-          "catalog",
-          "grounding_judge"
+          "use_case",
+          "deterministic",
+          "first_pass"
         ],
-        "note": "See the 111-skill catalog anchor the second-pass grounding judge's fact-checking."
+        "note": "32 parallel workers fan discovery calls out across every use case at once, each hitting the Cortex Messages REST API directly."
+      },
+      {
+        "id": "gpa-framework",
+        "label": "GPA framework",
+        "focus": [
+          "first_pass",
+          "grounding_judge",
+          "gpa_rank",
+          "tagged_output"
+        ],
+        "note": "Context relevance, groundedness, and answer relevance are self-scored, then multiplied into one score that ranks the final skill chips."
       }
     ]
   },
   "stages": [
     {
-      "label": "Use Case Signals"
+      "label": "Use Case Batch"
     },
     {
-      "label": "Deterministic Tagging"
+      "label": "Deterministic + Fan-Out"
     },
     {
       "label": "Candidate Discovery"
     },
     {
-      "label": "Grounding Judge"
+      "label": "LLM-as-Judge & GPA"
     },
     {
-      "label": "Ranked & Tagged Output"
+      "label": "Tagged Output"
     }
   ],
   "nodes": [
     {
       "id": "use_case",
       "type": "database",
-      "label": "Use Case Record",
-      "sublabel": "raw fields",
+      "label": "Use Case Batch",
+      "sublabel": "raw fields, batch",
       "stage": 0,
       "row": 0,
       "width": 150
@@ -63,43 +76,61 @@
       "id": "deterministic",
       "type": "backend",
       "label": "Deterministic Tagging",
-      "sublabel": "taxonomy + AIM scan",
+      "sublabel": "taxonomy + AIM scan, then fan out",
       "stage": 1,
-      "row": 1,
+      "row": 0,
+      "width": 150
+    },
+    {
+      "id": "thread_pool",
+      "type": "cloud",
+      "label": "ThreadPoolExecutor",
+      "sublabel": "32 parallel workers",
+      "stage": 1,
+      "row": 2,
       "width": 150
     },
     {
       "id": "first_pass",
       "type": "external",
       "label": "Candidate Discovery",
-      "sublabel": "Cortex call 1",
+      "sublabel": "Cortex REST call: skills + summary",
       "stage": 2,
       "row": 0,
-      "width": 150
+      "width": 160
     },
     {
       "id": "catalog",
       "type": "database",
       "label": "Skill Catalog",
-      "sublabel": "111 skills",
+      "sublabel": "111 skills, COCO_SKILLS.md",
       "stage": 2,
       "row": 2,
-      "width": 150
+      "width": 160
     },
     {
       "id": "grounding_judge",
       "type": "external",
       "label": "Grounding Judge",
-      "sublabel": "Cortex call 2",
+      "sublabel": "LLM-as-judge, 4 match types",
       "stage": 3,
-      "row": 1,
-      "width": 150
+      "row": 0,
+      "width": 160
+    },
+    {
+      "id": "gpa_rank",
+      "type": "backend",
+      "label": "GPA Ranking",
+      "sublabel": "context x groundedness x answer",
+      "stage": 3,
+      "row": 2,
+      "width": 160
     },
     {
       "id": "tagged_output",
       "type": "frontend",
       "label": "Tagged Skill Chips",
-      "sublabel": "capped to 3",
+      "sublabel": "capped to 3, AIM pinned first",
       "stage": 4,
       "row": 0,
       "width": 150
@@ -112,23 +143,44 @@
       "to": "deterministic",
       "label": "name + description + notes",
       "classification": "primary data",
-      "variant": "emphasis"
+      "variant": "emphasis",
+      "labelAt": [
+        208,
+        200
+      ]
     },
     {
-      "id": "det-to-firstpass",
+      "id": "det-to-pool",
       "from": "deterministic",
-      "to": "first_pass",
-      "label": "catalog-only candidates",
+      "to": "thread_pool",
+      "label": "catalog-only candidates per use case",
       "classification": "primary data",
+      "variant": "emphasis",
+      "labelAt": [
+        220,
+        260
+      ]
+    },
+    {
+      "id": "pool-to-firstpass",
+      "from": "thread_pool",
+      "to": "first_pass",
+      "label": "32 concurrent REST calls",
+      "classification": "parallel dispatch",
       "variant": "emphasis"
     },
     {
       "id": "firstpass-to-judge",
       "from": "first_pass",
       "to": "grounding_judge",
-      "label": "evidence + GPA self-scores",
+      "label": "candidates + evidence + GPA self-scores",
       "classification": "primary data",
-      "variant": "emphasis"
+      "variant": "emphasis",
+      "route": "straight",
+      "labelAt": [
+        638,
+        100
+      ]
     },
     {
       "id": "catalog-to-judge",
@@ -139,10 +191,19 @@
       "variant": "default"
     },
     {
-      "id": "judge-to-output",
+      "id": "judge-to-gparank",
       "from": "grounding_judge",
+      "to": "gpa_rank",
+      "label": "grounded verdicts + reasons",
+      "classification": "primary data",
+      "variant": "emphasis",
+      "labelAt": [745, 200]
+    },
+    {
+      "id": "gparank-to-output",
+      "from": "gpa_rank",
       "to": "tagged_output",
-      "label": "GPA-ranked, floor-rescued",
+      "label": "top 3 by combined score",
       "classification": "primary data",
       "variant": "emphasis"
     }
@@ -150,27 +211,26 @@
   "cards": [
     {
       "dot": "emerald",
-      "title": "Two Independent Cortex Calls",
+      "title": "LLM-as-Judge: Four Match Types",
       "items": [
-        "Call 1 proposes skills plus self-scored GPA (context relevance, groundedness, answer relevance)",
-        "Call 2 independently fact-checks every candidate against that skill's full documented scope; only its reason text reaches the report",
-        "Snowflake AIM bypasses both calls -- pinned first, unconditionally, when a supported legacy source is detected"
+        "A second, independent Cortex call fact-checks every candidate -- current-state, named-tool replacement, greenfield build, or stated-outcome match",
+        "Candidates are filtered to the 111 real skills in COCO_SKILLS.md first; Snowflake AIM bypasses the judge entirely when detected"
       ]
     },
     {
       "dot": "violet",
-      "title": "Catalog Is the Only Trusted Vocabulary",
+      "title": "GPA Framework",
       "items": [
-        "Deterministic candidates are filtered to the 111 real skills in COCO_SKILLS.md before the first Cortex call ever sees them",
-        "Legacy non-catalog names are dropped outright, never aliased to a similar catalog entry"
+        "Each candidate self-scores context relevance, groundedness, and answer relevance (0.0-1.0) at discovery time",
+        "Combined score is a product (CR x GR x AR); a coverage floor rescues the best candidate instead of zero skills"
       ]
     },
     {
-      "dot": "amber",
-      "title": "Part 1 No Longer Grounds Skills",
+      "dot": "cyan",
+      "title": "32-Way Parallel REST Dispatch",
       "items": [
-        "The narrative only reads account names -- it never displays skill chips or rationale",
-        "A per-use-case Cortex call that computed unused skill data was removed as dead code"
+        "ThreadPoolExecutor(max_workers=32) fans discovery and judge calls out across every use case concurrently",
+        "Each worker calls the Cortex Messages REST API directly, with exponential backoff retry on HTTP 429"
       ]
     }
   ]

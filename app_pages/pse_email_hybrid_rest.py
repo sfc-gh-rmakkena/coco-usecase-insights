@@ -62,7 +62,7 @@ from utils.report import copy_rich_text_button
 from utils.coco_skill_map_v2 import (
     map_coco_skills_explained, theater_label as _theater_label, h as _h,
     MANAGED_PARTNERS, GSI_LIST, GSI_NAMES, NOAM_RSI_NAMES,
-    build_ai_skill_prompt, parse_ai_skill_response, build_summary_prompt,
+    build_ai_skill_prompt, parse_ai_skill_response,
     filter_grounded_deterministic_skills,
     detect_aim_source, apply_aim_override, rank_skills_by_gpa, prioritize_aim_skill,
     AIM_SKILL_NAME, MAX_SKILLS_PER_USE_CASE,
@@ -257,23 +257,15 @@ _JUDGE_MAX_WORKERS = 32  # raised from 16 (2026-09-08): REST calls each use thei
 # see utils/cortex_rest_helpers.py for the TPM-budget rationale (claude-sonnet-4-5 was already at 84%
 # of its 10M TPM/account at just 16-way concurrency in a real usage check, so this isn't raised further
 # without the retry logic backing it up).
-_SUMMARY_MAX_TOKENS = 200  # dedicated summary call (build_summary_prompt) -- plain-text 1-2 sentences,
-# never shares budget with the skill-JSON call below (see 2026-09-08 split, module docstring above
-# _judge_sanitize_one). 200 is generous headroom for 1-2 sentences and is effectively never hit.
-_JUDGE_FIRSTPASS_MAX_TOKENS = 1500  # first-pass call answers exactly ONE use case, so this budget is never
-# shared -- raised from 700 (2026-09-08): a use case already carrying 2-3
-# deterministic skills plus up to MAX_SKILLS_PER_USE_CASE additional_skills
-# needs a reason+evidence+3 scores JSON block PER skill (5+ skills' worth on
-# a use case like DX - Financial Transformation), which routinely exceeded
-# 700 tokens and got cut off mid-JSON -- parse_ai_skill_response() then
-# failed json.loads() on the incomplete object and discarded EVERYTHING,
-# including a perfectly good "summary" that used to live in this SAME
-# response (see its own partial-recovery fallback for the cases this
-# doesn't fully prevent). The summary itself no longer lives in this call
-# at all (2026-09-08 split, see _SUMMARY_MAX_TOKENS above) -- this budget
-# is now dedicated entirely to rationale/deterministic_skill_context/
-# additional_skills, which is the actual reason this call ever needs a
-# large budget in the first place.
+_JUDGE_FIRSTPASS_MAX_TOKENS = 2200  # combined Summary+Skills call (2026-09-08 merge) -- answers exactly ONE
+# use case, so this budget is never shared with anything else. Raised from 1500 (which itself was raised
+# from 700) to 2200 to cover the added "summary" field on top of rationale/deterministic_skill_context/
+# additional_skills, per Snowflake's own Cortex REST API docs and this account's own
+# SNOWFLAKE.ACCOUNT_USAGE.CORTEX_REST_API_RATE_LIMIT_POLICIES: claude-sonnet-4-5's REAL per-call ceiling is
+# 16,384 output tokens (not the 131,072 cross-model theoretical max, which needs a beta header this app
+# doesn't set) -- 2200 is still under 14% of that real ceiling, so there's no truncation risk reintroduced
+# by folding the summary back into this call. See _judge_sanitize_one's docstring for the merge rationale.
+
 _JUDGE_VERDICT_MAX_TOKENS = 900  # judge call returns one {"grounded":,"reason":} object PER candidate
 
 # Internal marker for a coverage-floor pick (see _judge_sanitize_one) --
@@ -375,11 +367,21 @@ def _combined_gpa(gpa: dict) -> float:
 def _judge_sanitize_one(conn, uc_id: str, desc: str, se_comments: str, skills: list,
                          partner_comments: str = "", name: str = "", call_log=None):
     """Approach 2's tested two-pass grounding pipeline for exactly ONE use
-    case: (0) a small, dedicated summary call (build_summary_prompt) that
-    produces ONLY the partner-facing "Description (sanitized)" text --
-    split out (2026-09-08) from the call below so it can never be starved
-    of output tokens by that call's much larger per-skill JSON payload --
-    then (1) the first-pass rationale/candidate-discovery call
+    case: (0) a merged summary+first-pass call (build_ai_skill_prompt with
+    include_summary=True) that produces the partner-facing "Description
+    (sanitized)" text ALONGSIDE the rationale/candidate-discovery JSON in
+    ONE call -- merged back together (2026-09-08) after confirming the
+    Cortex REST API's real per-call ceiling for claude-sonnet-4-5 is 16,384
+    output tokens (not the 131,072 cross-model theoretical figure, which
+    only applies with a beta header this app doesn't set), far above what
+    this call has ever needed even with all 4 JSON keys populated. This
+    call used to be split into two independent calls (a small dedicated
+    summary call, plus this one) specifically to protect the summary from
+    truncation risk under SNOWFLAKE.CORTEX.COMPLETE SQL's smaller usable
+    output budget -- that split remains correct and unchanged for the SQL
+    tab (pse_email_hybrid.py), but no longer buys anything here since the
+    REST tab was never actually close to truncating either field even
+    combined. Then (1) the first-pass rationale/candidate-discovery call
     (build_ai_skill_prompt/parse_ai_skill_response) -- then (2) an
     independent grounding-judge call (build_grounding_judge_prompt/
     parse_grounding_judge_response) that fact-checks EVERY candidate,
@@ -416,32 +418,22 @@ def _judge_sanitize_one(conn, uc_id: str, desc: str, se_comments: str, skills: l
     (unranked, uncapped -- ranking/capping to MAX_SKILLS_PER_USE_CASE
     happens once in _build_gap_table_rows via rank_skills_by_gpa, same as
     the original pipeline), judge_reasons is {skill: judge's one-sentence
-    reason}, and debug_errors is {"summary": <exception str or "">,
-    "skills": <exception str or "">} -- TEMPORARY diagnostic (2026-09-08)
-    added because every prior fix attempt for the persistently-empty-
-    summary bug (token budget, partial-JSON regex recovery, cache
-    versioning, this call's own token-budget split) was informed guessing:
-    the try/except below silently discarded the real exception, so
-    whether the actual cause was truncation, a shared-connection
-    concurrency issue (16 ThreadPoolExecutor workers all sharing ONE
-    st.session_state.conn -- see Snowflake's own docs on session reuse
+    reason}, and debug_errors is {"skills": <exception str or "">} --
+    TEMPORARY diagnostic (2026-09-08) added because every prior fix attempt
+    for the persistently-empty-summary bug (token budget, partial-JSON
+    regex recovery, cache versioning, this call's own token-budget split)
+    was informed guessing: the try/except below silently discarded the
+    real exception, so whether the actual cause was truncation, a shared-
+    connection concurrency issue (16 ThreadPoolExecutor workers all sharing
+    ONE st.session_state.conn -- see Snowflake's own docs on session reuse
     across threads), a Cortex-side transient error, or something else
-    entirely was never actually confirmed with evidence. Surfaced in the
-    UI (see _build_gap_table_rows/the Part 2 render code) only when a
-    summary or skill call fails; remove once the real cause is found."""
-    debug_errors = {"summary": "", "skills": ""}
-    try:
-        summary = _logged_rest_call(
-            call_log, "Summary", name, cortex_complete,
-            conn, "claude-sonnet-4-5",
-            build_summary_prompt(desc, se_comments, partner_comments, name),
-            max_tokens=_SUMMARY_MAX_TOKENS,
-        ).strip()
-    except Exception as e:
-        summary = ""
-        debug_errors["summary"] = f"{type(e).__name__}: {e}"
-
-    prompt = build_ai_skill_prompt(desc, se_comments, skills, partner_comments, name)
+    entirely was never actually confirmed with evidence. Now that summary
+    and skills share one call/one failure domain, there is only one error
+    slot to check. Surfaced in the UI (see _build_gap_table_rows/the Part 2
+    render code) only when the call fails; remove once the real cause is
+    found."""
+    debug_errors = {"skills": ""}
+    prompt = build_ai_skill_prompt(desc, se_comments, skills, partner_comments, name, include_summary=True)
     try:
         raw = _logged_rest_call(call_log, "Skills", name, cortex_complete,
                                 conn, "claude-sonnet-4-5", prompt, max_tokens=_JUDGE_FIRSTPASS_MAX_TOKENS).strip()
@@ -449,6 +441,8 @@ def _judge_sanitize_one(conn, uc_id: str, desc: str, se_comments: str, skills: l
     except Exception as e:
         parsed = {"summary": "", "rationale": "", "deterministic_skill_context": {}, "additional_skills": {}}
         debug_errors["skills"] = f"{type(e).__name__}: {e}"
+
+    summary = parsed.get("summary", "")
 
     det_ctx = parsed.get("deterministic_skill_context", {}) or {}
     # additional_skills is already validated against COCO_SKILL_NAMES by
@@ -524,9 +518,19 @@ def _judge_sanitize_one(conn, uc_id: str, desc: str, se_comments: str, skills: l
 # session doesn't keep silently serving a pre-fix cached result (blank
 # summary, wrong skill, etc.) for the same use case just because its raw
 # input text hasn't changed. A stale in-session cache hiding a real fix is
-# exactly what happened with the 2026-09-08 max-tokens/parser fix, and
-# again with the 2026-09-08 summary-call split below.
-_JUDGE_PIPELINE_VERSION = 4
+# exactly what happened with the 2026-09-08 max-tokens/parser fix, with the
+# 2026-09-08 summary-call split, with the 2026-09-08 merge of that split
+# back into one call (5) once the real 16,384-token REST ceiling showed the
+# split was never necessary here, and again with the 2026-09-08 fix
+# renaming 11 legacy skill tags in TECH_UC_SKILL_MAP to their real current
+# COCO_SKILLS.md names (utils/coco_skill_map.py) plus the grounding-judge
+# prompt strengthening for the document-intelligence/NER false-positive and
+# the guaranteed-at-least-one-candidate floor (utils/coco_skill_map_v2.py),
+# and again with the 2026-09-08 dbt-projects-on-snowflake-vs-dynamic-tables
+# disambiguation fix (DLP - Data Extraction & Ingestion (Finance
+# Transformation) picked dynamic-tables over the more specific
+# dbt-projects-on-snowflake for "dbt Core on MWAA" evidence).
+_JUDGE_PIPELINE_VERSION = 7
 
 
 def _judge_sanitize_batch(conn, items: list, call_log=None) -> dict:
@@ -538,9 +542,10 @@ def _judge_sanitize_batch(conn, items: list, call_log=None) -> dict:
     parsing/token-budget change still forces fresh calls for every use
     case, even within an already-open session. Worker count
     (_JUDGE_MAX_WORKERS=32) is raised well above a single-Cortex-call
-    pipeline's typical count since each task here makes up to 3 sequential
-    Cortex calls (summary, first-pass, judge) instead of 1, and REST calls
-    have no shared-connection contention across threads.
+    pipeline's typical count since each task here makes up to 2 sequential
+    Cortex calls (Skills [summary+rationale+skill JSON merged], Judge)
+    instead of 1, and REST calls have no shared-connection contention
+    across threads.
 
     items: list of (use_case_id, description, se_comments,
     partner_comments, name, skills) tuples -- `skills` must already be
@@ -588,7 +593,7 @@ def _judge_sanitize_batch(conn, items: list, call_log=None) -> dict:
                     continue
                 entry = {"summary": summary, "rationale": rationale, "skills": final_skills,
                          "judge_reasons": judge_reasons, "gpa_scores": gpa_scores, "debug_errors": debug_errors}
-                if debug_errors.get("summary") or debug_errors.get("skills"):
+                if debug_errors.get("skills"):
                     st.session_state.setdefault("_pse_hybrid_rest_judge_debug", {})[uc_id] = debug_errors
                 cache[(desc, se_comments, partner_comments, name, skills_key, _JUDGE_PIPELINE_VERSION)] = entry
                 result[uc_id] = entry
@@ -1733,8 +1738,6 @@ else:
             with st.expander(f":material/bug_report: Debug: {len(judge_debug)} use case(s) hit a Cortex call error", expanded=True):
                 for uc_id, errs in judge_debug.items():
                     st.markdown(f"**{uc_name_by_id.get(uc_id, uc_id)}**")
-                    if errs.get("summary"):
-                        st.code(f"summary call: {errs['summary']}", language=None)
                     if errs.get("skills"):
                         st.code(f"skills call: {errs['skills']}", language=None)
 

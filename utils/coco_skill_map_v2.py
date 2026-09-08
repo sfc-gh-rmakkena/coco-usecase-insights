@@ -173,17 +173,33 @@ def build_summary_prompt(desc: str, se_comments: str, partner_comments: str = ""
 
 
 def build_ai_skill_prompt(desc: str, se_comments: str, deterministic_skills: list, partner_comments: str = "",
-                          name: str = "") -> str:
+                          name: str = "", include_summary: bool = False) -> str:
     """Build the prompt for one use case's AI rationale + candidate-skill-
     discovery call. The caller (page file) is responsible for actually
     invoking the LLM and passing the raw response to
     parse_ai_skill_response().
 
-    Does NOT ask for the partner-facing summary -- that's a separate,
-    dedicated small call now (see build_summary_prompt()'s docstring for
-    why: this call's per-skill JSON payload can run long enough to get cut
-    off, and a shared budget meant that cutoff used to take the summary
-    down with it).
+    By default does NOT ask for the partner-facing summary -- that's a
+    separate, dedicated small call (build_summary_prompt()) for callers on
+    SNOWFLAKE.CORTEX.COMPLETE SQL (the SQL tab, pse_email_hybrid.py), where
+    this call's per-skill JSON payload can run long enough to get cut off
+    under SQL's usable output budget, and a shared budget meant that cutoff
+    used to take the summary down with it.
+
+    `include_summary=True` (used by the REST tab, pse_email_hybrid_rest.py)
+    folds the summary back into THIS call's JSON schema instead -- safe
+    there because the Cortex REST API's real per-call ceiling for
+    claude-sonnet-4-5 is 16,384 output tokens (confirmed via SNOWFLAKE.
+    ACCOUNT_USAGE.CORTEX_REST_API_RATE_LIMIT_POLICIES and Snowflake's own
+    Cortex REST API docs -- the 131,072 figure sometimes quoted is a
+    cross-model theoretical max that only applies with the
+    output-128k-2025-02-19 beta header set, not the real per-model default),
+    far above what this call has ever needed even with rationale +
+    deterministic_skill_context + additional_skills all included. Merging
+    the calls this way halves REST-tab call count per use case (3 -> 2:
+    Skills, Judge) with no truncation risk reintroduced.
+    parse_ai_skill_response() already parses a "summary" key out of the
+    response unconditionally, so no parser change is needed for this flag.
 
     Skill SELECTION beyond the deterministic set is grounded in the real
     111-skill catalog so it can never invent a skill that doesn't exist;
@@ -222,13 +238,43 @@ def build_ai_skill_prompt(desc: str, se_comments: str, deterministic_skills: lis
             f"\n\nPartner notes (context only -- may contain sensitive detail):\n"
             f"{partner_comments}"
         )
+    summary_key_instructions = (
+        "- \"summary\": EXACTLY 1-2 short sentences suitable for sharing externally with a partner, "
+        "focused only on the business problem or goal (same partner-safe sanitization rules as every "
+        "other text field below). No preamble, no label, just the sentence(s) themselves.\n"
+        if include_summary else ""
+    )
+    key_count = "four" if include_summary else "three"
+    # When NO skill is already deterministically tagged, additional_skills is
+    # the ONLY possible source of any skill signal for this use case -- and
+    # the instructions above only ever say "AT MOST {remaining}", which
+    # silently permits (and does nothing to discourage) an empty {} response
+    # whenever the model is uncertain. Because sampling is inherently
+    # stochastic, that let the SAME underlying text produce a real candidate
+    # on one call and zero candidates on another (confirmed: Thomson Reuters
+    # - Content Playground got 0 skills on one run of this call and
+    # document-intelligence + others on another, purely from this gap, not
+    # from anything about SQL vs REST). The existing coverage-floor rescue
+    # in _judge_sanitize_one only fires when there's at least one candidate
+    # to fall back to -- so guaranteeing a best-effort guess here, not
+    # guaranteeing it survives the judge, is what actually closes the gap.
+    no_deterministic_instructions = (
+        "\nIMPORTANT: no skill is currently tagged for this use case. Since the text below describes real "
+        "technical work, you MUST propose AT LEAST ONE additional_skills candidate representing your "
+        "single best-supported guess, with genuine evidence -- an independent grounding judge will verify "
+        "it separately afterward, so a well-reasoned guess that later gets rejected is always preferable to "
+        "proposing nothing. Only return an empty additional_skills object if the use case name/description/"
+        "notes below truly contain no real technical detail to reason from.\n"
+        if not deterministic_skills else ""
+    )
     return (
         "You are helping a Partner SE prep a partner-facing update for one Salesforce use case.\n\n"
         "Below is the full catalog of Cortex Code (CoCo) skills available to partners. Skills already "
         f"deterministically tagged for this use case ({len(deterministic_skills)} of a "
         f"{MAX_SKILLS_PER_USE_CASE}-skill maximum already used): [{skills_str}].\n\n"
         f"CoCo skill catalog:\n{_COCO_SKILL_CATALOG_BLOCK}\n\n"
-        "Return ONLY a JSON object with exactly three keys:\n"
+        f"Return ONLY a JSON object with exactly {key_count} keys:\n"
+        f"{summary_key_instructions}"
         f"- \"rationale\": one short sentence, grounded in the concrete technical detail below, on why "
         f"the skill(s) [{skills_str}] (plus any additional_skills below) would accelerate THIS engagement.\n"
         f"- \"deterministic_skill_context\": a JSON object mapping EACH already-tagged skill "
@@ -243,7 +289,8 @@ def build_ai_skill_prompt(desc: str, se_comments: str, deterministic_skills: lis
         "from the use case name/description/SE notes/partner notes below, \"context_relevance\": 0.0-1.0, "
         "\"groundedness\": 0.0-1.0, \"answer_relevance\": 0.0-1.0}, for skills from the catalog above -- "
         "beyond the ones already tagged -- whose scope is genuinely matched by that exact evidence text. "
-        "Use EXACT skill names from the catalog.\n\n"
+        "Use EXACT skill names from the catalog.\n"
+        f"{no_deterministic_instructions}\n"
         "SCORE DEFINITIONS (0.0-1.0 each, apply the SAME rubric to every skill, deterministic or additional):\n"
         "- context_relevance: does the use case's actual text call for this capability, independent of "
         "whether it's already tagged? 0.0 = nothing in the text relates to this skill's domain at all; "
@@ -259,13 +306,37 @@ def build_ai_skill_prompt(desc: str, se_comments: str, deterministic_skills: lis
         "(a technology, workflow step, artifact, or pain point actually mentioned) that the skill would "
         "help with. If the only support you can offer is generic, leave the reason empty rather than "
         "writing boilerplate.\n\n"
+        "Think like an SE pitching complementary skills to help win/expand this engagement, not like a "
+        "narrow compliance auditor -- map what the customer's own text describes wanting to whichever "
+        "catalog skill actually delivers it, even if the customer never uses Snowflake's internal "
+        "terminology for it. The bar below is about requiring REAL textual evidence for a skill's actual "
+        "required artifact/mechanism, not about being conservative or under-proposing -- a skill that's "
+        "genuinely well-supported by the text should always be proposed, just never one that's only "
+        "supported by vocabulary that happens to overlap with that skill's own catalog description.\n\n"
         "CRITICAL -- evidence must be a real quote, not a paraphrase or inference: a topical word alone is "
         "NEVER sufficient evidence. Match on a named technology, artifact, or concrete action, never on "
         "thematic vibes. For example: the word \"content\" alone is NOT evidence of file/document "
         "processing (that requires an actual file/PDF/form/stage mention); the word \"insights\" alone is "
         "NOT evidence of machine learning (that requires an actual model/training/prediction mention); the "
         "word \"data\" alone is NOT evidence of data governance (that requires an actual policy/masking/"
-        "classification mention). If you cannot copy a real, specific quote that concretely supports a "
+        "classification mention). A specific-SOUNDING technical term is not automatically sufficient either "
+        "if the skill's own required artifact/mechanism is still absent: \"NER processing\" or \"entity "
+        "extraction\" applied to generic \"content\" (with no file, PDF, form, or Snowflake stage named) is "
+        "NOT evidence of document-intelligence (which requires an actual file/PDF/form/image on a stage "
+        "being extracted or parsed) -- that exact evidence shape is instead a match for "
+        "ai-functions-pipeline-builder, whose own representative use cases explicitly include building "
+        "structured/entity-extraction pipelines from scratch. Similarly, evidence naming an external "
+        "ORCHESTRATOR running dbt (e.g. \"dbt Core on MWAA\", \"dbt via Airflow\", \"Astronomer Cosmos\") is "
+        "a match for dbt-projects-on-snowflake (deploying the SAME dbt project natively in Snowflake via "
+        "`snow dbt`, eliminating the external orchestrator) -- NOT dynamic-tables, even though "
+        "dynamic-tables' own catalog scope also mentions \"converting dbt... pipelines to dynamic tables\". "
+        "The distinction: dynamic-tables covers replacing individual dbt MODEL materializations with the "
+        "dynamic-table primitive itself (a transformation-logic change); dbt-projects-on-snowflake covers "
+        "keeping dbt as-is but removing the external orchestrator dependency (a deployment/scheduling "
+        "change). Evidence that only names an orchestrator (MWAA/Airflow/Cosmos) with no mention of wanting "
+        "to replace dbt's own materialization logic supports dbt-projects-on-snowflake, not dynamic-tables. "
+        "If you cannot copy a real, specific quote "
+        "that concretely supports a "
         "skill's actual scope, leave that skill's reason/evidence empty (for deterministic_skill_context) "
         "or omit it entirely (for additional_skills) -- do not force matches just to fill the quota.\n\n"
         "ALL text fields must be partner-safe: remove dollar amounts, EACV, competitor names, internal "
@@ -1070,13 +1141,24 @@ _CATALOG_BY_NAME_LOWER = {c["name"].lower(): c for c in COCO_SKILL_CATALOG}
 def is_catalog_skill(skill_name: str) -> bool:
     """True iff skill_name is one of the 111 real skills literally present
     in COCO_SKILLS.md (case-insensitive) -- the ONLY trusted skill
-    vocabulary per explicit instruction. No aliasing: a handful of legacy
-    deterministic-layer names (e.g. "dashboard", "cortex-ai-functions",
-    "dbt-data-modeling") that predate the current catalog naming are
-    dropped outright by this check rather than mapped to a similar-sounding
-    catalog entry -- an earlier LEGACY_ALIASES approach was rejected
-    because it silently substituted a DIFFERENT skill than the one a
-    deterministic rule actually named."""
+    vocabulary per explicit instruction.
+
+    UPDATE (2026-09-08): the 11 legacy TECH_UC_SKILL_MAP names this
+    function used to silently drop (e.g. "dashboard", "cortex-ai-functions",
+    "dbt-data-modeling") were renamed/deduped AT THE SOURCE
+    (utils/coco_skill_map.py) to their real current catalog names, grounded
+    1:1 in COCO_SKILLS.md's own skill descriptions -- see that module's
+    TECH_UC_SKILL_MAP comment for the full rename table. That was the real
+    fix for the "cortex-ai-functions" -> dropped -> Thomson Reuters -
+    Content Playground getting skills=[] bug: an earlier attempt to solve
+    this via a LEGACY_ALIASES lookup INSIDE this function was rejected
+    because it guessed similar-sounding names rather than verifying each
+    one against the catalog's actual documented scope, and could silently
+    substitute a DIFFERENT skill than the one a deterministic rule actually
+    named. Fixing the source data instead of aliasing downstream avoids
+    that risk entirely. This function now remains only as a defensive
+    backstop against a future typo or catalog rename in TECH_UC_SKILL_MAP
+    -- it should rarely if ever actually drop anything in practice."""
     return bool(skill_name) and skill_name.strip().lower() in COCO_SKILL_NAMES
 
 
@@ -1122,7 +1204,12 @@ def build_grounding_judge_prompt(source_text: str, candidates: list) -> str:
     MWAA-orchestrated dbt use case; data-quality for a "quality checks"
     stated outcome; ai-functions-pipeline-builder for a greenfield NER
     pipeline) and false positives (document-intelligence over-admitted via
-    generic "JSON in a table" modernization framing). Deliberately never
+    generic "JSON in a table" modernization framing, AND -- found recurring
+    2026-09-08 on Thomson Reuters - Content Playground -- via "NER
+    processing" over generic "content" with no file/PDF/stage ever named;
+    see the current-state-match counter-example below, added specifically
+    because the JSON-in-a-table counter-example alone didn't cover this
+    second, distinct evidence shape). Deliberately never
     says "Path N" anywhere, including in its own numbered-list framing or
     the JSON output instruction -- an earlier version leaked "Path 1"/
     "Path 2" phrasing into the judge's own reason text, which the user
@@ -1136,15 +1223,17 @@ def build_grounding_judge_prompt(source_text: str, candidates: list) -> str:
 
 A skill can be grounded FOUR ways -- read all four carefully, they are NOT interchangeable. Think like an SE pitching complementary skills to extend a deal, not like a narrow compliance auditor -- an SE maps what the customer SAID THEY WANT to whichever skill delivers it, without waiting for the customer to already know Snowflake's internal terminology for it:
 - CURRENT-STATE MATCH: the evidence describes the customer already doing something within that skill's actual documented scope.
-- NAMED-TOOL REPLACEMENT MATCH: the evidence names a SPECIFIC external tool, platform, or orchestrator (e.g. "Databricks", "MWAA", "Airflow", "Cloudera", "dbt Cloud") that this skill is the well-known Snowflake-native replacement/migration path FOR. Example: a customer on Databricks should ground a Databricks migration skill BECAUSE they are on Databricks, not despite it. A customer running dbt via MWAA should ground a skill for deploying dbt as a native Snowflake object (eliminating the external orchestrator) -- the mismatch between "current tool" and "skill's target state" is exactly the signal here, not a disqualifier.
+- NAMED-TOOL REPLACEMENT MATCH: the evidence names a SPECIFIC external tool, platform, or orchestrator (e.g. "Databricks", "MWAA", "Airflow", "Cloudera", "dbt Cloud") that this skill is the well-known Snowflake-native replacement/migration path FOR. Example: a customer on Databricks should ground a Databricks migration skill BECAUSE they are on Databricks, not despite it. A customer running dbt via MWAA should ground dbt-projects-on-snowflake (deploying the SAME dbt project natively via `snow dbt`, eliminating the external orchestrator) -- the mismatch between "current tool" and "skill's target state" is exactly the signal here, not a disqualifier. Do NOT ground dynamic-tables for this evidence instead just because its own catalog scope also mentions "converting dbt... to dynamic tables" -- that phrase covers replacing individual dbt MODEL materializations with the dynamic-table primitive (a transformation-logic change), a DIFFERENT opportunity from removing the external orchestrator while keeping dbt itself (dbt-projects-on-snowflake). Evidence naming only an orchestrator (MWAA/Airflow/Cosmos), with no separate mention of wanting to replace dbt's own materialization logic, grounds dbt-projects-on-snowflake, not dynamic-tables.
 
-Named-tool replacement match applies EVEN IF the evidence frames the named external tool as an already-decided or planned destination, not just an existing pain point being reconsidered -- Snowflake's positioning is to preempt unnecessary external-tool adoption proactively, not only react to existing dependencies. Example: a use case that says it is "migrating X to MWAA and dbt" should STILL ground a native-Snowflake-dbt-deployment skill, exactly as if it said the customer already runs dbt on MWAA today -- the fact that MWAA is the stated target rather than the current pain point does not disqualify the replacement skill; the opportunity to avoid the external orchestrator entirely applies before adoption just as much as after it.
+Named-tool replacement match applies EVEN IF the evidence frames the named external tool as an already-decided or planned destination, not just an existing pain point being reconsidered -- Snowflake's positioning is to preempt unnecessary external-tool adoption proactively, not only react to existing dependencies. Example: a use case that says it is "migrating X to MWAA and dbt" should STILL ground dbt-projects-on-snowflake, exactly as if it said the customer already runs dbt on MWAA today -- the fact that MWAA is the stated target rather than the current pain point does not disqualify the replacement skill; the opportunity to avoid the external orchestrator entirely applies before adoption just as much as after it.
 
 - GREENFIELD BUILD MATCH: the evidence describes needing or wanting to build/stand up a NEW capability that IS this skill's own core represented use case (per its "Representative use cases" / "What it accelerates" text), even with nothing existing yet to currently-match and no named external tool being replaced. Most of a skill's own representative use cases are phrased exactly this way (e.g. ai-functions-pipeline-builder's own catalog use cases include "Build a searchable knowledge base over our contract library" and "Build an incremental invoice processing pipeline from my stage" -- forward-looking build requests, not descriptions of existing systems or named replacements). Example: evidence describing "NER (Named Entity Recognition) processing" as part of "the complete lifecycle from content ingestion to production deployment" should ground ai-functions-pipeline-builder via a greenfield build match -- entity/structured extraction as an ongoing pipeline is literally one of that skill's own named templates ("structured extraction") and composable blocks ("entity assembly"), regardless of whether the customer is already using Snowflake Cortex AI functions today or replacing a named tool. Do NOT require a current-state or named-tool-replacement match to also be satisfied when a greenfield build match clearly applies -- greenfield build intent that matches a skill's own documented use case is sufficient on its own.
 
 - STATED-OUTCOME MATCH: the evidence names a plain-English business outcome or need (in the customer's own words, not Snowflake jargon) that IS what a skill's own one-line summary/tagline directly promises to deliver -- ground it even if the customer never mentions the specific Snowflake mechanism (DMFs, AI_EXTRACT, etc.) and even if the same evidence is already grounding a different skill for a different part of the same need. Example: a customer platform that names "quality checks" as one of its explicit capabilities should ground data-quality ("Monitors, investigates, and enforces data quality") via a stated-outcome match -- once the platform's content lands in Snowflake tables (which may itself be grounded via a greenfield build match on a different skill), DMF-based monitoring is the concrete Snowflake-native way to deliver the customer's own literally-stated "quality checks" want, regardless of whether they described that want as validating structured columns or evaluating content. Do not require the customer's phrasing to distinguish "data quality" from "content quality" -- if they used the words "quality check[s]"/"quality control"/"quality validation" as a named capability they want, and a skill's own summary is literally about delivering quality monitoring/enforcement, that is sufficient; a skill's own "Pairs with" list (curated for a narrower internal workflow-sequencing purpose) is NOT a relevance filter and must not be used to reject an otherwise-sound stated-outcome match.
 
 A named-tool replacement match requires a REAL NAMED TOOL/PLATFORM being replaced -- it is NOT a license to admit a skill just because a data format, generic noun, or workflow step is mentioned. Counter-example: evidence describing "JSON files loaded into Snowflake and flattened into tabular data" does NOT ground a skill scoped to "files on a stage" (e.g. document-intelligence) just because JSON is a document-adjacent word and the process is being modernized -- there is no named external tool being replaced here, and the actual technical operation (data already in table rows) is genuinely outside that skill's scope under ANY of the four ways described above. Similarly, a skill for SQL policy objects does not cover unrelated cloud networking terms that merely share a word, modernization framing or not. When in doubt whether a named-tool replacement match applies, ask: does the evidence name a SPECIFIC tool/platform/orchestrator, and is the candidate skill THE recognized Snowflake-native answer to replacing exactly that named thing? A greenfield build match has its own similar discipline: greenfield intent must match a skill's OWN stated use case, not just share a generic theme -- "we're building something new with data" does not by itself ground every data-adjacent skill; the described capability must line up with that skill's specific representative use cases or accelerates list, not merely its general subject area.
+
+A current-state match has the SAME discipline: it requires the evidence to name the actual activity, artifact, or mechanism that skill's scope depends on -- not just vocabulary that happens to overlap with the skill's OWN catalog description. Counter-example: evidence describing "NER (Named Entity Recognition) processing" applied to generic "content" (with no file, PDF, form, or Snowflake stage ever named in the evidence) does NOT ground document-intelligence via a current-state match just because that skill's own summary also uses phrases like "structured field extraction" -- document-intelligence requires an actual file/PDF/form/image on a stage being extracted or parsed, which this evidence never provides. That exact evidence is instead the greenfield build match on ai-functions-pipeline-builder described above (its own representative use cases explicitly include building structured/entity-extraction pipelines from scratch) -- when the same evidence appears as a candidate for BOTH skills, ground the one whose actual scope it satisfies, not the one whose description merely echoes similar words.
 
 If a skill has no catalog scope text, judge only on whether the plain-English skill label is a sensible fit for the evidence -- do not reject solely for lacking a catalog entry.
 

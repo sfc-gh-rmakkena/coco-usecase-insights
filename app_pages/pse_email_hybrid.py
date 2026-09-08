@@ -420,9 +420,17 @@ def _judge_sanitize_one(conn, uc_id: str, desc: str, se_comments: str, skills: l
 # session doesn't keep silently serving a pre-fix cached result (blank
 # summary, wrong skill, etc.) for the same use case just because its raw
 # input text hasn't changed. A stale in-session cache hiding a real fix is
-# exactly what happened with the 2026-09-08 max-tokens/parser fix, and
-# again with the 2026-09-08 summary-call split below.
-_JUDGE_PIPELINE_VERSION = 4
+# exactly what happened with the 2026-09-08 max-tokens/parser fix, again
+# with the 2026-09-08 summary-call split, and again with the 2026-09-08 fix
+# renaming 11 legacy skill tags in TECH_UC_SKILL_MAP to their real current
+# COCO_SKILLS.md names (utils/coco_skill_map.py) plus the grounding-judge
+# prompt strengthening for the document-intelligence/NER false-positive and
+# the guaranteed-at-least-one-candidate floor (utils/coco_skill_map_v2.py),
+# and again with the 2026-09-08 dbt-projects-on-snowflake-vs-dynamic-tables
+# disambiguation fix (DLP - Data Extraction & Ingestion (Finance
+# Transformation) picked dynamic-tables over the more specific
+# dbt-projects-on-snowflake for "dbt Core on MWAA" evidence).
+_JUDGE_PIPELINE_VERSION = 6
 
 
 def _judge_sanitize_batch(conn, items: list) -> dict:
