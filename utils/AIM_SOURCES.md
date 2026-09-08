@@ -105,7 +105,7 @@ category but SSIS is SQL Server's own ETL tool.
 ## Where this is implemented
 
 - `utils/coco_skill_map_v2.py` — `AIM_SOURCE_PATTERNS`, `detect_aim_source()`,
-  `apply_aim_override()`, `cap_skills()`, `prioritize_aim_skill()`.
+  `apply_aim_override()`, `rank_skills_by_gpa()`, `prioritize_aim_skill()`.
 - `app_pages/pse_email_hybrid.py` — wires detection into
   `_group_non_coco_by_region()` (deterministic base, now also passing
   `PARTNER_COMMENTS`) and re-applies the override after the AI
