@@ -1,21 +1,35 @@
-"""PSE CoCo Use Case Insights — DEV only.
+"""PSE CoCo Use Case Insights (REST API) — DEV only.
 
-Combines two layouts approved via HTML mockups:
-  Part 1 (Narrative): an AI-drafted, editable personal letter — copy as rich
-                       text only, no download.
-  Part 2 (Report):    a dense "executive table" report — anonymized peer
-                       benchmark, regional breakdown, restructured non-CoCo
-                       gap table (skills + reason + sanitized description,
-                       Stage as a column, no consumption data), and a
-                       concrete action plan. Copy as rich text, download as
-                       HTML, or download as a real PDF (reportlab).
+REST-API twin of app_pages/pse_email_hybrid.py (2026-09-08). Identical UI,
+data pipeline, and Approach-2 grounding-judge logic -- the ONLY functional
+difference is that every LLM call (summary, skill/rationale, grounding
+judge, and the Part 1 narrative draft) goes through utils.cortex_rest_
+helpers.cortex_complete_rest() (Cortex Messages REST API) instead of
+utils.cortex_helpers.cortex_complete() (SNOWFLAKE.CORTEX.COMPLETE SQL).
+No Cortex SQL calls anywhere in this file.
 
-This page uses its own session_state keys (prefixed `_pse_hybrid_`) so it
-never collides with the original PSE Email page's cached state.
+Why this tab exists: test_apps/cortex_rest_test/streamlit_app.py's
+concurrency test showed the REST API runs ~2.4x faster than SQL COMPLETE
+under 16-way concurrent load (13.6s vs 32.9s for 16 calls, both 16/16
+correct -- no cross-thread corruption on either path, ruling out the
+earlier shared-connection-corruption hypothesis for the pse-email judge
+pipeline's persistent empty-Description bug). This tab exists to capture
+that speedup in the real report and to check whether the REST path also
+happens to avoid whatever is still causing that empty-Description bug
+(root cause not yet confirmed as of this tab's creation).
+
+Deliberately a full clone, not a shared/parameterized module, so the
+original tab (app_pages/pse_email_hybrid.py) is never at risk while this
+one is validated -- explicit user requirement. Uses its own session_state
+keys (prefixed `_pse_hybrid_rest_`, distinct from the original's
+`_pse_hybrid_`) so switching between the two tabs in the same browser
+session can never leak cached report state or widget values across them.
 """
 import io
 import re
 import html as html_lib
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime
 
@@ -43,7 +57,7 @@ from utils.queries import (
     get_okr_coco_adoption, get_usecase_confidence_scores, get_bulk_confidence_scores,
 )
 from utils.config import get_env
-from utils.cortex_helpers import cortex_complete
+from utils.cortex_rest_helpers import cortex_complete_rest as cortex_complete
 from utils.report import copy_rich_text_button
 from utils.coco_skill_map_v2 import (
     map_coco_skills_explained, theater_label as _theater_label, h as _h,
@@ -236,7 +250,13 @@ def _compute_regional_breakdown(detail_df: pd.DataFrame, target: int):
 # outright rather than ported, since porting dead code is pointless.
 # ─────────────────────────────────────────────────────────────────────────────
 
-_JUDGE_MAX_WORKERS = 16  # raised from _SANITIZE_MAX_WORKERS=10 since each task now makes 3 sequential Cortex calls
+_JUDGE_MAX_WORKERS = 32  # raised from 16 (2026-09-08): REST calls each use their own requests.post()
+# session/connection, so there's no shared-connection risk that capped the SQL tab's worker count.
+# cortex_complete_rest() now retries HTTP 429 with exponential backoff, so pushing concurrency here
+# no longer risks silently recreating the empty-Description/empty-skills bug via rate-limit failures --
+# see utils/cortex_rest_helpers.py for the TPM-budget rationale (claude-sonnet-4-5 was already at 84%
+# of its 10M TPM/account at just 16-way concurrency in a real usage check, so this isn't raised further
+# without the retry logic backing it up).
 _SUMMARY_MAX_TOKENS = 200  # dedicated summary call (build_summary_prompt) -- plain-text 1-2 sentences,
 # never shares budget with the skill-JSON call below (see 2026-09-08 split, module docstring above
 # _judge_sanitize_one). 200 is generous headroom for 1-2 sentences and is effectively never hit.
@@ -263,6 +283,87 @@ _COVERAGE_FLOOR_SENTINEL = "__COVERAGE_FLOOR__"
 _COVERAGE_FLOOR_FALLBACK = "Best-supported CoCo skill match identified for this use case based on its technical profile."
 
 
+class _RestCallLog:
+    """Thread-safe log of individual Cortex REST API HTTPS calls, for the
+    live "REST API calls being made" status container on this page (added
+    2026-09-08 at explicit user request, to visually confirm -- not just
+    claim -- that the REST path is really what's firing under the hood).
+
+    Plain Python list + threading.Lock, NOT st.session_state -- worker
+    threads spawned via ThreadPoolExecutor don't reliably have Streamlit's
+    ScriptRunContext attached, so touching st.session_state directly from
+    them is fragile. A plain object captured by closure and passed down as
+    a parameter works from any thread with no such caveat."""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.entries = []
+        self._next_id = 1
+
+    def start(self, label: str, use_case: str = "") -> dict:
+        entry = {"id": None, "label": label, "use_case": use_case,
+                  "status": "in-flight", "started": time.time(), "elapsed": None}
+        with self.lock:
+            entry["id"] = self._next_id
+            self._next_id += 1
+            self.entries.append(entry)
+        return entry
+
+    def finish(self, entry: dict, ok: bool = True, error: str = ""):
+        with self.lock:
+            entry["status"] = "success" if ok else "error"
+            entry["elapsed"] = round(time.time() - entry["started"], 2)
+            if error:
+                entry["error"] = error
+
+    def snapshot(self, last_n: int = 40):
+        """Returns (most-recent-first list of up to last_n entries, total count)."""
+        with self.lock:
+            entries = list(self.entries)
+        return list(reversed(entries[-last_n:])), len(entries)
+
+
+def _logged_rest_call(call_log, label: str, use_case: str, fn, *args, **kwargs):
+    """Wrap one cortex_complete_rest(...) invocation with a call_log entry
+    (in-flight -> success/error) if call_log is provided; otherwise a
+    transparent passthrough. Re-raises on failure so existing try/except
+    call sites (debug_errors capture) are unaffected."""
+    if call_log is None:
+        return fn(*args, **kwargs)
+    entry = call_log.start(label, use_case)
+    try:
+        result = fn(*args, **kwargs)
+        call_log.finish(entry, ok=True)
+        return result
+    except Exception as e:
+        call_log.finish(entry, ok=False, error=str(e))
+        raise
+
+
+def _render_call_log(placeholder, call_log, done: bool = False):
+    """Render the live/final REST call status table into a st.empty()
+    placeholder. Called repeatedly from the main script thread while a
+    background thread runs the actual report-building work, and once more
+    after that thread finishes."""
+    entries, total = call_log.snapshot(last_n=40)
+    in_flight = sum(1 for e in entries if e["status"] == "in-flight")
+    ok = sum(1 for e in entries if e["status"] == "success")
+    err = sum(1 for e in entries if e["status"] == "error")
+    with placeholder.container():
+        state = "Done" if done else "Live"
+        st.caption(
+            f":material/{'check_circle' if done else 'bolt'}: **{state}** — "
+            f"{total} REST API call(s) made so far — {in_flight} in-flight, {ok} succeeded, {err} failed "
+            f"(showing most recent {len(entries)})"
+        )
+        if entries:
+            st.dataframe(
+                [{"#": e["id"], "Call": e["label"], "Use case": (e["use_case"] or "")[:45],
+                  "Status": e["status"], "Elapsed (s)": e["elapsed"]} for e in entries],
+                hide_index=True, use_container_width=True, height=280,
+            )
+
+
 def _combined_gpa(gpa: dict) -> float:
     """Product of the 3 GPA axes for one skill's score dict -- same
     combined-score definition as coco_skill_map_v2's rank_skills_by_gpa(),
@@ -272,7 +373,7 @@ def _combined_gpa(gpa: dict) -> float:
 
 
 def _judge_sanitize_one(conn, uc_id: str, desc: str, se_comments: str, skills: list,
-                         partner_comments: str = "", name: str = ""):
+                         partner_comments: str = "", name: str = "", call_log=None):
     """Approach 2's tested two-pass grounding pipeline for exactly ONE use
     case: (0) a small, dedicated summary call (build_summary_prompt) that
     produces ONLY the partner-facing "Description (sanitized)" text --
@@ -330,7 +431,8 @@ def _judge_sanitize_one(conn, uc_id: str, desc: str, se_comments: str, skills: l
     summary or skill call fails; remove once the real cause is found."""
     debug_errors = {"summary": "", "skills": ""}
     try:
-        summary = cortex_complete(
+        summary = _logged_rest_call(
+            call_log, "Summary", name, cortex_complete,
             conn, "claude-sonnet-4-5",
             build_summary_prompt(desc, se_comments, partner_comments, name),
             max_tokens=_SUMMARY_MAX_TOKENS,
@@ -341,7 +443,8 @@ def _judge_sanitize_one(conn, uc_id: str, desc: str, se_comments: str, skills: l
 
     prompt = build_ai_skill_prompt(desc, se_comments, skills, partner_comments, name)
     try:
-        raw = cortex_complete(conn, "claude-sonnet-4-5", prompt, max_tokens=_JUDGE_FIRSTPASS_MAX_TOKENS).strip()
+        raw = _logged_rest_call(call_log, "Skills", name, cortex_complete,
+                                conn, "claude-sonnet-4-5", prompt, max_tokens=_JUDGE_FIRSTPASS_MAX_TOKENS).strip()
         parsed = parse_ai_skill_response(raw, deterministic_skills=skills)
     except Exception as e:
         parsed = {"summary": "", "rationale": "", "deterministic_skill_context": {}, "additional_skills": {}}
@@ -371,7 +474,8 @@ def _judge_sanitize_one(conn, uc_id: str, desc: str, se_comments: str, skills: l
         source_text = " ".join(str(x or "") for x in (name, desc, se_comments, partner_comments))
         judge_prompt = build_grounding_judge_prompt(source_text, candidates)
         try:
-            judge_raw = cortex_complete(conn, "claude-sonnet-4-5", judge_prompt, max_tokens=_JUDGE_VERDICT_MAX_TOKENS).strip()
+            judge_raw = _logged_rest_call(call_log, "Judge", name, cortex_complete,
+                                          conn, "claude-sonnet-4-5", judge_prompt, max_tokens=_JUDGE_VERDICT_MAX_TOKENS).strip()
             verdicts = parse_grounding_judge_response(judge_raw)
         except Exception:
             verdicts = {}
@@ -425,17 +529,18 @@ def _judge_sanitize_one(conn, uc_id: str, desc: str, se_comments: str, skills: l
 _JUDGE_PIPELINE_VERSION = 4
 
 
-def _judge_sanitize_batch(conn, items: list) -> dict:
+def _judge_sanitize_batch(conn, items: list, call_log=None) -> dict:
     """Batch/parallel wrapper around _judge_sanitize_one -- ThreadPoolExecutor
-    fan-out + a session_state cache (_pse_hybrid_judge_cache) keyed by
+    fan-out + a session_state cache (_pse_hybrid_rest_judge_cache) keyed by
     (description, se_comments, partner_comments, name, skills,
     _JUDGE_PIPELINE_VERSION) so regenerating for the same partner needs
     zero new calls -- but bumping _JUDGE_PIPELINE_VERSION after any prompt/
     parsing/token-budget change still forces fresh calls for every use
     case, even within an already-open session. Worker count
-    (_JUDGE_MAX_WORKERS=16) is raised well above a single-Cortex-call
+    (_JUDGE_MAX_WORKERS=32) is raised well above a single-Cortex-call
     pipeline's typical count since each task here makes up to 3 sequential
-    Cortex calls (summary, first-pass, judge) instead of 1.
+    Cortex calls (summary, first-pass, judge) instead of 1, and REST calls
+    have no shared-connection contention across threads.
 
     items: list of (use_case_id, description, se_comments,
     partner_comments, name, skills) tuples -- `skills` must already be
@@ -443,7 +548,7 @@ def _judge_sanitize_batch(conn, items: list) -> dict:
     _group_non_coco_by_region(catalog_only=True)).
     Returns {use_case_id: {"summary":, "rationale":, "skills": [...],
     "judge_reasons": {...}, "gpa_scores": {...}, "debug_errors": {...}}}."""
-    cache = st.session_state.setdefault("_pse_hybrid_judge_cache", {})
+    cache = st.session_state.setdefault("_pse_hybrid_rest_judge_cache", {})
     result = {}
     to_fetch = []
     for uc_id, desc, se_comments, partner_comments, name, skills in items:
@@ -463,7 +568,7 @@ def _judge_sanitize_batch(conn, items: list) -> dict:
     if to_fetch:
         with ThreadPoolExecutor(max_workers=min(_JUDGE_MAX_WORKERS, len(to_fetch))) as pool:
             future_to_uc = {
-                pool.submit(_judge_sanitize_one, conn, uc_id, desc, se_comments, list(skills_key), partner_comments, name): uc_id
+                pool.submit(_judge_sanitize_one, conn, uc_id, desc, se_comments, list(skills_key), partner_comments, name, call_log): uc_id
                 for uc_id, desc, se_comments, partner_comments, name, skills_key in to_fetch
             }
             for future in as_completed(future_to_uc):
@@ -477,14 +582,14 @@ def _judge_sanitize_batch(conn, items: list) -> dict:
                     # it the same way rather than silently dropping the use case
                     # (see the module-level debug_errors docstring in
                     # _judge_sanitize_one for why this diagnostic exists).
-                    st.session_state.setdefault("_pse_hybrid_judge_debug", {})[uc_id] = {
+                    st.session_state.setdefault("_pse_hybrid_rest_judge_debug", {})[uc_id] = {
                         "summary": f"TOP-LEVEL {type(e).__name__}: {e}", "skills": ""
                     }
                     continue
                 entry = {"summary": summary, "rationale": rationale, "skills": final_skills,
                          "judge_reasons": judge_reasons, "gpa_scores": gpa_scores, "debug_errors": debug_errors}
                 if debug_errors.get("summary") or debug_errors.get("skills"):
-                    st.session_state.setdefault("_pse_hybrid_judge_debug", {})[uc_id] = debug_errors
+                    st.session_state.setdefault("_pse_hybrid_rest_judge_debug", {})[uc_id] = debug_errors
                 cache[(desc, se_comments, partner_comments, name, skills_key, _JUDGE_PIPELINE_VERSION)] = entry
                 result[uc_id] = entry
 
@@ -582,7 +687,7 @@ def _group_non_coco_by_region(non_coco_df: pd.DataFrame, catalog_only: bool = Fa
     return by_region
 
 
-def _build_gap_table_rows(conn, non_coco_df: pd.DataFrame):
+def _build_gap_table_rows(conn, non_coco_df: pd.DataFrame, call_log=None):
     """Per-region list of UC row dicts for the gap table, each with skill+reason,
     a sanitized description, and a skill rationale -- ALL sourced exclusively
     from Approach 2's grounding-judge pipeline (_judge_sanitize_batch), per
@@ -620,7 +725,7 @@ def _build_gap_table_rows(conn, non_coco_df: pd.DataFrame):
     all_rows = [row for rows in by_region.values() for row in rows]
     items = [(row["uc_id"], row["raw_desc"], row["raw_se_comments"], row["raw_partner_comments"], row["name"], row["skills"])
               for row in all_rows]
-    judged_map = _judge_sanitize_batch(conn, items)
+    judged_map = _judge_sanitize_batch(conn, items, call_log=call_log)
     for row in all_rows:
         entry = judged_map.get(row["uc_id"], {"summary": "", "rationale": "", "skills": [], "judge_reasons": {}, "gpa_scores": {}, "debug_errors": {}})
         row["sanitized_desc"] = entry["summary"]
@@ -764,7 +869,7 @@ def _build_action_plan(regional_breakdown, gap_rows_by_region, partner):
 
 
 def _build_narrative_draft(conn, partner, recipients, coco_pct, coco_count, total_ucs,
-                            peer_benchmark, regional_breakdown, max_gap_region, gap_rows_by_region, report_date):
+                            peer_benchmark, regional_breakdown, max_gap_region, gap_rows_by_region, report_date, call_log=None):
     recipients = recipients.strip() or "team"
     peer_line = ""
     if peer_benchmark:
@@ -839,7 +944,8 @@ Always refer to the partner as "{partner}" by name (e.g. "{partner} ranks..."), 
 
 Return only the email body text, no subject line, no signature block."""
     try:
-        draft = cortex_complete(conn, "claude-sonnet-4-5", prompt).strip()
+        draft = _logged_rest_call(call_log, "Narrative", partner, cortex_complete,
+                                   conn, "claude-sonnet-4-5", prompt).strip()
         # Insert the report line and SPN Live announcement deterministically
         # (verbatim, exact wording -- especially the dates/times/URL) as their
         # own paragraphs right before the final sign-off paragraph, instead of
@@ -1428,7 +1534,7 @@ if get_env() not in ("dev",):
 
 conn = st.session_state.conn
 
-st.title(":material/forward_to_inbox: PSE CoCo Use Case Insights")
+st.title(":material/bolt: PSE CoCo Use Case Insights (REST API)")
 st.caption(
     "Personal narrative (copy as rich text) plus an executive-table CoCo adoption report "
     "(copy as rich text, download as HTML, or download as PDF) for the selected partner."
@@ -1445,7 +1551,7 @@ partner_options = sorted(set(MANAGED_PARTNERS) - _ALIAS_SECONDARIES)
 
 selected_partner = st.selectbox(
     "Select Partner", options=partner_options, index=None,
-    placeholder="Choose a managed partner…", key="_pse_hybrid_partner_select",
+    placeholder="Choose a managed partner…", key="_pse_hybrid_rest_partner_select",
 )
 
 if not selected_partner:
@@ -1505,9 +1611,10 @@ st.divider()
 
 # ── Part 1: Narrative ───────────────────────────────────────────────────────
 st.subheader(":material/edit_note: Part 1 — Personal Narrative")
-recipients = st.text_input("Recipients", placeholder="e.g. Sree / Adnan", key="_pse_hybrid_recipients")
+recipients = st.text_input("Recipients", placeholder="e.g. Sree / Adnan", key="_pse_hybrid_rest_recipients")
 
-if st.button(":material/auto_awesome: Generate Narrative Draft", key="_pse_hybrid_gen_narrative"):
+if st.button(":material/auto_awesome: Generate Narrative Draft", key="_pse_hybrid_rest_gen_narrative"):
+    _narrative_call_log = _RestCallLog()
     with st.spinner("Computing benchmark and drafting narrative…"):
         peer_benchmark = _compute_peer_benchmark(conn, selected_partner, q_start, q_end, coco_pct, bands)
         regional_breakdown, max_gap_region = _compute_regional_breakdown(detail, target)
@@ -1521,17 +1628,18 @@ if st.button(":material/auto_awesome: Generate Narrative Draft", key="_pse_hybri
         narrative = _build_narrative_draft(
             conn, selected_partner, recipients, coco_pct, coco_count, total_ucs,
             peer_benchmark, regional_breakdown, max_gap_region, noam_preview_rows,
-            datetime.now().strftime("%B %d, %Y"),
+            datetime.now().strftime("%B %d, %Y"), call_log=_narrative_call_log,
         )
-    st.session_state["_pse_hybrid_narrative_text"] = narrative
-    st.session_state["_pse_hybrid_narrative_partner"] = selected_partner
+    _render_call_log(st.empty(), _narrative_call_log, done=True)
+    st.session_state["_pse_hybrid_rest_narrative_text"] = narrative
+    st.session_state["_pse_hybrid_rest_narrative_partner"] = selected_partner
 
-if st.session_state.get("_pse_hybrid_narrative_partner") == selected_partner:
+if st.session_state.get("_pse_hybrid_rest_narrative_partner") == selected_partner:
     narrative_text = st.text_area(
-        "Edit narrative before sending", value=st.session_state.get("_pse_hybrid_narrative_text", ""),
-        height=260, key="_pse_hybrid_narrative_edit",
+        "Edit narrative before sending", value=st.session_state.get("_pse_hybrid_rest_narrative_text", ""),
+        height=260, key="_pse_hybrid_rest_narrative_edit",
     )
-    st.session_state["_pse_hybrid_narrative_text"] = narrative_text
+    st.session_state["_pse_hybrid_rest_narrative_text"] = narrative_text
     if narrative_text.strip():
         narrative_html = _build_narrative_html(narrative_text, selected_partner)
         copy_rich_text_button(narrative_html, narrative_text, button_id="pseHybridNarrativeCopy")
@@ -1561,13 +1669,41 @@ else:
                      height=38 + 35 * min(non_coco_count, 20))
 
     if st.button(f":material/auto_awesome: Generate Report for {non_coco_count} Use Cases",
-                 type="primary", use_container_width=True, key="_pse_hybrid_gen_report"):
-        st.session_state["_pse_hybrid_judge_debug"] = {}  # reset before this run, see _judge_sanitize_batch
+                 type="primary", use_container_width=True, key="_pse_hybrid_rest_gen_report"):
+        st.session_state["_pse_hybrid_rest_judge_debug"] = {}  # reset before this run, see _judge_sanitize_batch
         with st.spinner("Computing peer benchmark and regional breakdown…"):
             peer_benchmark = _compute_peer_benchmark(conn, selected_partner, q_start, q_end, coco_pct, bands)
             regional_breakdown, _ = _compute_regional_breakdown(detail, target)
-        with st.spinner(f"Mapping CoCo skills and sanitizing descriptions for {non_coco_count} use cases…"):
-            gap_rows_by_region = _build_gap_table_rows(conn, non_coco)
+
+        st.markdown("**Live REST API call status**")
+        call_log = _RestCallLog()
+        call_log_ph = st.empty()
+        _render_call_log(call_log_ph, call_log, done=False)
+
+        # _build_gap_table_rows makes up to 3*non_coco_count Cortex REST calls
+        # via a 16-worker ThreadPoolExecutor -- run it in its OWN background
+        # thread so the main Streamlit script thread stays free to poll
+        # call_log and repeatedly re-render call_log_ph in the loop below.
+        # A blocking call here would freeze the UI until the whole batch
+        # finished, defeating the point of a LIVE status container.
+        # add_script_run_ctx propagates this session's ScriptRunContext onto
+        # the new thread -- _judge_sanitize_batch touches st.session_state
+        # (its cache dict), which without this is unreliable from a thread
+        # Streamlit itself didn't spawn.
+        from streamlit.runtime.scriptrunner import add_script_run_ctx, get_script_run_ctx
+        _result = {}
+        def _run_gap_rows():
+            _result["gap_rows_by_region"] = _build_gap_table_rows(conn, non_coco, call_log=call_log)
+        _worker_thread = threading.Thread(target=_run_gap_rows, daemon=True)
+        add_script_run_ctx(_worker_thread, get_script_run_ctx())
+        _worker_thread.start()
+        while _worker_thread.is_alive():
+            _render_call_log(call_log_ph, call_log, done=False)
+            time.sleep(0.4)
+        _worker_thread.join()
+        _render_call_log(call_log_ph, call_log, done=True)
+        gap_rows_by_region = _result["gap_rows_by_region"]
+
         action_plan = _build_action_plan(regional_breakdown, gap_rows_by_region, selected_partner)
 
         report_html = _build_report_html(
@@ -1582,16 +1718,16 @@ else:
                 gap_rows_by_region, action_plan,
             )
 
-        st.session_state["_pse_hybrid_report_html"] = report_html
-        st.session_state["_pse_hybrid_report_pdf"] = report_pdf
-        st.session_state["_pse_hybrid_report_partner"] = selected_partner
+        st.session_state["_pse_hybrid_rest_report_html"] = report_html
+        st.session_state["_pse_hybrid_rest_report_pdf"] = report_pdf
+        st.session_state["_pse_hybrid_rest_report_partner"] = selected_partner
 
         # TEMPORARY diagnostic (2026-09-08, see _judge_sanitize_one's
         # debug_errors docstring) -- surfaces the REAL exception behind any
         # empty summary/skills instead of guessing. Remove once the actual
         # root cause of the persistent empty-"Description (sanitized)" bug
         # is confirmed and fixed.
-        judge_debug = st.session_state.get("_pse_hybrid_judge_debug", {})
+        judge_debug = st.session_state.get("_pse_hybrid_rest_judge_debug", {})
         if judge_debug:
             uc_name_by_id = {row["uc_id"]: row["name"] for rows in gap_rows_by_region.values() for row in rows}
             with st.expander(f":material/bug_report: Debug: {len(judge_debug)} use case(s) hit a Cortex call error", expanded=True):
@@ -1602,9 +1738,9 @@ else:
                     if errs.get("skills"):
                         st.code(f"skills call: {errs['skills']}", language=None)
 
-    if st.session_state.get("_pse_hybrid_report_partner") == selected_partner:
-        _html = st.session_state["_pse_hybrid_report_html"]
-        _pdf = st.session_state["_pse_hybrid_report_pdf"]
+    if st.session_state.get("_pse_hybrid_rest_report_partner") == selected_partner:
+        _html = st.session_state["_pse_hybrid_rest_report_html"]
+        _pdf = st.session_state["_pse_hybrid_rest_report_pdf"]
 
         col1, col2, col3 = st.columns(3)
         with col1:

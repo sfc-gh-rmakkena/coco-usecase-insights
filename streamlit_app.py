@@ -257,6 +257,10 @@ if get_env() == "dev":
         st.Page("app_pages/pse_email_hybrid.py", title="PSE CoCo Use Case Insights",
                 icon=":material/mail:")
     )
+    _okr_pages.append(
+        st.Page("app_pages/pse_email_hybrid_rest.py", title="PSE CoCo Use Case Insights (REST API)",
+                icon=":material/bolt:")
+    )
 
 page = st.navigation({
     "Overview": [

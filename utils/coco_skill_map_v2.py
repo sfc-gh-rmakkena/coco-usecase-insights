@@ -135,11 +135,55 @@ def coco_skill_catalog_prompt_block() -> str:
 _COCO_SKILL_CATALOG_BLOCK = coco_skill_catalog_prompt_block()
 
 
+def build_summary_prompt(desc: str, se_comments: str, partner_comments: str = "", name: str = "") -> str:
+    """Build a small, dedicated prompt for ONLY the partner-facing 1-2
+    sentence summary (the report's "Description (sanitized)" column) --
+    split out from build_ai_skill_prompt() (2026-09-08) so that call's
+    large deterministic_skill_context/additional_skills JSON payload (a
+    reason+evidence+3-scores block PER tagged/candidate skill, sometimes
+    5+ skills' worth) can never compete for the SAME output-token budget
+    and truncate the summary before it's ever written. Deliberately a
+    PLAIN-TEXT response, not JSON -- one short field needs no schema, and
+    this removes JSON-parse risk from the description pipeline entirely
+    (the old failure mode was: truncation happens somewhere LATER in a
+    large JSON object -> json.loads() throws -> the whole response,
+    including a perfectly good already-written summary, was discarded).
+    Caller passes the raw text straight through (.strip() only, no
+    parsing) as the summary."""
+    context = f"Use case name:\n{name or ''}\n\nUse case description:\n{desc or ''}"
+    if se_comments:
+        context += (
+            f"\n\nInternal SE notes (context only -- may contain sensitive detail):\n"
+            f"{se_comments}"
+        )
+    if partner_comments:
+        context += (
+            f"\n\nPartner notes (context only -- may contain sensitive detail):\n"
+            f"{partner_comments}"
+        )
+    return (
+        "You are helping a Partner SE prep a partner-facing update for one Salesforce use case.\n\n"
+        "Write EXACTLY 1-2 short sentences suitable for sharing externally with a partner, focused only "
+        "on the business problem or goal. Remove dollar amounts, EACV, competitor names, internal "
+        "people/team names, deal-risk commentary, and anything else sensitive, even if it appears in the "
+        "SE or partner notes below.\n\n"
+        "Return ONLY the sentence(s) themselves -- no preamble, no quotes, no markdown, no JSON, no "
+        "label like \"Summary:\".\n\n" + context
+    )
+
+
 def build_ai_skill_prompt(desc: str, se_comments: str, deterministic_skills: list, partner_comments: str = "",
                           name: str = "") -> str:
-    """Build the prompt for one use case's AI summary + rationale + additional-
-    skills call. The caller (page file) is responsible for actually invoking
-    the LLM and passing the raw response to parse_ai_skill_response().
+    """Build the prompt for one use case's AI rationale + candidate-skill-
+    discovery call. The caller (page file) is responsible for actually
+    invoking the LLM and passing the raw response to
+    parse_ai_skill_response().
+
+    Does NOT ask for the partner-facing summary -- that's a separate,
+    dedicated small call now (see build_summary_prompt()'s docstring for
+    why: this call's per-skill JSON payload can run long enough to get cut
+    off, and a shared budget meant that cutoff used to take the summary
+    down with it).
 
     Skill SELECTION beyond the deterministic set is grounded in the real
     111-skill catalog so it can never invent a skill that doesn't exist;
@@ -184,9 +228,7 @@ def build_ai_skill_prompt(desc: str, se_comments: str, deterministic_skills: lis
         f"deterministically tagged for this use case ({len(deterministic_skills)} of a "
         f"{MAX_SKILLS_PER_USE_CASE}-skill maximum already used): [{skills_str}].\n\n"
         f"CoCo skill catalog:\n{_COCO_SKILL_CATALOG_BLOCK}\n\n"
-        "Return ONLY a JSON object with exactly four keys:\n"
-        "- \"summary\": 1-2 short sentences suitable for sharing externally with a partner, focused only "
-        "on the business problem or goal.\n"
+        "Return ONLY a JSON object with exactly three keys:\n"
         f"- \"rationale\": one short sentence, grounded in the concrete technical detail below, on why "
         f"the skill(s) [{skills_str}] (plus any additional_skills below) would accelerate THIS engagement.\n"
         f"- \"deterministic_skill_context\": a JSON object mapping EACH already-tagged skill "
