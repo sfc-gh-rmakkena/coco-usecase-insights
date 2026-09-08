@@ -1570,6 +1570,12 @@ with st.spinner("Loading use cases…"):
     ).copy()
     detail["PARTNER_NAME"] = detail["PARTNER_NAME"].replace(PARTNER_RENAME_MAP)
     detail = detail[detail["PARTNER_NAME"] == selected_partner].copy()
+    # NoAM RSIs report only their own NoAM use cases -- unlike GSIs, which
+    # are genuinely global -- so restrict to NoAM theaters here, otherwise
+    # the headline numbers below silently include that partner's EMEA/APJ
+    # use cases too.
+    if selected_partner in NOAM_RSI_NAMES:
+        detail = detail[detail["THEATER_NAME"].isin(NOAM_THEATERS)].copy()
 
 if len(detail) == 0:
     st.warning(f"No use cases found for **{selected_partner}** in this date range.")
