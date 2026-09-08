@@ -1,0 +1,177 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "How CoCo Skills Are Tagged on Use Cases",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1080,
+      500
+    ],
+    "views": [
+      {
+        "id": "tagging-path",
+        "label": "Tagging path",
+        "focus": [
+          "use_case",
+          "deterministic",
+          "first_pass",
+          "grounding_judge",
+          "tagged_output"
+        ],
+        "note": "Follow one use case from raw fields through two Cortex calls and GPA ranking to capped skill chips."
+      },
+      {
+        "id": "catalog-boundary",
+        "label": "Catalog boundary",
+        "focus": [
+          "catalog",
+          "grounding_judge"
+        ],
+        "note": "See the 111-skill catalog anchor the second-pass grounding judge's fact-checking."
+      }
+    ]
+  },
+  "stages": [
+    {
+      "label": "Use Case Signals"
+    },
+    {
+      "label": "Deterministic Tagging"
+    },
+    {
+      "label": "Candidate Discovery"
+    },
+    {
+      "label": "Grounding Judge"
+    },
+    {
+      "label": "Ranked & Tagged Output"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "use_case",
+      "type": "database",
+      "label": "Use Case Record",
+      "sublabel": "raw fields",
+      "stage": 0,
+      "row": 0,
+      "width": 150
+    },
+    {
+      "id": "deterministic",
+      "type": "backend",
+      "label": "Deterministic Tagging",
+      "sublabel": "taxonomy + AIM scan",
+      "stage": 1,
+      "row": 1,
+      "width": 150
+    },
+    {
+      "id": "first_pass",
+      "type": "external",
+      "label": "Candidate Discovery",
+      "sublabel": "Cortex call 1",
+      "stage": 2,
+      "row": 0,
+      "width": 150
+    },
+    {
+      "id": "catalog",
+      "type": "database",
+      "label": "Skill Catalog",
+      "sublabel": "111 skills",
+      "stage": 2,
+      "row": 2,
+      "width": 150
+    },
+    {
+      "id": "grounding_judge",
+      "type": "external",
+      "label": "Grounding Judge",
+      "sublabel": "Cortex call 2",
+      "stage": 3,
+      "row": 1,
+      "width": 150
+    },
+    {
+      "id": "tagged_output",
+      "type": "frontend",
+      "label": "Tagged Skill Chips",
+      "sublabel": "capped to 3",
+      "stage": 4,
+      "row": 0,
+      "width": 150
+    }
+  ],
+  "flows": [
+    {
+      "id": "use-case-to-det",
+      "from": "use_case",
+      "to": "deterministic",
+      "label": "name + description + notes",
+      "classification": "primary data",
+      "variant": "emphasis"
+    },
+    {
+      "id": "det-to-firstpass",
+      "from": "deterministic",
+      "to": "first_pass",
+      "label": "catalog-only candidates",
+      "classification": "primary data",
+      "variant": "emphasis"
+    },
+    {
+      "id": "firstpass-to-judge",
+      "from": "first_pass",
+      "to": "grounding_judge",
+      "label": "evidence + GPA self-scores",
+      "classification": "primary data",
+      "variant": "emphasis"
+    },
+    {
+      "id": "catalog-to-judge",
+      "from": "catalog",
+      "to": "grounding_judge",
+      "label": "full scope per candidate",
+      "classification": "reference data",
+      "variant": "default"
+    },
+    {
+      "id": "judge-to-output",
+      "from": "grounding_judge",
+      "to": "tagged_output",
+      "label": "GPA-ranked, floor-rescued",
+      "classification": "primary data",
+      "variant": "emphasis"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "Two Independent Cortex Calls",
+      "items": [
+        "Call 1 proposes skills plus self-scored GPA (context relevance, groundedness, answer relevance)",
+        "Call 2 independently fact-checks every candidate against that skill's full documented scope; only its reason text reaches the report",
+        "Snowflake AIM bypasses both calls -- pinned first, unconditionally, when a supported legacy source is detected"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "Catalog Is the Only Trusted Vocabulary",
+      "items": [
+        "Deterministic candidates are filtered to the 111 real skills in COCO_SKILLS.md before the first Cortex call ever sees them",
+        "Legacy non-catalog names are dropped outright, never aliased to a similar catalog entry"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Part 1 No Longer Grounds Skills",
+      "items": [
+        "The narrative only reads account names -- it never displays skill chips or rationale",
+        "A per-use-case Cortex call that computed unused skill data was removed as dead code"
+      ]
+    }
+  ]
+}
