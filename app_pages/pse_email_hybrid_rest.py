@@ -26,6 +26,7 @@ keys (prefixed `_pse_hybrid_rest_`, distinct from the original's
 session can never leak cached report state or widget values across them.
 """
 import io
+import math
 import re
 import html as html_lib
 import threading
@@ -217,7 +218,10 @@ def _compute_regional_breakdown(detail_df: pd.DataFrame, target: int):
         total = len(sub)
         coco = int(sub["IS_COCO_ATTACHED"].sum())
         pct = round(coco * 100.0 / total, 1) if total else 0.0
-        gap = max(0, int(round(target / 100.0 * total)) - coco)
+        # ceil, not round -- round(4.5) banker's-rounds to 4 in Python 3, which
+        # falsely reported GAP==0 for 4/6 (66.7%) against a 75% target (needs
+        # ceil(0.75*6)=5, not round(4.5)=4). Partial UCs can't satisfy a target.
+        gap = max(0, math.ceil(target / 100.0 * total) - coco)
         rows.append({
             "REGION": "NoAM" if label == "AMS" else label,
             "TOTAL_UCS": total, "COCO_UCS": coco, "COCO_PCT": pct,
@@ -227,7 +231,7 @@ def _compute_regional_breakdown(detail_df: pd.DataFrame, target: int):
         g_total = sum(r["TOTAL_UCS"] for r in rows)
         g_coco = sum(r["COCO_UCS"] for r in rows)
         g_pct = round(g_coco * 100.0 / g_total, 1) if g_total else 0.0
-        g_gap = max(0, int(round(target / 100.0 * g_total)) - g_coco)
+        g_gap = max(0, math.ceil(target / 100.0 * g_total) - g_coco)
         rows.append({
             "REGION": "Global", "TOTAL_UCS": g_total, "COCO_UCS": g_coco,
             "COCO_PCT": g_pct, "GAP": g_gap, "REMAINING": g_total - g_coco,
