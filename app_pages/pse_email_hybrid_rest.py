@@ -58,6 +58,7 @@ from utils.queries import (
 )
 from utils.config import get_env
 from utils.cortex_rest_helpers import cortex_complete_rest as cortex_complete
+from utils import judge_cache
 from utils.report import copy_rich_text_button
 from utils.coco_skill_map_v2 import (
     map_coco_skills_explained, theater_label as _theater_label, h as _h,
@@ -308,6 +309,18 @@ class _RestCallLog:
             if error:
                 entry["error"] = error
 
+    def cache_hit(self, label: str, use_case: str = ""):
+        """Log a use case resolved from the judge cache (session or
+        persistent) instead of a live REST call -- no start/finish pairing
+        needed since no call happened. Makes cache hits visible in the same
+        table as live calls (status='cached', 0.0 elapsed) rather than
+        silently not appearing at all."""
+        with self.lock:
+            entry = {"id": self._next_id, "label": label, "use_case": use_case,
+                      "status": "cached", "started": time.time(), "elapsed": 0.0}
+            self._next_id += 1
+            self.entries.append(entry)
+
     def snapshot(self, last_n: int = 40):
         """Returns (most-recent-first list of up to last_n entries, total count)."""
         with self.lock:
@@ -341,11 +354,13 @@ def _render_call_log(placeholder, call_log, done: bool = False):
     in_flight = sum(1 for e in entries if e["status"] == "in-flight")
     ok = sum(1 for e in entries if e["status"] == "success")
     err = sum(1 for e in entries if e["status"] == "error")
+    cached = sum(1 for e in entries if e["status"] == "cached")
     with placeholder.container():
         state = "Done" if done else "Live"
         st.caption(
             f":material/{'check_circle' if done else 'bolt'}: **{state}** — "
-            f"{total} REST API call(s) made so far — {in_flight} in-flight, {ok} succeeded, {err} failed "
+            f"{total} REST API call(s) made so far — {in_flight} in-flight, {ok} succeeded, {err} failed, "
+            f"{cached} served from cache "
             f"(showing most recent {len(entries)})"
         )
         if entries:
@@ -531,21 +546,40 @@ def _judge_sanitize_one(conn, uc_id: str, desc: str, se_comments: str, skills: l
 # Transformation) picked dynamic-tables over the more specific
 # dbt-projects-on-snowflake for "dbt Core on MWAA" evidence).
 _JUDGE_PIPELINE_VERSION = 7
+_JUDGE_PIPELINE_TAG = "rest"
 
 
-def _judge_sanitize_batch(conn, items: list, call_log=None) -> dict:
+def _judge_sanitize_batch(conn, items: list, partner: str = "", call_log=None) -> dict:
     """Batch/parallel wrapper around _judge_sanitize_one -- ThreadPoolExecutor
-    fan-out + a session_state cache (_pse_hybrid_rest_judge_cache) keyed by
-    (description, se_comments, partner_comments, name, skills,
-    _JUDGE_PIPELINE_VERSION) so regenerating for the same partner needs
-    zero new calls -- but bumping _JUDGE_PIPELINE_VERSION after any prompt/
-    parsing/token-budget change still forces fresh calls for every use
-    case, even within an already-open session. Worker count
+    fan-out + a two-level cache keyed by (name, description, se_comments,
+    partner_comments, _JUDGE_PIPELINE_TAG, _JUDGE_PIPELINE_VERSION) so
+    regenerating for the same partner needs zero new calls -- but bumping
+    _JUDGE_PIPELINE_VERSION after any prompt/parsing/token-budget change
+    still forces fresh calls, even within an already-open session. The
+    deterministic candidate list (`skills`) is deliberately NOT part of the
+    key -- it's itself just a computed function of these same four fields
+    (see utils/judge_cache.py's module docstring). Worker count
     (_JUDGE_MAX_WORKERS=32) is raised well above a single-Cortex-call
     pipeline's typical count since each task here makes up to 2 sequential
     Cortex calls (Skills [summary+rationale+skill JSON merged], Judge)
     instead of 1, and REST calls have no shared-connection contention
     across threads.
+
+    L1 is the in-process session_state cache (_pse_hybrid_rest_judge_cache)
+    -- zero-latency repeat hits within one open browser session, as before.
+    L2 is the persistent utils.judge_cache table -- the same content-hash
+    key, but durable across sessions/redeploys/weeks (see
+    docs/llm-judge-caching-recommendation.md). A use case whose
+    name/description/SE comments/partner comments haven't changed since it
+    was last judged (in this session OR any prior one, including via the
+    one-time pdfs_went_out/ backfill) is served from L2 with zero new REST
+    calls; any change to those fields is a guaranteed cache miss (different
+    hash) and gets judged fresh, automatically. Any failure talking to the
+    persistent table (missing table, permissions, transient error) falls
+    back to LLM + session-only caching rather than breaking report
+    generation. Every L1/L2 cache hit is logged to call_log (status
+    'cached', 0.0 elapsed) so it's visible in the Live REST API call status
+    table, not silently invisible the way session-cache hits were before.
 
     items: list of (use_case_id, description, se_comments,
     partner_comments, name, skills) tuples -- `skills` must already be
@@ -556,20 +590,48 @@ def _judge_sanitize_batch(conn, items: list, call_log=None) -> dict:
     cache = st.session_state.setdefault("_pse_hybrid_rest_judge_cache", {})
     result = {}
     to_fetch = []
+    l2_pending = {}  # cache_key_hash -> (uc_id, desc, se_comments, partner_comments, name, skills_key)
     for uc_id, desc, se_comments, partner_comments, name, skills in items:
         desc = (desc or "").strip()
         se_comments = (se_comments or "").strip()
         partner_comments = (partner_comments or "").strip()
         name = (name or "").strip()
         skills_key = tuple(skills or [])
-        cache_key = (desc, se_comments, partner_comments, name, skills_key, _JUDGE_PIPELINE_VERSION)
+        cache_key = (name, desc, se_comments, partner_comments, _JUDGE_PIPELINE_VERSION)
         if not desc and not se_comments and not partner_comments and not skills_key:
             result[uc_id] = {"summary": "", "rationale": "", "skills": [], "judge_reasons": {}, "gpa_scores": {}, "debug_errors": {}}
         elif cache_key in cache:
             result[uc_id] = cache[cache_key]
+            if call_log is not None:
+                call_log.cache_hit("Skills+Judge", name)
         else:
-            to_fetch.append((uc_id, desc, se_comments, partner_comments, name, skills_key))
+            hash_key = judge_cache.compute_hash(name, desc, se_comments, partner_comments,
+                                                 _JUDGE_PIPELINE_TAG, _JUDGE_PIPELINE_VERSION)
+            l2_pending[hash_key] = (uc_id, desc, se_comments, partner_comments, name, skills_key)
 
+    if l2_pending:
+        try:
+            judge_cache.ensure_table(conn)
+            l2_hits = judge_cache.batch_lookup(conn, list(l2_pending.keys()), _JUDGE_PIPELINE_TAG)
+        except Exception as e:
+            # TEMPORARY diagnostic (2026-09-09): a persistent-cache lookup
+            # failure was observed to silently degrade to 100% fresh LLM
+            # calls with zero visible error (see the "why no cache hits"
+            # investigation) -- surface the real exception instead of
+            # guessing further. Remove once root-caused.
+            l2_hits = {}
+            st.session_state["_pse_hybrid_rest_cache_error"] = f"{type(e).__name__}: {e}"
+        for hash_key, (uc_id, desc, se_comments, partner_comments, name, skills_key) in l2_pending.items():
+            if hash_key in l2_hits:
+                entry = dict(l2_hits[hash_key], debug_errors={"summary": "", "skills": ""})
+                cache[(name, desc, se_comments, partner_comments, _JUDGE_PIPELINE_VERSION)] = entry
+                result[uc_id] = entry
+                if call_log is not None:
+                    call_log.cache_hit("Skills+Judge", name)
+            else:
+                to_fetch.append((uc_id, desc, se_comments, partner_comments, name, skills_key))
+
+    l2_to_insert = []  # (hash, entry) pairs for the newly-judged use cases
     if to_fetch:
         with ThreadPoolExecutor(max_workers=min(_JUDGE_MAX_WORKERS, len(to_fetch))) as pool:
             future_to_uc = {
@@ -595,8 +657,21 @@ def _judge_sanitize_batch(conn, items: list, call_log=None) -> dict:
                          "judge_reasons": judge_reasons, "gpa_scores": gpa_scores, "debug_errors": debug_errors}
                 if debug_errors.get("skills"):
                     st.session_state.setdefault("_pse_hybrid_rest_judge_debug", {})[uc_id] = debug_errors
-                cache[(desc, se_comments, partner_comments, name, skills_key, _JUDGE_PIPELINE_VERSION)] = entry
+                else:
+                    # Only persist clean judgments -- a partial/failed call
+                    # (debug_errors set) should get a fresh chance next time,
+                    # not get locked into the durable cache as-is.
+                    hash_key = judge_cache.compute_hash(name, desc, se_comments, partner_comments,
+                                                         _JUDGE_PIPELINE_TAG, _JUDGE_PIPELINE_VERSION)
+                    l2_to_insert.append((hash_key, partner, name, entry))
+                cache[(name, desc, se_comments, partner_comments, _JUDGE_PIPELINE_VERSION)] = entry
                 result[uc_id] = entry
+
+    if l2_to_insert:
+        try:
+            judge_cache.batch_insert(conn, l2_to_insert, _JUDGE_PIPELINE_TAG, _JUDGE_PIPELINE_VERSION)
+        except Exception:
+            pass  # persistence is best-effort -- session cache above already has the result for this run
 
     for uc_id, _desc, _se, _partner, _name, _skills_key in to_fetch:
         result.setdefault(uc_id, {"summary": "", "rationale": "", "skills": [], "judge_reasons": {}, "gpa_scores": {}, "debug_errors": {}})
@@ -692,7 +767,7 @@ def _group_non_coco_by_region(non_coco_df: pd.DataFrame, catalog_only: bool = Fa
     return by_region
 
 
-def _build_gap_table_rows(conn, non_coco_df: pd.DataFrame, call_log=None):
+def _build_gap_table_rows(conn, non_coco_df: pd.DataFrame, partner: str = "", call_log=None):
     """Per-region list of UC row dicts for the gap table, each with skill+reason,
     a sanitized description, and a skill rationale -- ALL sourced exclusively
     from Approach 2's grounding-judge pipeline (_judge_sanitize_batch), per
@@ -730,7 +805,7 @@ def _build_gap_table_rows(conn, non_coco_df: pd.DataFrame, call_log=None):
     all_rows = [row for rows in by_region.values() for row in rows]
     items = [(row["uc_id"], row["raw_desc"], row["raw_se_comments"], row["raw_partner_comments"], row["name"], row["skills"])
               for row in all_rows]
-    judged_map = _judge_sanitize_batch(conn, items, call_log=call_log)
+    judged_map = _judge_sanitize_batch(conn, items, partner=partner, call_log=call_log)
     for row in all_rows:
         entry = judged_map.get(row["uc_id"], {"summary": "", "rationale": "", "skills": [], "judge_reasons": {}, "gpa_scores": {}, "debug_errors": {}})
         row["sanitized_desc"] = entry["summary"]
@@ -1714,6 +1789,7 @@ else:
     if st.button(f":material/auto_awesome: Generate Report for {non_coco_count} Use Cases",
                  type="primary", use_container_width=True, key="_pse_hybrid_rest_gen_report"):
         st.session_state["_pse_hybrid_rest_judge_debug"] = {}  # reset before this run, see _judge_sanitize_batch
+        st.session_state.pop("_pse_hybrid_rest_cache_error", None)  # reset before this run, see _judge_sanitize_batch
         with st.spinner("Computing peer benchmark and regional breakdown…"):
             peer_benchmark = _compute_peer_benchmark(conn, selected_partner, q_start, q_end, coco_pct, bands)
             regional_breakdown, _ = _compute_regional_breakdown(detail, target)
@@ -1736,7 +1812,7 @@ else:
         from streamlit.runtime.scriptrunner import add_script_run_ctx, get_script_run_ctx
         _result = {}
         def _run_gap_rows():
-            _result["gap_rows_by_region"] = _build_gap_table_rows(conn, non_coco, call_log=call_log)
+            _result["gap_rows_by_region"] = _build_gap_table_rows(conn, non_coco, partner=selected_partner, call_log=call_log)
         _worker_thread = threading.Thread(target=_run_gap_rows, daemon=True)
         add_script_run_ctx(_worker_thread, get_script_run_ctx())
         _worker_thread.start()
@@ -1764,6 +1840,14 @@ else:
         st.session_state["_pse_hybrid_rest_report_html"] = report_html
         st.session_state["_pse_hybrid_rest_report_pdf"] = report_pdf
         st.session_state["_pse_hybrid_rest_report_partner"] = selected_partner
+
+        # TEMPORARY diagnostic (2026-09-09): surfaces the real exception
+        # behind a persistent-cache lookup failure (ensure_table/batch_lookup)
+        # instead of it silently degrading to 100% fresh LLM calls with no
+        # visible error. Remove once root-caused.
+        cache_error = st.session_state.get("_pse_hybrid_rest_cache_error")
+        if cache_error:
+            st.error(f":material/database_off: Persistent judge cache lookup failed (all use cases were judged fresh this run): {cache_error}")
 
         # TEMPORARY diagnostic (2026-09-08, see _judge_sanitize_one's
         # debug_errors docstring) -- surfaces the REAL exception behind any
