@@ -28,7 +28,7 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
 from reportlab.lib.colors import HexColor, white
 from reportlab.platypus import (
-    SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak,
+    SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, CondPageBreak,
 )
 from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY, TA_LEFT
 from reportlab.pdfbase import pdfmetrics
@@ -1380,9 +1380,14 @@ def _build_report_pdf_bytes(partner, q_start, q_end, target, coco_count, total_u
         f'<font color="{bad}"><b>&#9632; &lt;0.40 weak</b></font>',
         legend_style,
     ))
-    gap_col_widths = [0.35 * inch, 1.3 * inch, 1.0 * inch, 0.85 * inch, 0.55 * inch, 1.6 * inch, 1.6 * inch]
+    # ONLY change vs. baseline: widen the Skills/Description columns (which drive
+    # vertical text-wrap height) by shrinking Account/Stage/EACV (which have far
+    # more horizontal room than their short content needs). Zero structural
+    # change -- same single row per use case, same cells, no blanks, no SPAN.
+    gap_col_widths = [0.30 * inch, 1.0 * inch, 0.8 * inch, 0.75 * inch, 0.45 * inch, 2.1 * inch, 2.0 * inch]
     seq = 0
-    for region in ["NoAM", "EMEA", "APJ"]:
+    populated_regions = [r for r in ["NoAM", "EMEA", "APJ"] if gap_rows_by_region.get(r)]
+    for region_idx, region in enumerate(populated_regions):
         rows = gap_rows_by_region.get(region, [])
         if not rows:
             continue
@@ -1411,12 +1416,43 @@ def _build_report_pdf_bytes(partner, q_start, q_end, target, coco_count, total_u
                 _pdf_skill_chip_flowables(u, cell.fontName), _wrap_cell(u["sanitized_desc"] or "-", cell),
             ])
         gap_table = Table(gap_data, colWidths=gap_col_widths, repeatRows=1)
-        gap_table.setStyle(_pdf_table_style())
+        # Use explicit per-row BACKGROUND commands instead of _pdf_table_style()'s
+        # ROWBACKGROUNDS. ROWBACKGROUNDS re-applies its [white, gray] cycle
+        # starting fresh on every page-split fragment of the table, so any row
+        # that lands right after a page break gets its shade reset to the start
+        # of the cycle instead of continuing the true alternation -- producing
+        # a broken zebra pattern (e.g. two consecutive white rows across a page
+        # break). Explicit BACKGROUND commands are tied to absolute row indices
+        # and are correctly remapped by Table.split(), so the alternation stays
+        # correct across page breaks.
+        base_cmds = [c for c in _pdf_table_style().getCommands() if c[0] != 'ROWBACKGROUNDS']
+        for i in range(1, len(gap_data)):
+            row_color = white if (i % 2 == 1) else HexColor('#F5F5F5')
+            base_cmds.append(('BACKGROUND', (0, i), (-1, i), row_color))
+        gap_table.setStyle(TableStyle(base_cmds))
         gap_table.setStyle(TableStyle([('ALIGN', (3, 1), (3, -1), 'CENTER')]))
         story.append(gap_table)
-        story.append(Spacer(1, 0.1 * inch))
+        # Only add the inter-region breathing room when ANOTHER populated
+        # region follows -- a trailing Spacer right before the unconditional
+        # PageBreak() below can (now that rows pack far tighter) land in a
+        # sliver of leftover space too small even for 0.1in, deferring the
+        # Spacer alone to a fresh page and leaving it blank before the
+        # PageBreak() advances past it again. Skipping it for the last
+        # region removes that stray blank page with no visual loss (the
+        # PageBreak already provides the separation).
+        if region_idx < len(populated_regions) - 1:
+            story.append(Spacer(1, 0.1 * inch))
 
-    story.append(PageBreak())
+    # An unconditional PageBreak() here always starts "Next Steps" on a fresh
+    # page, no matter how much room is left on the current one. When the last
+    # gap-table row happens to land near the top of a page (common now that
+    # rows pack tighter), that leaves most of that page blank AND still
+    # forces a near-empty final page for Next Steps -- two wasted pages
+    # instead of one natural flow. CondPageBreak only forces a break if less
+    # than the given height remains in the current frame, so Next Steps
+    # flows right after the table whenever there's reasonable room, and only
+    # jumps to a fresh page when there truly isn't enough space left.
+    story.append(CondPageBreak(1.5 * inch))
     story.append(Paragraph("Next Steps &amp; Action Plan", styles['heading2']))
     for i, item in enumerate(action_plan, start=1):
         story.append(Paragraph(f"{i}. <b>{item['title']}:</b> {item['body']}", styles['body']))
