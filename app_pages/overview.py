@@ -148,6 +148,9 @@ if region and region != 'Global':
 include_account_coco = st.session_state.get("include_account_coco", "Yes") == "Yes"
 confidence_filter = st.session_state.get("confidence_filter", ["High"])
 confidence = 'High' if confidence_filter == ['High'] else ('Medium' if confidence_filter else None)
+# #notcoco filter: when True, UCs tagged #notcoco are excluded from CoCo counts
+# (default: exclude them — they are blocked from CoCo right now)
+exclude_not_coco = st.session_state.get("exclude_not_coco", True)
 
 st.title(":material/monitoring: CoCo Use Case Adoption Overview")
 st.caption(f"High-level metrics across all partner CoCo use cases | Region: {region} | {start_date} to {end_date}")
@@ -278,6 +281,10 @@ if include_account_coco and selected_partners:
             if _theaters is not None:
                 bulk_conf = bulk_conf[bulk_conf['THEATER_NAME'].isin(_theaters)]
         bands = confidence_filter if confidence_filter else ['High', 'Medium', 'Low']
+        # Honour #notcoco suppression only when exclude_not_coco is True (default)
+        if not exclude_not_coco and 'IS_NOT_COCO' in bulk_conf.columns:
+            bulk_conf = bulk_conf.copy()
+            bulk_conf['IS_NOT_COCO'] = False
         bulk_conf['IS_COCO_FINAL'] = apply_coco_final(bulk_conf, bands)
         coco_count = int(bulk_conf['IS_COCO_FINAL'].sum())
         total_count = len(bulk_conf)
@@ -298,6 +305,9 @@ elif include_account_coco:
             if _theaters is not None:
                 bulk_conf = bulk_conf[bulk_conf['THEATER_NAME'].isin(_theaters)]
         bands = confidence_filter if confidence_filter else ['High', 'Medium', 'Low']
+        if not exclude_not_coco and 'IS_NOT_COCO' in bulk_conf.columns:
+            bulk_conf = bulk_conf.copy()
+            bulk_conf['IS_NOT_COCO'] = False
         bulk_conf['IS_COCO_FINAL'] = apply_coco_final(bulk_conf, bands)
         coco_count = int(bulk_conf['IS_COCO_FINAL'].sum())
         total_count = len(bulk_conf)

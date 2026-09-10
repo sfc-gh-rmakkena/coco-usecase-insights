@@ -1295,13 +1295,18 @@ WORKLOAD_SKILL_MAP = {
     'Migration': ['%migration%', '%spark%', '%databricks%'],
 }
 
-def _confidence_scored_query(partner_filter_sql, start_date, end_date):
-    """Shared SQL body for confidence scoring - used by both single and bulk functions."""
+def _confidence_scored_query(partner_filter_sql, start_date, end_date, include_not_coco=True):
+    """Shared SQL body for confidence scoring - used by both single and bulk functions.
+    include_not_coco: set False to omit IS_NOT_COCO (fallback when column not yet deployed).
+    """
+    not_coco_col = "COALESCE(uc.IS_NOT_COCO, FALSE) AS IS_NOT_COCO," if include_not_coco else "FALSE AS IS_NOT_COCO,"
     return f"""
     WITH partner_ucs AS (
         SELECT uc.USE_CASE_ID, uc.USE_CASE_NAME, uc.ACCOUNT_NAME, UPPER(uc.ACCOUNT_NAME) AS ACCOUNT_NAME_UPPER,
             uc.PARTNER_NAME, uc.TECHNICAL_USE_CASE, uc.USE_CASE_STAGE,
-            uc.USE_CASE_EACV, uc.IS_COCO, uc.COCO_SOURCE, uc.THEATER_NAME, uc.REGION_NAME,
+            uc.USE_CASE_EACV, uc.IS_COCO, uc.COCO_SOURCE,
+            {not_coco_col}
+            uc.THEATER_NAME, uc.REGION_NAME,
             uc.CREATED_DATE,
             CASE
                 WHEN uc.TECHNICAL_USE_CASE ILIKE '%AI:%' THEN 'AI'
@@ -1489,7 +1494,14 @@ def get_usecase_confidence_scores(_conn, partner, start_date, end_date):
     partner_filter = f"uc.PARTNER_NAME IN ('{names_sql}')"
     query = _confidence_scored_query(partner_filter, start_date, end_date)
     query += "\n    ORDER BY TOTAL_SCORE DESC, ACCOUNT_NAME"
-    return _conn.query(query)
+    try:
+        return _conn.query(query)
+    except Exception as e:
+        if 'IS_NOT_COCO' in str(e):
+            query = _confidence_scored_query(partner_filter, start_date, end_date, include_not_coco=False)
+            query += "\n    ORDER BY TOTAL_SCORE DESC, ACCOUNT_NAME"
+            return _conn.query(query)
+        raise
 
 @st.cache_data(ttl=timedelta(hours=5))
 def get_bulk_confidence_scores(_conn, partners, start_date, end_date):
@@ -1498,7 +1510,14 @@ def get_bulk_confidence_scores(_conn, partners, start_date, end_date):
     partner_filter = f"uc.PARTNER_NAME IN ('{partners_sql}')"
     query = _confidence_scored_query(partner_filter, start_date, end_date)
     query += "\n    ORDER BY TOTAL_SCORE DESC, PARTNER_NAME, ACCOUNT_NAME"
-    return _conn.query(query)
+    try:
+        return _conn.query(query)
+    except Exception as e:
+        if 'IS_NOT_COCO' in str(e):
+            query = _confidence_scored_query(partner_filter, start_date, end_date, include_not_coco=False)
+            query += "\n    ORDER BY TOTAL_SCORE DESC, PARTNER_NAME, ACCOUNT_NAME"
+            return _conn.query(query)
+        raise
 
 @st.cache_data(ttl=timedelta(hours=5))
 def get_segment_by_impl_start(_conn):

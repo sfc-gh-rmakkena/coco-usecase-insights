@@ -276,12 +276,18 @@ def apply_coco_final(df, bands=("High",)):
 
     Base rule: IS_COCO (keyword or feature flag) OR the confidence band qualifies.
 
-    Exception: a use case tagged only because a partner wrote "#coco" in
+    Exception 1: a use case tagged only because a partner wrote "#coco" in
     PARTNER_COMMENTS must ALSO show measured CoCo tokens in that customer account.
     A free-text hashtag is an assertion, not evidence - without consumption it was
     admitting cases whose comments said things like "will update #coco details once
     partner starts work" or "Deloitte has been cortex code #coco enabled" (partner
     enablement, not customer usage). SE_COMMENTS and FEATURE_FLAG are unchanged.
+
+    Exception 2: a use case tagged with "#notcoco" in PARTNER_COMMENTS (IS_NOT_COCO=TRUE)
+    is suppressed from CoCo counting UNLESS the account shows actual token consumption
+    (has_tokens=True) or a qualifying confidence band from usage data (band_ok=True).
+    This lets PSEs flag UCs that cannot use CoCo right now; if they later add #coco
+    or consumption evidence appears, the UC automatically becomes CoCo again.
     """
     import pandas as pd
 
@@ -292,14 +298,21 @@ def apply_coco_final(df, bands=("High",)):
     if "COCO_SOURCE" not in df.columns or "Q2_TOKENS" not in df.columns:
         return base  # cannot validate; leave the base rule untouched
 
-    partner_only = (df["COCO_SOURCE"] == "PARTNER_COMMENTS")
-    has_tokens = pd.to_numeric(df["Q2_TOKENS"], errors="coerce").fillna(0) > 0
-    # A qualifying confidence band is independent evidence, so it still stands
-    # on its own even when the partner comment cannot be corroborated.
+    tokens = pd.to_numeric(df["Q2_TOKENS"], errors="coerce").fillna(0)
+    has_tokens = tokens > 0
     band_ok = (df["CONFIDENCE_BAND"].isin(list(bands))
                if "CONFIDENCE_BAND" in df.columns else False)
 
-    return base & ~(partner_only & ~has_tokens & ~band_ok)
+    # Exception 1: PARTNER_COMMENTS-only requires token evidence
+    partner_only = (df["COCO_SOURCE"] == "PARTNER_COMMENTS")
+    result = base & ~(partner_only & ~has_tokens & ~band_ok)
+
+    # Exception 2: #notcoco always wins — PSE explicitly blocks the UC regardless of token data
+    if "IS_NOT_COCO" in df.columns:
+        not_coco = df["IS_NOT_COCO"].fillna(False).astype(bool)
+        result = result & ~not_coco
+
+    return result
 
 
 def last_two_iso_weeks():

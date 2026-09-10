@@ -1,12 +1,19 @@
 name: coco_adoption_model
 description: >
-  CoCo (Cortex Code) partner adoption semantic model. ~44 managed OKR partners across
-  GSI (global), NOAM RSI (NoAM), APJ RSI (country), EMEA RSI (region) groups.
+  CoCo (Cortex Code) partner adoption semantic model. ~49 managed OKR partners across
+  GSI (global), NOAM RSI (NoAM), APJ RSI (country), EMEA RSI (region), LATAM RSI groups.
 
   ALWAYS filter IS_COCO_FINAL = TRUE for CoCo use case counts unless the user asks for
   "total", "all", or "non-CoCo".
 
   IS_COCO_FINAL = IS_COCO=TRUE (keyword/flag) OR CONFIDENCE_BAND='High' (usage score>=75).
+  IS_NOT_COCO = TRUE means a PSE has tagged this UC with #notcoco in PARTNER_COMMENTS,
+  indicating the customer cannot use CoCo right now (compliance, infra, timing, etc.).
+  When IS_NOT_COCO=TRUE AND no account token consumption exists, IS_COCO_FINAL=FALSE.
+  If the PSE later adds #coco OR real usage evidence appears, IS_NOT_COCO is overridden
+  and the UC becomes CoCo. For clean CoCo counts, ALWAYS add: IS_NOT_COCO = FALSE (or
+  IS_NOT_COCO IS NULL) alongside IS_COCO_FINAL = TRUE, unless the user explicitly asks
+  to include blocked UCs.
 
   TABLE SELECTION — CRITICAL. Pick the table that matches the query period:
     Q1 (Feb-Apr 2026):     use table "use_cases_q1"  — scored from Feb 1 2026
@@ -73,6 +80,20 @@ tables:
         synonyms: [coco attributed, IS_COCO_FINAL, coco qualified, coco final, coco use cases]
         description: IS_COCO_FINAL = TRUE. THE DEFAULT COCO FILTER. Always apply for CoCo counts.
         expr: IS_COCO_FINAL = TRUE
+      - name: not_coco_tagged
+        synonyms: [notcoco, not coco, blocked, pse blocked, cannot use coco, coco blocked, hashtag notcoco]
+        description: >
+          Use cases tagged #notcoco by a PSE — currently blocked from CoCo adoption.
+          These are NOT CoCo use cases. Combine with IS_COCO_FINAL = FALSE to see
+          the full list of non-CoCo UCs that have an explicit blocker reason.
+        expr: COALESCE(IS_NOT_COCO, FALSE) = TRUE
+      - name: active_coco
+        synonyms: [confirmed coco, real coco, coco without blocked, unblocked coco]
+        description: >
+          IS_COCO_FINAL = TRUE AND not tagged #notcoco. Use this for the cleanest
+          CoCo count that excludes any PSE-flagged blocked UCs that may have
+          usage data overriding the block.
+        expr: IS_COCO_FINAL = TRUE AND COALESCE(IS_NOT_COCO, FALSE) = FALSE
       - name: deployed
         synonyms: [stage 7, deployed, go-live, production, live]
         description: Stage 7 Deployed
@@ -134,6 +155,17 @@ tables:
         synonyms: [IS_COCO_FINAL, coco final, coco qualified, coco attributed]
         description: TRUE = IS_COCO_FINAL. THE PRIMARY COCO FLAG. Always filter this = TRUE for CoCo counts.
         expr: IS_COCO_FINAL
+        data_type: BOOLEAN
+      - name: is_not_coco
+        synonyms: [IS_NOT_COCO, not coco, notcoco, blocked, notcoco tagged, pse blocked, cannot use coco, coco blocked]
+        description: >
+          TRUE when a PSE tagged this use case with #notcoco in PARTNER_COMMENTS,
+          meaning the customer cannot use CoCo right now (compliance, infrastructure,
+          timing, or other blockers). When TRUE and no token consumption exists,
+          IS_COCO_FINAL = FALSE. If the PSE later adds #coco OR real usage appears,
+          this is automatically overridden. For CoCo counts, combine with
+          IS_COCO_FINAL = TRUE AND (IS_NOT_COCO = FALSE OR IS_NOT_COCO IS NULL).
+        expr: COALESCE(IS_NOT_COCO, FALSE)
         data_type: BOOLEAN
       - name: is_coco_keyword
         synonyms: [IS_COCO, keyword coco, se tagged]

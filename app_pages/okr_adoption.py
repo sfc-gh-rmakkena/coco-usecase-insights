@@ -27,6 +27,7 @@ end_date = st.session_state.get("okr_end_date", date(2026, 7, 31))
 include_account_coco = st.session_state.get("include_account_coco", "Yes") == "Yes"
 confidence_filter = st.session_state.get("confidence_filter", ["High"])
 confidence = 'High' if confidence_filter == ['High'] else ('Medium' if confidence_filter else None)
+exclude_not_coco = st.session_state.get("exclude_not_coco", True)
 
 st.title(":material/check_circle: OKR: CoCo Adoption per Partner")
 
@@ -209,6 +210,10 @@ if include_account_coco:
         if _sel_stages and 'USE_CASE_STAGE' in bulk_conf.columns:
             bulk_conf = bulk_conf[bulk_conf['USE_CASE_STAGE'].isin(_sel_stages)]
         bands = confidence_filter if confidence_filter else ['High', 'Medium', 'Low']
+        # Honour #notcoco suppression per sidebar toggle (default: exclude them)
+        if not exclude_not_coco and 'IS_NOT_COCO' in bulk_conf.columns:
+            bulk_conf = bulk_conf.copy()
+            bulk_conf['IS_NOT_COCO'] = False
         bulk_conf['IS_COCO_FINAL'] = apply_coco_final(bulk_conf, bands)
 
         # Recompute per-partner summary
@@ -666,6 +671,14 @@ if selected_partner:
                 partner_detail['Q2_TOKENS'] = partner_detail['USE_CASE_ID'].map(conf_map['Q2_TOKENS']).fillna(0)
                 partner_detail['IS_COCO'] = partner_detail['IS_COCO_ATTACHED']  # pre-override value = raw IS_COCO
                 bands = confidence_filter if confidence_filter else ['High', 'Medium', 'Low']
+                # Carry IS_NOT_COCO from conf_scores if available
+                if 'IS_NOT_COCO' in conf_scores.columns:
+                    partner_detail['IS_NOT_COCO'] = partner_detail['USE_CASE_ID'].map(
+                        conf_scores[['USE_CASE_ID','IS_NOT_COCO']].set_index('USE_CASE_ID')['IS_NOT_COCO']
+                    ).fillna(False)
+                if not exclude_not_coco and 'IS_NOT_COCO' in partner_detail.columns:
+                    partner_detail = partner_detail.copy()
+                    partner_detail['IS_NOT_COCO'] = False
                 # Use apply_coco_final so PSE Comment UCs without measured token consumption
                 # are excluded — same rule as the scorecard tile (p_stats['COCO_USE_CASES'])
                 partner_detail['IS_COCO_ATTACHED'] = apply_coco_final(partner_detail, bands)
@@ -900,8 +913,20 @@ if selected_partner:
 
         with tab_noncoco:
             if len(non_coco_ucs) > 0:
-                st.warning(f"These {len(non_coco_ucs)} use cases do NOT have CoCo attached. Adding CoCo to these would help reach the {target}% target.")
+                # Count how many are #notcoco-tagged
+                _notcoco_count = 0
+                if 'IS_NOT_COCO' in non_coco_ucs.columns:
+                    _notcoco_count = int(non_coco_ucs['IS_NOT_COCO'].fillna(False).sum())
+                _blocked_note = f" ({_notcoco_count} tagged #notcoco — blocked by PSE)" if _notcoco_count > 0 else ""
+                st.warning(f"These {len(non_coco_ucs)} use cases do NOT have CoCo attached{_blocked_note}. Adding CoCo to these would help reach the {target}% target.")
                 noncoco_display = non_coco_ucs[uc_cols].copy()
+                # Add a visual #notcoco badge in ATTRIBUTION_FLAGS for blocked UCs
+                if 'IS_NOT_COCO' in non_coco_ucs.columns:
+                    _blocked_mask = non_coco_ucs['IS_NOT_COCO'].fillna(False).values
+                    noncoco_display.loc[_blocked_mask, 'ATTRIBUTION_FLAGS'] = (
+                        noncoco_display.loc[_blocked_mask, 'ATTRIBUTION_FLAGS']
+                        .apply(lambda v: (v + ' | ' if v else '') + '#notcoco')
+                    )
                 noncoco_display['USE_CASE_STAGE'] = noncoco_display['USE_CASE_STAGE'].str.extract(r'^(\d+)').iloc[:, 0]
                 _nc_total = pd.DataFrame([{
                     'USE_CASE_NAME': '── TOTAL ──', 'ACCOUNT_NAME': '', 'THEATER_NAME': '',
