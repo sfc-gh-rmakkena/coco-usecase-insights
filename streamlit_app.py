@@ -32,6 +32,8 @@ if "include_account_coco" not in st.session_state:
     st.session_state.include_account_coco = "Yes"
 if "confidence_filter" not in st.session_state:
     st.session_state.confidence_filter = ["High"]
+if "exclude_not_coco" not in st.session_state:
+    st.session_state.exclude_not_coco = True
 if "selected_stages" not in st.session_state:
     st.session_state.selected_stages = []
     st.session_state.ask_ai_history = []
@@ -112,6 +114,13 @@ with st.sidebar:
         options=["High", "Medium"],
         key="confidence_filter",
         help="Filter account-level CoCo attribution by confidence band. Default: High only."
+    )
+    st.toggle(
+        "Exclude #notcoco tagged UCs",
+        key="exclude_not_coco",
+        help="When ON (default), use cases tagged #notcoco in PSE comments are excluded from CoCo counts. "
+             "Turn OFF to include them (e.g. to see total pipeline). "
+             "UCs with actual token consumption override this flag automatically."
     )
     st.divider()
     if st.button(":material/refresh: Refresh Data", use_container_width=True):
