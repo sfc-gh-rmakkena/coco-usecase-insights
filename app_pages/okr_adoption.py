@@ -1,4 +1,5 @@
 import streamlit as st
+import re as _re
 import pandas as pd
 import plotly.graph_objects as go
 from datetime import datetime, date
@@ -808,6 +809,17 @@ if selected_partner:
             cr1.metric("Total Credits", f"${pc['Q2_TOTAL_CREDITS']:,.0f}" if pd.notna(pc['Q2_TOTAL_CREDITS']) else "N/A")
             cr2.metric("WoW", f"{pc['WOW_PCT']:+.1f}%" if pd.notna(pc['WOW_PCT']) else "N/A")
 
+        # Overwrite USE_CASE_NAME with a Salesforce URL that embeds the name in the
+        # URL fragment — LinkColumn's display_text regex extracts it as link text.
+        # Salesforce Lightning ignores hash fragments on /view URLs so links still work.
+        def _sf_link(uc_id, uc_name):
+            safe = _re.sub(r'[\r\n\t#]+', ' ', str(uc_name)).strip()
+            return f'https://snowforce.lightning.force.com/lightning/r/Use_Case__c/{uc_id}/view#{safe}'
+        partner_detail = partner_detail.copy()
+        partner_detail['USE_CASE_NAME'] = partner_detail.apply(
+            lambda r: _sf_link(r['USE_CASE_ID'], r['USE_CASE_NAME']), axis=1
+        )
+
         coco_ucs = partner_detail[partner_detail['IS_COCO_ATTACHED'] == True]
         non_coco_ucs = partner_detail[partner_detail['IS_COCO_ATTACHED'] == False]
 
@@ -819,7 +831,10 @@ if selected_partner:
 
         uc_cols = ['USE_CASE_NAME', 'ACCOUNT_NAME', 'THEATER_NAME', 'USE_CASE_STAGE', 'USE_CASE_EACV', 'TECHNICAL_USE_CASE', 'ATTRIBUTION_FLAGS']
         uc_config = {
-            "USE_CASE_NAME": st.column_config.TextColumn("Use Case", width=200),
+            "USE_CASE_NAME": st.column_config.LinkColumn(
+                "Use Case", display_text=r"#(.+)$", width=200,
+                help="Click to open use case in Salesforce"
+            ),
             "ACCOUNT_NAME": st.column_config.TextColumn("Account", width=160),
             "THEATER_NAME": st.column_config.TextColumn("Theater", width=80),
             "USE_CASE_STAGE": st.column_config.TextColumn("Stage", width=50),
@@ -867,7 +882,7 @@ if selected_partner:
                     for _c in _credit_sum_cols:
                         _total[_c] = pd.to_numeric(_acct_deduped[_c], errors='coerce').sum() if _c in _acct_deduped.columns else None
                     _total_row = pd.DataFrame([{
-                        'USE_CASE_NAME': '── TOTAL ──', 'ACCOUNT_NAME': '', 'THEATER_NAME': '',
+                        'USE_CASE_NAME': '', 'ACCOUNT_NAME': '── TOTAL ──', 'THEATER_NAME': '',
                         'USE_CASE_STAGE': '', 'TECHNICAL_USE_CASE': '', 'ATTRIBUTION_FLAGS': '',
                         **_total
                     }])
@@ -900,7 +915,7 @@ if selected_partner:
                 else:
                     # No credits data — still add total for EACV
                     _total_row = pd.DataFrame([{
-                        'USE_CASE_NAME': '── TOTAL ──', 'ACCOUNT_NAME': '', 'THEATER_NAME': '',
+                        'USE_CASE_NAME': '', 'ACCOUNT_NAME': '── TOTAL ──', 'THEATER_NAME': '',
                         'USE_CASE_STAGE': '', 'TECHNICAL_USE_CASE': '', 'ATTRIBUTION_FLAGS': '',
                         'USE_CASE_EACV': coco_display['USE_CASE_EACV'].sum()
                     }])
@@ -929,7 +944,7 @@ if selected_partner:
                     )
                 noncoco_display['USE_CASE_STAGE'] = noncoco_display['USE_CASE_STAGE'].str.extract(r'^(\d+)').iloc[:, 0]
                 _nc_total = pd.DataFrame([{
-                    'USE_CASE_NAME': '── TOTAL ──', 'ACCOUNT_NAME': '', 'THEATER_NAME': '',
+                    'USE_CASE_NAME': '', 'ACCOUNT_NAME': '── TOTAL ──', 'THEATER_NAME': '',
                     'USE_CASE_STAGE': '', 'TECHNICAL_USE_CASE': '', 'ATTRIBUTION_FLAGS': '',
                     'USE_CASE_EACV': noncoco_display['USE_CASE_EACV'].sum()
                 }])
@@ -954,12 +969,21 @@ if selected_partner:
                 m3.metric("Low", low, help="Score 1-39")
                 m4.metric("No Signal", no_signal, help="Score 0")
 
+                # Add SF link to confidence tab
+                if 'USE_CASE_ID' in confidence_data.columns and 'USE_CASE_NAME' in confidence_data.columns:
+                    confidence_data = confidence_data.copy()
+                    confidence_data['USE_CASE_NAME'] = confidence_data.apply(
+                        lambda r: _sf_link(r['USE_CASE_ID'], r['USE_CASE_NAME']), axis=1
+                    )
                 _base_conf_cols = ['ACCOUNT_NAME', 'THEATER_NAME', 'TECHNICAL_USE_CASE', 'WORKLOAD_CATEGORY', 'RELEVANT_SKILL_INVOCATIONS', 'RELEVANT_CUSTOM_SKILLS', 'TOOLS_INVOKED', 'ACTIVE_DAYS', 'DISTINCT_USERS', 'TOTAL_SCORE', 'CONFIDENCE_BAND']
                 conf_cols = (['USE_CASE_NAME'] if 'USE_CASE_NAME' in confidence_data.columns else []) + _base_conf_cols
                 st.dataframe(
                     confidence_data[conf_cols],
                     column_config={
-                        'USE_CASE_NAME': st.column_config.TextColumn("Use Case", width="large"),
+                        'USE_CASE_NAME': st.column_config.LinkColumn(
+                            "Use Case", display_text=r"#(.+)$", width="large",
+                            help="Click to open use case in Salesforce"
+                        ),
                         'ACCOUNT_NAME': st.column_config.TextColumn("Account", width="medium"),
                         'THEATER_NAME': st.column_config.TextColumn("Theater", width="small"),
                         'TECHNICAL_USE_CASE': st.column_config.TextColumn("Technical Type", width="medium"),
