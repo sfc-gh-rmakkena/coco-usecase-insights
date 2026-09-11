@@ -118,12 +118,15 @@ SELECT
     -- IS_NOT_COCO: PSE has flagged this UC as blocked from CoCo right now.
     -- Only TRUE when #notcoco is present AND no other CoCo signal overrides it.
     -- SE comment, #coco tag, or feature flag each independently clear the flag.
+    -- COALESCE(..., TRUE) treats NULL fields as "no override" — without it,
+    -- a NULL PRIORITIZED_FEATURES/SE_COMMENTS makes the whole AND chain NULL
+    -- and the flag silently falls to FALSE (NULL NOT ILIKE x => NULL).
     CASE
         WHEN base.PARTNER_COMMENTS ILIKE '%#notcoco%'
-         AND base.PARTNER_COMMENTS NOT ILIKE '%#coco%'
-         AND base.SE_COMMENTS      NOT ILIKE '%coco%'
-         AND base.SE_COMMENTS      NOT ILIKE '%cortex code%'
-         AND base.PRIORITIZED_FEATURES NOT ILIKE '%AI - Cortex Code%'
+         AND COALESCE(base.PARTNER_COMMENTS     NOT ILIKE '%#coco%',              TRUE)
+         AND COALESCE(base.SE_COMMENTS          NOT ILIKE '%coco%',               TRUE)
+         AND COALESCE(base.SE_COMMENTS          NOT ILIKE '%cortex code%',        TRUE)
+         AND COALESCE(base.PRIORITIZED_FEATURES NOT ILIKE '%AI - Cortex Code%',    TRUE)
         THEN TRUE
         ELSE FALSE
     END AS IS_NOT_COCO,
