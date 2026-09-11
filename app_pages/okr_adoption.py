@@ -3,6 +3,12 @@ import re as _re
 import pandas as pd
 import plotly.graph_objects as go
 from datetime import datetime, date
+
+def _sf_link(uc_id, uc_name):
+    """Salesforce record URL with the UC name embedded in the URL fragment —
+    LinkColumn's display_text regex extracts it as link text."""
+    safe = _re.sub(r'[\r\n\t#]+', ' ', str(uc_name)).strip()
+    return f'https://snowforce.lightning.force.com/lightning/r/Use_Case__c/{uc_id}/view#{safe}'
 from utils.queries import get_okr_partner_summary, get_okr_stage_breakdown, get_okr_coco_adoption, get_partner_credit_consumption, get_usecase_confidence_scores, get_bulk_confidence_scores, get_coco_final_wow, get_coco_final_trend_4w, get_partner_coco_trend_4w, get_partner_weekly_credits_4w, get_partner_surface_trend_4w
 from utils.ask_ai import build_filter_context, build_credit_wow_context, build_uc_pattern_context
 from utils import resolve_partner_filter, resolve_region_theaters, PARTNER_RENAME_MAP, filter_out_partner_own_accounts, apply_coco_final
@@ -174,6 +180,7 @@ def _apply_managed_geo_filter(bc):
 
 # Compute CoCo using full confidence scoring when account-level is enabled
 _new_wow = new_coco_wow(pd.DataFrame())  # neutral default when scoring is unavailable
+_notcoco_ucs = pd.DataFrame()  # quarter-scoped #notcoco snapshot (audit view)
 if include_account_coco:
     bulk_conf = get_bulk_confidence_scores(conn, base_summary['PARTNER_NAME'].tolist(), q_start, q_end)
     if len(bulk_conf) > 0:
@@ -210,6 +217,10 @@ if include_account_coco:
         _sel_stages = st.session_state.get('selected_stages', [])
         if _sel_stages and 'USE_CASE_STAGE' in bulk_conf.columns:
             bulk_conf = bulk_conf[bulk_conf['USE_CASE_STAGE'].isin(_sel_stages)]
+        # Snapshot #notcoco UCs BEFORE the exclude toggle can clear the flag —
+        # the audit section is toggle-independent
+        if 'IS_NOT_COCO' in bulk_conf.columns:
+            _notcoco_ucs = bulk_conf[bulk_conf['IS_NOT_COCO'].fillna(False) == True].copy()
         bands = confidence_filter if confidence_filter else ['High', 'Medium', 'Low']
         # Honour #notcoco suppression per sidebar toggle (default: exclude them)
         if not exclude_not_coco and 'IS_NOT_COCO' in bulk_conf.columns:
@@ -809,12 +820,7 @@ if selected_partner:
             cr1.metric("Total Credits", f"${pc['Q2_TOTAL_CREDITS']:,.0f}" if pd.notna(pc['Q2_TOTAL_CREDITS']) else "N/A")
             cr2.metric("WoW", f"{pc['WOW_PCT']:+.1f}%" if pd.notna(pc['WOW_PCT']) else "N/A")
 
-        # Overwrite USE_CASE_NAME with a Salesforce URL that embeds the name in the
-        # URL fragment — LinkColumn's display_text regex extracts it as link text.
-        # Salesforce Lightning ignores hash fragments on /view URLs so links still work.
-        def _sf_link(uc_id, uc_name):
-            safe = _re.sub(r'[\r\n\t#]+', ' ', str(uc_name)).strip()
-            return f'https://snowforce.lightning.force.com/lightning/r/Use_Case__c/{uc_id}/view#{safe}'
+        # Overwrite USE_CASE_NAME with a Salesforce URL (see _sf_link at module level)
         partner_detail = partner_detail.copy()
         partner_detail['USE_CASE_NAME'] = partner_detail.apply(
             lambda r: _sf_link(r['USE_CASE_ID'], r['USE_CASE_NAME']), axis=1
@@ -1030,196 +1036,90 @@ if len(bulk_conf) > 0 and 'IS_COCO_FINAL' in bulk_conf.columns:
 else:
     st.info("Detection source data not available.")
 
-# --- 4-Week Per-Partner Heatmap: IS_COCO_FINAL Credits & Tokens ---
+# --- #notcoco — PSE-Blocked Use Cases (quarter-scoped audit view) ---
 st.divider()
-st.subheader("CoCo Consumption Trend — Last 4 Weeks (IS_COCO_FINAL)")
+st.subheader("#notcoco — PSE-Blocked Use Cases")
+st.caption(
+    "Use cases tagged #notcoco by a PSE in partner comments — excluded from CoCo counts when the "
+    "'Exclude #notcoco tagged UCs' toggle is ON. Scoped to the selected quarter, geo, and partner filters."
+)
 
-# Build IS_COCO_FINAL account list from bulk_conf (avoids re-running scoring)
-_hm_pairs = tuple()
-if len(bulk_conf) > 0 and 'IS_COCO_FINAL' in bulk_conf.columns and 'ACCOUNT_NAME_UPPER' in bulk_conf.columns:
-    _hm_coco_final = (
-        bulk_conf[bulk_conf['IS_COCO_FINAL']]
-        .pipe(filter_out_partner_own_accounts)
-        .drop_duplicates(subset=['PARTNER_NAME', 'ACCOUNT_NAME_UPPER'])
-        [['PARTNER_NAME', 'ACCOUNT_NAME_UPPER']]
+if len(_notcoco_ucs) > 0:
+    _blocked_total = len(_notcoco_ucs)
+    _blocked_partners = _notcoco_ucs['PARTNER_NAME'].nunique()
+    _blocked_eacv = pd.to_numeric(_notcoco_ucs['USE_CASE_EACV'], errors='coerce').fillna(0).sum()
+
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Blocked UCs", _blocked_total)
+    m2.metric("Partners Affected", _blocked_partners)
+    m3.metric("Blocked EACV", f"${_blocked_eacv:,.0f}")
+
+    # --- Partner summary table ---
+    _by_partner = (
+        _notcoco_ucs.groupby('PARTNER_NAME')
+        .agg(BLOCKED_UCS=('USE_CASE_ID', 'count'),
+             BLOCKED_EACV=('USE_CASE_EACV', lambda s: pd.to_numeric(s, errors='coerce').fillna(0).sum()),
+             THEATERS=('THEATER_NAME', lambda s: ', '.join(sorted(s.dropna().unique()))))
+        .reset_index()
+        .sort_values('BLOCKED_UCS', ascending=False)
     )
-    # Respect sidebar partner filter
-    if len(filtered) > 0:
-        _hm_coco_final = _hm_coco_final[_hm_coco_final['PARTNER_NAME'].isin(filtered['PARTNER_NAME'])]
-    _hm_pairs = tuple(zip(_hm_coco_final['PARTNER_NAME'], _hm_coco_final['ACCOUNT_NAME_UPPER']))
+    _by_partner['BLOCKED_EACV'] = _by_partner['BLOCKED_EACV'].round(0)
+    st.markdown("**By Partner**")
+    st.dataframe(
+        _by_partner,
+        column_config={
+            'PARTNER_NAME':  st.column_config.TextColumn("Partner", width="medium"),
+            'BLOCKED_UCS':   st.column_config.NumberColumn("Blocked UCs", format="%d"),
+            'BLOCKED_EACV':  st.column_config.NumberColumn("Blocked EACV", format="$%.0f"),
+            'THEATERS':      st.column_config.TextColumn("Theaters", width="medium"),
+        },
+        hide_index=True, use_container_width=True,
+        height=38 + 35 * len(_by_partner),
+    )
 
-if len(_hm_pairs) > 0:
-    try:
-        # --- Build Last7 + Prior7 directly from bulk_conf (same cache as Deep Dive header)
-        # This guarantees heatmap Last7/Prior7 = Deep Dive header EXACTLY
-        import datetime as _dt
-        _today = _dt.date.today()
-        _l7_label  = f"{(_today - _dt.timedelta(days=7)).strftime('%m/%d')}-{(_today - _dt.timedelta(days=1)).strftime('%m/%d')}"
-        _p7_label  = f"{(_today - _dt.timedelta(days=14)).strftime('%m/%d')}-{(_today - _dt.timedelta(days=8)).strftime('%m/%d')}"
+    # --- Detail table with SF links ---
+    _nc_detail = _notcoco_ucs.copy()
+    _nc_detail['USE_CASE_NAME'] = _nc_detail.apply(
+        lambda r: _sf_link(r['USE_CASE_ID'], r['USE_CASE_NAME']), axis=1
+    )
+    _nc_detail['USE_CASE_EACV'] = pd.to_numeric(_nc_detail['USE_CASE_EACV'], errors='coerce')
+    _detail_cols = [c for c in ['USE_CASE_NAME', 'ACCOUNT_NAME', 'PARTNER_NAME', 'THEATER_NAME',
+                                'USE_CASE_STAGE', 'USE_CASE_EACV', 'TECHNICAL_USE_CASE',
+                                'WORKLOAD_CATEGORY', 'CONFIDENCE_BAND', 'Q2_TOKENS',
+                                'COCO_SOURCE', 'CREATED_DATE'] if c in _nc_detail.columns]
+    st.markdown("**All Blocked Use Cases**")
+    st.dataframe(
+        _nc_detail[_detail_cols],
+        column_config={
+            'USE_CASE_NAME':     st.column_config.LinkColumn("Use Case", display_text=r"#(.+)$", width=200, help="Click to open use case in Salesforce"),
+            'ACCOUNT_NAME':      st.column_config.TextColumn("Account", width=160),
+            'PARTNER_NAME':      st.column_config.TextColumn("Partner", width=140),
+            'THEATER_NAME':      st.column_config.TextColumn("Theater", width=100),
+            'USE_CASE_STAGE':    st.column_config.TextColumn("Stage", width=180),
+            'USE_CASE_EACV':     st.column_config.NumberColumn("EACV", format="$%.0f", width=90),
+            'TECHNICAL_USE_CASE': st.column_config.TextColumn("Technical Type", width=150),
+            'WORKLOAD_CATEGORY': st.column_config.TextColumn("Workload", width=100),
+            'CONFIDENCE_BAND':   st.column_config.TextColumn("Confidence", width=90, help="Account usage confidence band — 'High' means the account has real token consumption despite the block"),
+            'Q2_TOKENS':         st.column_config.NumberColumn("Tokens", format="%d", width=100),
+            'COCO_SOURCE':       st.column_config.TextColumn("CoCo Source", width=120),
+            'CREATED_DATE':      st.column_config.DateColumn("Created", width=90),
+        },
+        hide_index=True, use_container_width=True,
+        height=38 + 35 * len(_nc_detail),
+    )
 
-        _hm_bulk = (
-            bulk_conf[bulk_conf['IS_COCO_FINAL']]
-            .pipe(filter_out_partner_own_accounts)
-            .drop_duplicates(subset=['PARTNER_NAME', 'ACCOUNT_NAME_UPPER'])
-            .copy()
-        )
-        if len(filtered) > 0:
-            _hm_bulk = _hm_bulk[_hm_bulk['PARTNER_NAME'].isin(filtered['PARTNER_NAME'])]
-
-        for _c in ['LAST7_CREDITS','PRIOR7_CREDITS','LAST7_TOKENS','PRIOR7_TOKENS']:
-            if _c in _hm_bulk.columns:
-                _hm_bulk[_c] = pd.to_numeric(_hm_bulk[_c], errors='coerce').fillna(0.0)
-
-        _last7_cred  = _hm_bulk.groupby('PARTNER_NAME')['LAST7_CREDITS'].sum().reset_index().rename(columns={'LAST7_CREDITS':  _l7_label})
-        _prior7_cred = _hm_bulk.groupby('PARTNER_NAME')['PRIOR7_CREDITS'].sum().reset_index().rename(columns={'PRIOR7_CREDITS': _p7_label})
-        _last7_tok   = _hm_bulk.groupby('PARTNER_NAME')['LAST7_TOKENS'].sum().reset_index().rename(columns={'LAST7_TOKENS':   _l7_label})
-        _prior7_tok  = _hm_bulk.groupby('PARTNER_NAME')['PRIOR7_TOKENS'].sum().reset_index().rename(columns={'PRIOR7_TOKENS':  _p7_label})
-
-        # --- Older periods (14-28d) from Snowflake query — separate TTL is fine since these don't appear in Deep Dive
-        _hm_older = get_partner_surface_trend_4w(conn, _hm_pairs)
-        _hm_older_cred = pd.DataFrame({'PARTNER_NAME': pd.Series(dtype=str)})
-        _hm_older_tok  = pd.DataFrame({'PARTNER_NAME': pd.Series(dtype=str)})
-        _older_labels  = []
-
-        if len(_hm_older) > 0:
-            for _c in ['WEEKLY_CREDITS', 'WEEKLY_TOKENS']:
-                if _c in _hm_older.columns:
-                    _hm_older[_c] = pd.to_numeric(_hm_older[_c], errors='coerce').fillna(0.0)
-            # Only keep periods 3 and 4 (older than prior7); skip 1 and 2 (already from bulk_conf)
-            _hm_old_only = _hm_older[_hm_older['PERIOD_ORDER'].isin([3, 4])].copy()
-            if len(_hm_old_only) > 0:
-                _older_labels = (
-                    _hm_old_only[['PERIOD_ORDER','PERIOD_LABEL']]
-                    .drop_duplicates()
-                    .sort_values('PERIOD_ORDER', ascending=False)['PERIOD_LABEL']
-                    .tolist()
-                )
-                _hm_older_cred = _hm_old_only.pivot_table(
-                    index='PARTNER_NAME', columns='PERIOD_LABEL',
-                    values='WEEKLY_CREDITS', aggfunc='sum', fill_value=0
-                ).reset_index()
-                _hm_older_tok = _hm_old_only.pivot_table(
-                    index='PARTNER_NAME', columns='PERIOD_LABEL',
-                    values='WEEKLY_TOKENS', aggfunc='sum', fill_value=0
-                ).reset_index()
-
-        # --- Merge all periods into final pivot tables
-        _all_partners = sorted(_hm_bulk['PARTNER_NAME'].unique())
-        _pbase = pd.DataFrame({'PARTNER_NAME': _all_partners})
-
-        # Column order: oldest left → newest right
-        _weeks = _older_labels + [_p7_label, _l7_label]
-
-        def _build_pivot(base_df, older_df, last7_df, prior7_df, older_labels, l7_lbl, p7_lbl):
-            df = base_df.copy()
-            for lbl in older_labels:
-                if len(older_df) > 0 and lbl in older_df.columns:
-                    df = df.merge(older_df[['PARTNER_NAME', lbl]], on='PARTNER_NAME', how='left')
-                else:
-                    df[lbl] = 0.0
-            df = df.merge(prior7_df, on='PARTNER_NAME', how='left')
-            df = df.merge(last7_df,  on='PARTNER_NAME', how='left')
-            df = df.set_index('PARTNER_NAME').fillna(0.0)
-            return df[[c for c in (_older_labels + [p7_lbl, l7_lbl]) if c in df.columns]]
-
-        _cred_pivot = _build_pivot(_pbase, _hm_older_cred, _last7_cred, _prior7_cred, _older_labels, _l7_label, _p7_label)
-        _tok_pivot  = _build_pivot(_pbase, _hm_older_tok,  _last7_tok,  _prior7_tok,  _older_labels, _l7_label, _p7_label)
-
-        # Sort partners by Last7 credits desc
-        _partner_order = _cred_pivot[_l7_label].sort_values(ascending=False).index.tolist() if _l7_label in _cred_pivot.columns else _cred_pivot.sum(axis=1).sort_values(ascending=False).index.tolist()
-        _cred_pivot = _cred_pivot.reindex(_partner_order)
-        _tok_pivot  = _tok_pivot.reindex(_partner_order)
-
-        if len(_cred_pivot) > 0:
-
-            _n_accts   = len(_hm_pairs)
-            _n_partners = len(_partner_order)
-
-            # Build hover text with WoW delta per cell
-            def _cred_hover(row_vals, cols):
-                texts = []
-                for i, col in enumerate(cols):
-                    val = float(row_vals[i]) if row_vals[i] == row_vals[i] else 0.0
-                    wow_str = ""
-                    if i > 0:
-                        prev = float(row_vals[i-1]) if row_vals[i-1] == row_vals[i-1] else 0.0
-                        if prev > 0:
-                            wow_str = f"  WoW: {(val-prev)/prev*100:+.1f}%"
-                    texts.append(f"${val:,.0f}{wow_str}")
-                return texts
-
-            def _tok_hover(row_vals, cols):
-                texts = []
-                for i, col in enumerate(cols):
-                    val = float(row_vals[i]) if row_vals[i] == row_vals[i] else 0.0
-                    wow_str = ""
-                    if i > 0:
-                        prev = float(row_vals[i-1]) if row_vals[i-1] == row_vals[i-1] else 0.0
-                        if prev > 0:
-                            wow_str = f"  WoW: {(val-prev)/prev*100:+.1f}%"
-                    texts.append(f"{val/1e9:.2f}B{wow_str}")
-                return texts
-
-            _cred_text = [_cred_hover(_cred_pivot.iloc[i].tolist(), _weeks) for i in range(len(_cred_pivot))]
-            _tok_text  = [_tok_hover(_tok_pivot.iloc[i].tolist(),  _weeks) for i in range(len(_tok_pivot))]
-
-            _col_hm1, _col_hm2 = st.columns(2)
-
-            with _col_hm1:
-                st.markdown("**Credits ($)**")
-                _fig_hm_c = go.Figure(go.Heatmap(
-                    z=_cred_pivot.values.tolist(),
-                    x=_weeks,
-                    y=_cred_pivot.index.tolist(),
-                    text=_cred_text,
-                    texttemplate="%{text}",
-                    textfont=dict(size=10),
-                    colorscale='Blues',
-                    showscale=True,
-                    colorbar=dict(title='Credits $', x=1.02, len=0.9),
-                    hovertemplate='<b>%{y}</b><br>%{x}<br>%{text}<extra></extra>',
-                ))
-                _fig_hm_c.update_layout(
-                    height=max(280, 36 * len(_partner_order) + 60),
-                    margin=dict(t=10, b=10, l=10, r=60),
-                    xaxis=dict(side='top'),
-                    yaxis=dict(autorange='reversed'),
-                    plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
-                )
-                st.plotly_chart(_fig_hm_c, use_container_width=True)
-
-            with _col_hm2:
-                st.markdown("**Tokens (B)**")
-                _tok_display = [[v / 1e9 for v in row] for row in _tok_pivot.values.tolist()]
-                _fig_hm_t = go.Figure(go.Heatmap(
-                    z=_tok_display,
-                    x=_weeks,
-                    y=_tok_pivot.index.tolist(),
-                    text=_tok_text,
-                    texttemplate="%{text}",
-                    textfont=dict(size=10),
-                    colorscale='Greens',
-                    showscale=True,
-                    colorbar=dict(title='Tokens B', x=1.02, len=0.9),
-                    hovertemplate='<b>%{y}</b><br>%{x}<br>%{text}<extra></extra>',
-                ))
-                _fig_hm_t.update_layout(
-                    height=max(280, 36 * len(_partner_order) + 60),
-                    margin=dict(t=10, b=10, l=10, r=60),
-                    xaxis=dict(side='top'),
-                    yaxis=dict(autorange='reversed'),
-                    plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
-                )
-                st.plotly_chart(_fig_hm_t, use_container_width=True)
-
-            st.caption(
-                f"IS_COCO_FINAL accounts ({_n_accts} accounts across {_n_partners} partners) | "
-                f"Rolling 7-day windows | Rightmost = Last 7d — same value as Deep Dive header tooltip | "
-                f"Darker = higher | Hover for WoW Δ"
-            )
-        else:
-            st.info("No consumption data found for IS_COCO_FINAL accounts in the last 4 weeks.")
-    except Exception as _e:
-        st.info(f"Trend chart unavailable: {_e}")
+    # CSV download
+    _csv_export = _notcoco_ucs[[
+        'USE_CASE_ID', 'USE_CASE_NAME', 'ACCOUNT_NAME', 'PARTNER_NAME', 'THEATER_NAME',
+        'USE_CASE_STAGE', 'USE_CASE_EACV', 'TECHNICAL_USE_CASE', 'CREATED_DATE'
+    ]].copy() if all(c in _notcoco_ucs.columns for c in
+        ['USE_CASE_ID', 'USE_CASE_NAME', 'ACCOUNT_NAME', 'PARTNER_NAME', 'THEATER_NAME',
+         'USE_CASE_STAGE', 'USE_CASE_EACV', 'TECHNICAL_USE_CASE', 'CREATED_DATE']) else _notcoco_ucs
+    st.download_button(
+        "Download #notcoco list (CSV)",
+        data=_csv_export.to_csv(index=False).encode('utf-8'),
+        file_name=f"notcoco_usecases_{datetime.now().strftime('%Y%m%d')}.csv",
+        mime="text/csv",
+    )
 else:
-    st.info("Enable 'Account Level CoCo' and select partners to see IS_COCO_FINAL consumption trend.")
+    st.success("No #notcoco tagged use cases in the current scope.")
