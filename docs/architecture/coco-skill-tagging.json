@@ -1,0 +1,237 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "How CoCo Skills Are Tagged on Use Cases",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1080,
+      500
+    ],
+    "views": [
+      {
+        "id": "tagging-path",
+        "label": "Tagging path",
+        "focus": [
+          "use_case",
+          "deterministic",
+          "first_pass",
+          "grounding_judge",
+          "gpa_rank",
+          "tagged_output"
+        ],
+        "note": "Follow one use case from raw fields through two parallel Cortex REST calls, LLM-as-judge grounding, and GPA ranking to capped skill chips."
+      },
+      {
+        "id": "parallel-dispatch",
+        "label": "Parallel dispatch",
+        "focus": [
+          "use_case",
+          "deterministic",
+          "first_pass"
+        ],
+        "note": "32 parallel workers fan discovery calls out across every use case at once, each hitting the Cortex Messages REST API directly."
+      },
+      {
+        "id": "gpa-framework",
+        "label": "GPA framework",
+        "focus": [
+          "first_pass",
+          "grounding_judge",
+          "gpa_rank",
+          "tagged_output"
+        ],
+        "note": "Context relevance, groundedness, and answer relevance are self-scored, then multiplied into one score that ranks the final skill chips."
+      }
+    ]
+  },
+  "stages": [
+    {
+      "label": "Use Case Batch"
+    },
+    {
+      "label": "Deterministic + Fan-Out"
+    },
+    {
+      "label": "Candidate Discovery"
+    },
+    {
+      "label": "LLM-as-Judge & GPA"
+    },
+    {
+      "label": "Tagged Output"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "use_case",
+      "type": "database",
+      "label": "Use Case Batch",
+      "sublabel": "raw fields, batch",
+      "stage": 0,
+      "row": 0,
+      "width": 150
+    },
+    {
+      "id": "deterministic",
+      "type": "backend",
+      "label": "Deterministic Tagging",
+      "sublabel": "taxonomy + AIM scan, then fan out",
+      "stage": 1,
+      "row": 0,
+      "width": 150
+    },
+    {
+      "id": "thread_pool",
+      "type": "cloud",
+      "label": "ThreadPoolExecutor",
+      "sublabel": "32 parallel workers",
+      "stage": 1,
+      "row": 2,
+      "width": 150
+    },
+    {
+      "id": "first_pass",
+      "type": "external",
+      "label": "Candidate Discovery",
+      "sublabel": "Cortex REST call: skills + summary",
+      "stage": 2,
+      "row": 0,
+      "width": 160
+    },
+    {
+      "id": "catalog",
+      "type": "database",
+      "label": "Skill Catalog",
+      "sublabel": "111 skills, COCO_SKILLS.md",
+      "stage": 2,
+      "row": 2,
+      "width": 160
+    },
+    {
+      "id": "grounding_judge",
+      "type": "external",
+      "label": "Grounding Judge",
+      "sublabel": "LLM-as-judge, 4 match types",
+      "stage": 3,
+      "row": 0,
+      "width": 160
+    },
+    {
+      "id": "gpa_rank",
+      "type": "backend",
+      "label": "GPA Ranking",
+      "sublabel": "context x groundedness x answer",
+      "stage": 3,
+      "row": 2,
+      "width": 160
+    },
+    {
+      "id": "tagged_output",
+      "type": "frontend",
+      "label": "Tagged Skill Chips",
+      "sublabel": "capped to 3, AIM pinned first",
+      "stage": 4,
+      "row": 0,
+      "width": 150
+    }
+  ],
+  "flows": [
+    {
+      "id": "use-case-to-det",
+      "from": "use_case",
+      "to": "deterministic",
+      "label": "name + description + notes",
+      "classification": "primary data",
+      "variant": "emphasis",
+      "labelAt": [
+        208,
+        200
+      ]
+    },
+    {
+      "id": "det-to-pool",
+      "from": "deterministic",
+      "to": "thread_pool",
+      "label": "catalog-only candidates per use case",
+      "classification": "primary data",
+      "variant": "emphasis",
+      "labelAt": [
+        220,
+        260
+      ]
+    },
+    {
+      "id": "pool-to-firstpass",
+      "from": "thread_pool",
+      "to": "first_pass",
+      "label": "32 concurrent REST calls",
+      "classification": "parallel dispatch",
+      "variant": "emphasis"
+    },
+    {
+      "id": "firstpass-to-judge",
+      "from": "first_pass",
+      "to": "grounding_judge",
+      "label": "candidates + evidence + GPA self-scores",
+      "classification": "primary data",
+      "variant": "emphasis",
+      "route": "straight",
+      "labelAt": [
+        638,
+        100
+      ]
+    },
+    {
+      "id": "catalog-to-judge",
+      "from": "catalog",
+      "to": "grounding_judge",
+      "label": "full scope per candidate",
+      "classification": "reference data",
+      "variant": "default"
+    },
+    {
+      "id": "judge-to-gparank",
+      "from": "grounding_judge",
+      "to": "gpa_rank",
+      "label": "grounded verdicts + reasons",
+      "classification": "primary data",
+      "variant": "emphasis",
+      "labelAt": [745, 200]
+    },
+    {
+      "id": "gparank-to-output",
+      "from": "gpa_rank",
+      "to": "tagged_output",
+      "label": "top 3 by combined score",
+      "classification": "primary data",
+      "variant": "emphasis"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "LLM-as-Judge: Four Match Types",
+      "items": [
+        "A second, independent Cortex call fact-checks every candidate -- current-state, named-tool replacement, greenfield build, or stated-outcome match",
+        "Candidates are filtered to the 111 real skills in COCO_SKILLS.md first; Snowflake AIM bypasses the judge entirely when detected"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "GPA Framework",
+      "items": [
+        "Each candidate self-scores context relevance, groundedness, and answer relevance (0.0-1.0) at discovery time",
+        "Combined score is a product (CR x GR x AR); a coverage floor rescues the best candidate instead of zero skills"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "32-Way Parallel REST Dispatch",
+      "items": [
+        "ThreadPoolExecutor(max_workers=32) fans discovery and judge calls out across every use case concurrently",
+        "Each worker calls the Cortex Messages REST API directly, with exponential backoff retry on HTTP 429"
+      ]
+    }
+  ]
+}
