@@ -57,7 +57,6 @@ from utils import (
 from utils.queries import (
     get_okr_coco_adoption, get_usecase_confidence_scores, get_bulk_confidence_scores,
 )
-from utils.config import get_env
 from utils.cortex_rest_helpers import cortex_complete_rest as cortex_complete
 from utils import judge_cache
 from utils.report import copy_rich_text_button
@@ -1643,10 +1642,6 @@ def _build_report_pdf_bytes(partner, q_start, q_end, target, coco_count, total_u
 # ─────────────────────────────────────────────────────────────────────────────
 # Page
 # ─────────────────────────────────────────────────────────────────────────────
-
-if get_env() not in ("dev",):
-    st.warning("This page is only available in the DEV environment.")
-    st.stop()
 
 conn = st.session_state.conn
 
