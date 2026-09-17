@@ -181,6 +181,11 @@ def _compute_peer_benchmark(conn, partner, q_start, q_end, coco_pct, bands):
     # before grouping, otherwise the same company's use cases split across its alias
     # spellings count as two separate "peers" and inflate the group size / skew rank.
     conf["PARTNER_NAME"] = conf["PARTNER_NAME"].map(lambda p: PARTNER_RENAME_MAP.get(p, p))
+    # #notcoco UCs are PSE-blocked: exclude from peer TOTAL too, matching how the
+    # partner's own coco_pct denominator is computed -- otherwise this ranking
+    # compares two differently-defined percentages.
+    if "IS_NOT_COCO" in conf.columns:
+        conf = conf[~conf["IS_NOT_COCO"].fillna(False).astype(bool)]
     per_partner = conf.groupby("PARTNER_NAME").agg(
         TOTAL=("USE_CASE_ID", "count"), COCO=("IS_COCO_FINAL", "sum"),
     ).reset_index()
@@ -209,6 +214,8 @@ def _compute_regional_breakdown(detail_df: pd.DataFrame, target: int):
     GAP == 0 (target met) while REMAINING > 0 (still short of 100%) -- that
     combination should be framed as a "push to 100%" ask, not hidden just
     because the OKR itself is satisfied."""
+    if "IS_NOT_COCO" in detail_df.columns:
+        detail_df = detail_df[~detail_df["IS_NOT_COCO"].fillna(False).astype(bool)]
     rows = []
     for label in ["AMS", "EMEA", "APJ"]:
         sub = detail_df[detail_df["THEATER_NAME"].apply(_theater_label) == label]
@@ -1706,10 +1713,18 @@ if include_account_coco:
         detail["IS_COCO"] = detail["IS_COCO_ATTACHED"]
         detail["IS_COCO_ATTACHED"] = apply_coco_final(detail, bands)
 
-non_coco = detail[detail["IS_COCO_ATTACHED"] == False].copy()
-coco_ucs = detail[detail["IS_COCO_ATTACHED"] == True].copy()
+# #notcoco UCs are PSE-blocked: force IS_COCO_ATTACHED False even when the
+# include_account_coco toggle above was off (apply_coco_final wasn't called),
+# and exclude them entirely from the CoCo % denominator -- they aren't "awaiting
+# confirmation", they're explicitly out of scope.
+_notcoco_mask = detail["IS_NOT_COCO"].fillna(False).astype(bool) if "IS_NOT_COCO" in detail.columns else pd.Series(False, index=detail.index)
+detail.loc[_notcoco_mask, "IS_COCO_ATTACHED"] = False
+detail_scoped = detail[~_notcoco_mask].copy()
 
-total_ucs = len(detail)
+non_coco = detail_scoped[detail_scoped["IS_COCO_ATTACHED"] == False].copy()
+coco_ucs = detail_scoped[detail_scoped["IS_COCO_ATTACHED"] == True].copy()
+
+total_ucs = len(detail_scoped)
 coco_count = len(coco_ucs)
 non_coco_count = len(non_coco)
 coco_pct = round(coco_count * 100.0 / total_ucs, 1) if total_ucs > 0 else 0.0

@@ -65,25 +65,30 @@ if include_account_coco and len(coverage) > 0:
             bulk_conf = bulk_conf[bulk_conf['USE_CASE_STAGE'].isin(_sel_stages)]
         bands = confidence_filter if confidence_filter else ['High', 'Medium', 'Low']
         bulk_conf['IS_COCO_FINAL'] = apply_coco_final(bulk_conf, bands)
+        # #notcoco UCs are PSE-blocked: excluded from both numerator (already handled by
+        # apply_coco_final) and denominator. TOTAL_PARTNER_UCS itself stays the raw count.
+        bulk_conf['_NOTCOCO_FLAG'] = bulk_conf['IS_NOT_COCO'].fillna(False).astype(bool) if 'IS_NOT_COCO' in bulk_conf.columns else False
         coco_eacv = bulk_conf[bulk_conf['IS_COCO_FINAL']].groupby('PARTNER_NAME')['USE_CASE_EACV'].sum().reset_index()
         coco_eacv.columns = ['PARTNER_NAME', 'COCO_EACV']
         conf_summary = bulk_conf.groupby('PARTNER_NAME').agg(
             TOTAL_PARTNER_UCS=('USE_CASE_ID', 'count'),
             COCO_UCS=('IS_COCO_FINAL', 'sum'),
+            NOTCOCO_UCS=('_NOTCOCO_FLAG', 'sum'),
             TOTAL_EACV=('USE_CASE_EACV', 'sum'),
         ).reset_index()
         conf_summary = conf_summary.merge(coco_eacv, on='PARTNER_NAME', how='left')
         conf_summary['COCO_EACV'] = conf_summary['COCO_EACV'].fillna(0)
         conf_summary['NON_COCO_UCS'] = conf_summary['TOTAL_PARTNER_UCS'] - conf_summary['COCO_UCS']
+        conf_summary['COCO_ELIGIBLE_UCS'] = conf_summary['TOTAL_PARTNER_UCS'] - conf_summary['NOTCOCO_UCS']
         conf_summary['COCO_PCT'] = round(
-            conf_summary['COCO_UCS'] * 100.0 / conf_summary['TOTAL_PARTNER_UCS'].replace(0, float('nan')), 1
+            conf_summary['COCO_UCS'] * 100.0 / conf_summary['COCO_ELIGIBLE_UCS'].replace(0, float('nan')), 1
         ).fillna(0)
         _cov = coverage[['PARTNER_NAME']].copy()
         _cov['PARTNER_NAME'] = _cov['PARTNER_NAME'].replace(PARTNER_RENAME_MAP)
         _cov = _cov.drop_duplicates(subset='PARTNER_NAME')
         coverage = _cov.merge(conf_summary, on='PARTNER_NAME', how='left').fillna(0)
         coverage['COCO_PCT'] = coverage['COCO_PCT'].astype(float)
-        coverage[['TOTAL_PARTNER_UCS', 'COCO_UCS', 'NON_COCO_UCS']] = coverage[['TOTAL_PARTNER_UCS', 'COCO_UCS', 'NON_COCO_UCS']].astype(int)
+        coverage[['TOTAL_PARTNER_UCS', 'COCO_UCS', 'NON_COCO_UCS', 'NOTCOCO_UCS']] = coverage[['TOTAL_PARTNER_UCS', 'COCO_UCS', 'NON_COCO_UCS', 'NOTCOCO_UCS']].astype(int)
 
         # Aggregate credits/tokens directly from IS_COCO_FINAL rows in bulk_conf
         # (credits are now embedded in _confidence_scored_query, no separate DB call needed)
@@ -122,12 +127,14 @@ if include_account_coco and len(coverage) > 0:
         stage_from_conf = bulk_conf.groupby(['PARTNER_NAME', 'USE_CASE_STAGE']).agg(
             TOTAL_UCS=('USE_CASE_ID', 'count'),
             COCO_UCS=('IS_COCO_FINAL', 'sum'),
+            NOTCOCO_UCS=('_NOTCOCO_FLAG', 'sum'),
             TOTAL_EACV=('USE_CASE_EACV', 'sum'),
         ).reset_index()
         stage_from_conf = stage_from_conf.merge(stage_coco_eacv, on=['PARTNER_NAME', 'USE_CASE_STAGE'], how='left')
         stage_from_conf['COCO_EACV'] = stage_from_conf['COCO_EACV'].fillna(0)
+        stage_from_conf['COCO_ELIGIBLE_UCS'] = stage_from_conf['TOTAL_UCS'] - stage_from_conf['NOTCOCO_UCS']
         stage_from_conf['COCO_PCT'] = round(
-            stage_from_conf['COCO_UCS'] * 100.0 / stage_from_conf['TOTAL_UCS'].replace(0, float('nan')), 1
+            stage_from_conf['COCO_UCS'] * 100.0 / stage_from_conf['COCO_ELIGIBLE_UCS'].replace(0, float('nan')), 1
         ).fillna(0)
         stage_breakdown = stage_from_conf
 
@@ -401,7 +408,7 @@ with tab_summary:
     display = coverage.copy()
     display['MEETS_TARGET'] = display['COCO_PCT'] >= TARGET_PCT
     display['GAP'] = display.apply(
-        lambda r: max(0, int((TARGET_PCT / 100.0 * r['TOTAL_PARTNER_UCS']) - r['COCO_UCS'] + 0.999)), axis=1
+        lambda r: max(0, int((TARGET_PCT / 100.0 * r.get('COCO_ELIGIBLE_UCS', r['TOTAL_PARTNER_UCS'])) - r['COCO_UCS'] + 0.999)), axis=1
     )
 
     # Merge attribution columns
@@ -454,11 +461,12 @@ with tab_summary:
         display['WOW_COCO_PCT'] = None
         display['WOW_COCO_UCS'] = None
 
-    _display_cols = ['PARTNER_NAME', 'TOTAL_PARTNER_UCS', 'COCO_UCS', 'COCO_PCT', 'WOW_COCO_PCT', 'WOW_COCO_UCS', 'LAST_WK_NEW_COCO', 'NEW_COCO_WOW_PCT', 'SE_COMMENTS', 'PSE_COMMENTS', 'FEATURE_FLAG', 'MEETS_TARGET', 'GAP']
+    _display_cols = ['PARTNER_NAME', 'TOTAL_PARTNER_UCS', 'COCO_UCS', 'NOTCOCO_UCS', 'COCO_PCT', 'WOW_COCO_PCT', 'WOW_COCO_UCS', 'LAST_WK_NEW_COCO', 'NEW_COCO_WOW_PCT', 'SE_COMMENTS', 'PSE_COMMENTS', 'FEATURE_FLAG', 'MEETS_TARGET', 'GAP']
     _col_cfg = {
         'PARTNER_NAME': st.column_config.TextColumn("Partner", width="medium"),
         'TOTAL_PARTNER_UCS': st.column_config.NumberColumn("Total UCs", format="%d"),
         'COCO_UCS': st.column_config.NumberColumn("CoCo UCs", format="%d"),
+        'NOTCOCO_UCS': st.column_config.NumberColumn("#notcoco", format="%d", help="Use cases tagged #notcoco by a PSE \u2014 excluded from both the CoCo UC count and the CoCo % denominator"),
         'COCO_PCT': st.column_config.ProgressColumn("CoCo %", min_value=0, max_value=100, format="%.1f%%"),
         'WOW_COCO_PCT': st.column_config.NumberColumn("WoW Δ%", format="%+.1f%%", help="Week-over-week change in CoCo adoption % (available after 2nd weekly snapshot)"),
         'WOW_COCO_UCS': st.column_config.NumberColumn("WoW Δ UCs", format="%+d", help="Week-over-week change in CoCo use case count"),

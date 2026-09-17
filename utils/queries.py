@@ -747,6 +747,7 @@ def get_okr_coco_adoption(_conn, quarter_start, quarter_end, region=None, includ
         uc.DAYS_IN_STAGE,
         CASE WHEN {is_coco} THEN TRUE ELSE FALSE END AS IS_COCO_ATTACHED,
         uc.COCO_SOURCE,
+        uc.IS_NOT_COCO,
         ARRAY_TO_STRING(ARRAY_CONSTRUCT_COMPACT(
             CASE WHEN caa.ACCOUNT_NAME_UPPER IS NOT NULL THEN 'Account Usage' END,
             CASE WHEN uc.COCO_SOURCE = 'SE_COMMENTS' THEN 'SE Comments' END,
