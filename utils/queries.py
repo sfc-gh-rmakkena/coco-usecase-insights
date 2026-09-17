@@ -77,21 +77,26 @@ def _use_case_base(start_date=None, end_date=None):
 # Keep backward-compatible constant for any remaining direct references
 USE_CASE_BASE = _use_case_base()
 
-def _theater_filter(region: str) -> str:
+def _theater_filter(region: str, alias: str = "") -> str:
+    """alias: optional table alias prefix (e.g. 'uc.') to disambiguate THEATER_NAME/
+    REGION_NAME when the query joins another table that also has those columns
+    (e.g. MDM.MDM_INTERFACES.DIM_USE_CASE). Leave blank for queries filtering a
+    single-source CTE (e.g. _use_case_base()'s use_cases) where there's no ambiguity.
+    """
     _noam = ('AMSExpansion', 'USMajors', 'AMSAcquisition', 'USPubSec')
     if not region or region == "Global":
         return ""
     elif region in _noam:
         # Theater-level filter (effective_region = theater name)
-        return f" AND THEATER_NAME = '{region}'"
+        return f" AND {alias}THEATER_NAME = '{region}'"
     elif region == "NoAM":
-        return " AND THEATER_NAME IN ('AMSExpansion', 'USMajors', 'AMSAcquisition', 'USPubSec')"
+        return f" AND {alias}THEATER_NAME IN ('AMSExpansion', 'USMajors', 'AMSAcquisition', 'USPubSec')"
     elif region == "EMEA":
-        return " AND THEATER_NAME = 'EMEA'"
+        return f" AND {alias}THEATER_NAME = 'EMEA'"
     elif region == "APJ":
-        return " AND THEATER_NAME = 'APJ'"
+        return f" AND {alias}THEATER_NAME = 'APJ'"
     elif region == "LATAM":
-        return " AND REGION_NAME = 'LATAM'"
+        return f" AND {alias}REGION_NAME = 'LATAM'"
     return ""
 
 def _subregion_filter(subregions) -> str:
@@ -723,7 +728,9 @@ def get_latam_rsi_adoption(_conn, start_date: str, end_date: str):
 
 @st.cache_data(ttl=timedelta(minutes=30))
 def get_okr_coco_adoption(_conn, quarter_start, quarter_end, region=None, include_account_coco=True, confidence=None, subregions=None):
-    tf = _theater_filter(region)
+    # alias='uc.' required here: this query joins MDM.MDM_INTERFACES.DIM_USE_CASE (mdm),
+    # which also has THEATER_NAME/REGION_NAME columns — unqualified refs are ambiguous.
+    tf = _theater_filter(region, alias='uc.')
     srf = _subregion_filter(subregions)
     coco_cte = _coco_accounts_cte(quarter_start, include_account_coco, confidence)
     is_coco = _is_coco_expanded()
