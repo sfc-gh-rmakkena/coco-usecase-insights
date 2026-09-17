@@ -229,17 +229,23 @@ if include_account_coco:
         bulk_conf['IS_COCO_FINAL'] = apply_coco_final(bulk_conf, bands)
 
         # Recompute per-partner summary
+        # #notcoco UCs are PSE-blocked: excluded from both numerator (already handled by
+        # apply_coco_final) and denominator (CoCo % is measured only against UCs actually
+        # eligible for CoCo attribution). TOTAL_USE_CASES itself stays the raw, unfiltered count.
+        bulk_conf['_NOTCOCO_FLAG'] = bulk_conf['IS_NOT_COCO'].fillna(False).astype(bool) if 'IS_NOT_COCO' in bulk_conf.columns else False
         coco_eacv = bulk_conf[bulk_conf['IS_COCO_FINAL']].groupby('PARTNER_NAME')['USE_CASE_EACV'].sum().reset_index()
         coco_eacv.columns = ['PARTNER_NAME', 'COCO_EACV']
         summary = bulk_conf.groupby('PARTNER_NAME').agg(
             TOTAL_USE_CASES=('USE_CASE_ID', 'count'),
             COCO_USE_CASES=('IS_COCO_FINAL', 'sum'),
+            NOTCOCO_USE_CASES=('_NOTCOCO_FLAG', 'sum'),
             TOTAL_EACV=('USE_CASE_EACV', 'sum'),
         ).reset_index()
         summary = summary.merge(coco_eacv, on='PARTNER_NAME', how='left')
         summary['COCO_EACV'] = summary['COCO_EACV'].fillna(0)
         summary['NON_COCO_USE_CASES'] = summary['TOTAL_USE_CASES'] - summary['COCO_USE_CASES']
-        summary['COCO_PCT'] = round(summary['COCO_USE_CASES'] * 100.0 / summary['TOTAL_USE_CASES'].replace(0, float('nan')), 1).fillna(0)
+        summary['COCO_ELIGIBLE_UCS'] = summary['TOTAL_USE_CASES'] - summary['NOTCOCO_USE_CASES']
+        summary['COCO_PCT'] = round(summary['COCO_USE_CASES'] * 100.0 / summary['COCO_ELIGIBLE_UCS'].replace(0, float('nan')), 1).fillna(0)
         # Count account-level use cases at the selected confidence bands
         high_conf_coco = int(bulk_conf['CONFIDENCE_BAND'].isin(bands).sum())
 
@@ -250,12 +256,14 @@ if include_account_coco:
         stage_from_conf = bulk_conf.groupby(['PARTNER_NAME', 'USE_CASE_STAGE']).agg(
             TOTAL_UCS=('USE_CASE_ID', 'count'),
             COCO_UCS=('IS_COCO_FINAL', 'sum'),
+            NOTCOCO_UCS=('_NOTCOCO_FLAG', 'sum'),
             TOTAL_EACV=('USE_CASE_EACV', 'sum'),
         ).reset_index()
         stage_from_conf = stage_from_conf.merge(stage_coco_eacv, on=['PARTNER_NAME', 'USE_CASE_STAGE'], how='left')
         stage_from_conf['COCO_EACV'] = stage_from_conf['COCO_EACV'].fillna(0)
+        stage_from_conf['COCO_ELIGIBLE_UCS'] = stage_from_conf['TOTAL_UCS'] - stage_from_conf['NOTCOCO_UCS']
         stage_from_conf['COCO_PCT'] = round(
-            stage_from_conf['COCO_UCS'] * 100.0 / stage_from_conf['TOTAL_UCS'].replace(0, float('nan')), 1
+            stage_from_conf['COCO_UCS'] * 100.0 / stage_from_conf['COCO_ELIGIBLE_UCS'].replace(0, float('nan')), 1
         ).fillna(0)
         stage_breakdown = stage_from_conf
 
@@ -473,11 +481,11 @@ else:
 # WoW adoption delta per partner (from IS_COCO_FINAL weekly snapshot)
 wow_partners = adoption_wow[adoption_wow['PARTNER_NAME'].notna()][['PARTNER_NAME', 'WOW_COCO_PCT', 'WOW_COCO_UCS']] if len(adoption_wow) > 0 else pd.DataFrame()
 
-display_df = filtered_sorted[['PARTNER_NAME', 'TOTAL_USE_CASES', 'COCO_USE_CASES', 'NON_COCO_USE_CASES', 'TOTAL_EACV', 'COCO_EACV', 'MEETS_TARGET']].copy()
+display_df = filtered_sorted[['PARTNER_NAME', 'TOTAL_USE_CASES', 'COCO_USE_CASES', 'NOTCOCO_USE_CASES', 'NON_COCO_USE_CASES', 'TOTAL_EACV', 'COCO_EACV', 'MEETS_TARGET']].copy()
 display_df['TOTAL_EACV'] = display_df['TOTAL_EACV'].apply(lambda x: f"${(x or 0)/1000:.0f}K" if (x or 0) < 1_000_000 else f"${(x or 0)/1_000_000:.1f}M")
 display_df['COCO_EACV'] = display_df['COCO_EACV'].apply(lambda x: f"${(x or 0)/1000:.0f}K" if (x or 0) < 1_000_000 else f"${(x or 0)/1_000_000:.1f}M")
 display_df['GAP'] = filtered_sorted.apply(
-    lambda r: max(0, int((target / 100.0 * r['TOTAL_USE_CASES']) - r['COCO_USE_CASES'] + 0.999)), axis=1
+    lambda r: max(0, int((target / 100.0 * r.get('COCO_ELIGIBLE_UCS', r['TOTAL_USE_CASES'])) - r['COCO_USE_CASES'] + 0.999)), axis=1
 )
 display_df['COCO_PCT'] = filtered_sorted['COCO_PCT']
 
@@ -514,13 +522,14 @@ else:
     display_df['NEW_GROSS_COCO_WOW_PCT'] = None
 
 # Merge Q2 Credits / Tokens (Coverage page approach)
-_display_cols = ['PARTNER_NAME', 'TOTAL_USE_CASES', 'COCO_USE_CASES', 'COCO_PCT', 'WOW_COCO_PCT', 'WOW_COCO_UCS',
+_display_cols = ['PARTNER_NAME', 'TOTAL_USE_CASES', 'COCO_USE_CASES', 'NOTCOCO_USE_CASES', 'COCO_PCT', 'WOW_COCO_PCT', 'WOW_COCO_UCS',
                  'NEW_GROSS_COCO_UCS',
                  'NON_COCO_USE_CASES', 'TOTAL_EACV', 'COCO_EACV', 'SE_COMMENTS', 'PSE_COMMENTS', 'FEATURE_FLAG']
 _col_cfg = {
     'PARTNER_NAME':      st.column_config.TextColumn("Partner", width="medium"),
     'TOTAL_USE_CASES':   st.column_config.NumberColumn("Total UCs", format="%d"),
     'COCO_USE_CASES':    st.column_config.NumberColumn("CoCo UCs", format="%d"),
+    'NOTCOCO_USE_CASES': st.column_config.NumberColumn("#notcoco", format="%d", help="Use cases tagged #notcoco by a PSE \u2014 excluded from both the CoCo UC count and the CoCo % denominator"),
     'COCO_PCT':          st.column_config.ProgressColumn("CoCo %", min_value=0, max_value=100, format="%.1f%%"),
     'WOW_COCO_PCT':      st.column_config.NumberColumn("WoW CoCo Δ%", format="%+.1f%%", help="Week-over-week change in CoCo adoption %"),
     'WOW_COCO_UCS':      st.column_config.NumberColumn("WoW Δ CoCo UCs", format="%+d", help="Week-over-week change in CoCo use case count"),
@@ -717,15 +726,18 @@ if selected_partner:
         p_stats = filtered_sorted[filtered_sorted['PARTNER_NAME'] == selected_partner].iloc[0]
         coco_pct = p_stats['COCO_PCT']
 
-        c1, c2, c3, c4, c5 = st.columns(5)
+        c1, c2, c3, c4, c5, c6 = st.columns(6)
         c1.metric("Total Use Cases", int(p_stats['TOTAL_USE_CASES']))
         c2.metric("CoCo Attached", int(p_stats['COCO_USE_CASES']))
-        c3.metric("CoCo Usecase %", f"{coco_pct:.1f}%", f"{'MET' if coco_pct >= target else 'BELOW'} {target}% target")
-        gap = max(0, int((target / 100.0 * p_stats['TOTAL_USE_CASES']) - p_stats['COCO_USE_CASES'] + 0.999))
-        c4.metric("UCs Needed for Target", gap if gap > 0 else "0 (Met!)")
+        c3.metric("#notcoco", int(p_stats['NOTCOCO_USE_CASES']) if 'NOTCOCO_USE_CASES' in p_stats else 0,
+                  help="Use cases tagged #notcoco by a PSE — excluded from both the CoCo UC count and the CoCo % denominator")
+        c4.metric("CoCo Usecase %", f"{coco_pct:.1f}%", f"{'MET' if coco_pct >= target else 'BELOW'} {target}% target")
+        _eligible_ucs = p_stats['COCO_ELIGIBLE_UCS'] if 'COCO_ELIGIBLE_UCS' in p_stats else p_stats['TOTAL_USE_CASES']
+        gap = max(0, int((target / 100.0 * _eligible_ucs) - p_stats['COCO_USE_CASES'] + 0.999))
+        c5.metric("UCs Needed for Target", gap if gap > 0 else "0 (Met!)")
         # Account-only: CoCo attached but no comments/flag (COCO_SOURCE is NULL)
         account_only = int(partner_detail[(partner_detail['IS_COCO_ATTACHED'] == True) & (partner_detail['COCO_SOURCE'].isna())].shape[0])
-        c5.metric("CoCo Attribution- Account Level Usage", account_only, help="CoCo via customer account usage, no SE/PSE comments")
+        c6.metric("CoCo Attribution- Account Level Usage", account_only, help="CoCo via customer account usage, no SE/PSE comments")
 
         # Credit & token consumption from IS_COCO_FINAL summary (same as scorecard)
         _p_summary = summary[summary['PARTNER_NAME'] == selected_partner]
