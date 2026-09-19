@@ -1227,8 +1227,10 @@ def _render_partner_section(base_df, bc, bc_partner_map, skeleton_df, target_pct
         _bc['_icd'] = _bc['_s6'] | _bc['_s7']
         _bc['_dep'] = _bc['_s7']
         _bc['_coco_eacv'] = _bc['USE_CASE_EACV'].where(_bc['IS_COCO_FINAL'], 0)
-        # #notcoco UCs are PSE-blocked: excluded from the CoCo % denominator too
+        # #notcoco / #notinvolved UCs are excluded from the CoCo % denominator too
         _bc['_notcoco'] = _bc['IS_NOT_COCO'].fillna(False).astype(bool) if 'IS_NOT_COCO' in _bc.columns else False
+        _bc['_notinvolved'] = _bc['IS_NOT_INVOLVED'].fillna(False).astype(bool) if 'IS_NOT_INVOLVED' in _bc.columns else False
+        _bc['_excluded'] = _bc['_notcoco'] | _bc['_notinvolved']
         agg = (_bc.groupby('_label').agg(
             COCO_FINAL_UCS=('IS_COCO_FINAL','sum'),
             VALIDATION_COCO=('_tw','sum'), IN_PROGRESS_COCO=('_ip','sum'),
@@ -1237,10 +1239,11 @@ def _render_partner_section(base_df, bc, bc_partner_map, skeleton_df, target_pct
             S6_COCO=('_s6','sum'), S7_COCO=('_s7','sum'),
             COCO_EACV=('_coco_eacv','sum'),
             NOTCOCO_UCS=('_notcoco','sum'),
+            EXCLUDED_UCS=('_excluded','sum'),
         ).reset_index().rename(columns={'_label':'PARTNER_LABEL'}))
         df = df.merge(agg, on='PARTNER_LABEL', how='left')
         for c in ['COCO_FINAL_UCS','VALIDATION_COCO','IN_PROGRESS_COCO','IMPL_COMPLETE_DEPLOYED_COCO',
-                  'DEPLOYED_COCO','S3_COCO','S4_COCO','S5_COCO','S6_COCO','S7_COCO','NOTCOCO_UCS']:
+                  'DEPLOYED_COCO','S3_COCO','S4_COCO','S5_COCO','S6_COCO','S7_COCO','NOTCOCO_UCS','EXCLUDED_UCS']:
             df[c] = df[c].fillna(0).astype(int)
         df['COCO_EACV'] = df['COCO_EACV'].fillna(0)
     else:
@@ -1251,10 +1254,11 @@ def _render_partner_section(base_df, bc, bc_partner_map, skeleton_df, target_pct
         df['DEPLOYED_COCO']               = df['DEPLOYED_COCO_SQL']
         df['COCO_EACV']                   = df['COCO_EACV_SQL']
         df['NOTCOCO_UCS']                 = df.get('NOTCOCO_UCS', pd.Series(0, index=df.index))
+        df['EXCLUDED_UCS']                = df.get('EXCLUDED_UCS', pd.Series(0, index=df.index))
         for c in _stage_sql_cols:
             df[c] = df.get(f'{c}_SQL', pd.Series(0, index=df.index))
 
-    df['COCO_ELIGIBLE_UCS'] = df['TOTAL_UCS'] - df.get('NOTCOCO_UCS', 0)
+    df['COCO_ELIGIBLE_UCS'] = df['TOTAL_UCS'] - df.get('EXCLUDED_UCS', 0)
     df['COCO_PCT'] = (df['COCO_FINAL_UCS'] * 100.0 / df['COCO_ELIGIBLE_UCS'].replace(0, float('nan'))).round(1).fillna(0)
 
     # Vertical funnel summary
@@ -1421,19 +1425,22 @@ with st.expander(":material/language: APJ RSI CoCo Adoption (50% Target)", expan
         _apj_bc['_s5']  = _apj_bc['IS_COCO_FINAL'] & (_apj_bc['USE_CASE_STAGE'] == '5 - Implementation In Progress')
         _apj_bc['_s6']  = _apj_bc['IS_COCO_FINAL'] & (_apj_bc['USE_CASE_STAGE'] == '6 - Implementation Complete')
         _apj_bc['_s7']  = _apj_bc['IS_COCO_FINAL'] & (_apj_bc['USE_CASE_STAGE'] == '7 - Deployed')
-        # #notcoco UCs are PSE-blocked: excluded from the CoCo % denominator too
+        # #notcoco / #notinvolved UCs are excluded from the CoCo % denominator too
         _apj_bc['_notcoco'] = _apj_bc['IS_NOT_COCO'].fillna(False).astype(bool) if 'IS_NOT_COCO' in _apj_bc.columns else False
+        _apj_bc['_notinvolved'] = _apj_bc['IS_NOT_INVOLVED'].fillna(False).astype(bool) if 'IS_NOT_INVOLVED' in _apj_bc.columns else False
+        _apj_bc['_excluded'] = _apj_bc['_notcoco'] | _apj_bc['_notinvolved']
         _bc_agg = (
             _apj_bc.groupby('_label')
             .agg(COCO_FINAL_UCS=('IS_COCO_FINAL', 'sum'),
                  S3_COCO=('_s3','sum'), S4_COCO=('_s4','sum'), S5_COCO=('_s5','sum'),
                  S6_COCO=('_s6','sum'), S7_COCO=('_s7','sum'),
                  DEPLOYED_COCO=('_s7','sum'),
-                 NOTCOCO_UCS=('_notcoco','sum'))
+                 NOTCOCO_UCS=('_notcoco','sum'),
+                 EXCLUDED_UCS=('_excluded','sum'))
             .reset_index().rename(columns={'_label': 'PARTNER_LABEL'})
         )
         _apj_df = _apj_df.merge(_bc_agg, on='PARTNER_LABEL', how='left')
-        for _c in ['COCO_FINAL_UCS','S3_COCO','S4_COCO','S5_COCO','S6_COCO','S7_COCO','DEPLOYED_COCO','NOTCOCO_UCS']:
+        for _c in ['COCO_FINAL_UCS','S3_COCO','S4_COCO','S5_COCO','S6_COCO','S7_COCO','DEPLOYED_COCO','NOTCOCO_UCS','EXCLUDED_UCS']:
             _apj_df[_c] = _apj_df[_c].fillna(0).astype(int)
         _apj_bc_eacv = _apj_bc.assign(_coco_eacv=_apj_bc['USE_CASE_EACV'].where(_apj_bc['IS_COCO_FINAL'], 0)).groupby('_label').agg(COCO_EACV=('_coco_eacv', 'sum')).reset_index().rename(columns={'_label':'PARTNER_LABEL'})
         _apj_df = _apj_df.merge(_apj_bc_eacv, on='PARTNER_LABEL', how='left')
@@ -1445,8 +1452,9 @@ with st.expander(":material/language: APJ RSI CoCo Adoption (50% Target)", expan
             _apj_df[_c] = _apj_df.get(f'{_c}_SQL', pd.Series(0, index=_apj_df.index)).fillna(0).astype(int)
         _apj_df['DEPLOYED_COCO'] = _apj_df['S7_COCO']
         _apj_df['NOTCOCO_UCS'] = _apj_df.get('NOTCOCO_UCS', pd.Series(0, index=_apj_df.index))
+        _apj_df['EXCLUDED_UCS'] = _apj_df.get('EXCLUDED_UCS', pd.Series(0, index=_apj_df.index))
 
-    _apj_df['COCO_ELIGIBLE_UCS'] = _apj_df['TOTAL_UCS'] - _apj_df.get('NOTCOCO_UCS', 0)
+    _apj_df['COCO_ELIGIBLE_UCS'] = _apj_df['TOTAL_UCS'] - _apj_df.get('EXCLUDED_UCS', 0)
     _apj_df['COCO_PCT'] = (
         _apj_df['COCO_FINAL_UCS'] * 100.0 /
         _apj_df['COCO_ELIGIBLE_UCS'].replace(0, float('nan'))
@@ -1558,17 +1566,20 @@ with st.expander("🌎 LATAM RSI CoCo Adoption (50% Target)", expanded=True):
         _latam_bc['_s7']  = _latam_bc['IS_COCO_FINAL'] & (_latam_bc['USE_CASE_STAGE'] == '7 - Deployed')
         # #notcoco UCs are PSE-blocked: excluded from the CoCo % denominator too
         _latam_bc['_notcoco'] = _latam_bc['IS_NOT_COCO'].fillna(False).astype(bool) if 'IS_NOT_COCO' in _latam_bc.columns else False
+        _latam_bc['_notinvolved'] = _latam_bc['IS_NOT_INVOLVED'].fillna(False).astype(bool) if 'IS_NOT_INVOLVED' in _latam_bc.columns else False
+        _latam_bc['_excluded'] = _latam_bc['_notcoco'] | _latam_bc['_notinvolved']
         _lbc_agg = (
             _latam_bc.groupby('_label')
             .agg(COCO_FINAL_UCS=('IS_COCO_FINAL', 'sum'),
                  S3_COCO=('_s3','sum'), S4_COCO=('_s4','sum'), S5_COCO=('_s5','sum'),
                  S6_COCO=('_s6','sum'), S7_COCO=('_s7','sum'),
                  DEPLOYED_COCO=('_s7','sum'),
-                 NOTCOCO_UCS=('_notcoco','sum'))
+                 NOTCOCO_UCS=('_notcoco','sum'),
+                 EXCLUDED_UCS=('_excluded','sum'))
             .reset_index().rename(columns={'_label': 'PARTNER_LABEL'})
         )
         _latam_df = _latam_df.merge(_lbc_agg, on='PARTNER_LABEL', how='left')
-        for _c in ['COCO_FINAL_UCS','S3_COCO','S4_COCO','S5_COCO','S6_COCO','S7_COCO','DEPLOYED_COCO','NOTCOCO_UCS']:
+        for _c in ['COCO_FINAL_UCS','S3_COCO','S4_COCO','S5_COCO','S6_COCO','S7_COCO','DEPLOYED_COCO','NOTCOCO_UCS','EXCLUDED_UCS']:
             _latam_df[_c] = _latam_df[_c].fillna(0).astype(int)
         _latam_bc_eacv = _latam_bc.assign(_coco_eacv=_latam_bc['USE_CASE_EACV'].where(_latam_bc['IS_COCO_FINAL'], 0)).groupby('_label').agg(COCO_EACV=('_coco_eacv', 'sum')).reset_index().rename(columns={'_label':'PARTNER_LABEL'})
         _latam_df = _latam_df.merge(_latam_bc_eacv, on='PARTNER_LABEL', how='left')
@@ -1580,8 +1591,9 @@ with st.expander("🌎 LATAM RSI CoCo Adoption (50% Target)", expanded=True):
             _latam_df[_c] = _latam_df.get(f'{_c}_SQL', pd.Series(0, index=_latam_df.index)).fillna(0).astype(int)
         _latam_df['DEPLOYED_COCO'] = _latam_df['S7_COCO']
         _latam_df['NOTCOCO_UCS'] = _latam_df.get('NOTCOCO_UCS', pd.Series(0, index=_latam_df.index))
+        _latam_df['EXCLUDED_UCS'] = _latam_df.get('EXCLUDED_UCS', pd.Series(0, index=_latam_df.index))
 
-    _latam_df['COCO_ELIGIBLE_UCS'] = _latam_df['TOTAL_UCS'] - _latam_df.get('NOTCOCO_UCS', 0)
+    _latam_df['COCO_ELIGIBLE_UCS'] = _latam_df['TOTAL_UCS'] - _latam_df.get('EXCLUDED_UCS', 0)
     _latam_df['COCO_PCT'] = (
         _latam_df['COCO_FINAL_UCS'] * 100.0 /
         _latam_df['COCO_ELIGIBLE_UCS'].replace(0, float('nan'))
@@ -1695,17 +1707,20 @@ with st.expander(":material/globe_uk: EMEA RSI CoCo Adoption (50% Target)", expa
         _emea_bc['_s7']  = _emea_bc['IS_COCO_FINAL'] & (_emea_bc['USE_CASE_STAGE'] == '7 - Deployed')
         # #notcoco UCs are PSE-blocked: excluded from the CoCo % denominator too
         _emea_bc['_notcoco'] = _emea_bc['IS_NOT_COCO'].fillna(False).astype(bool) if 'IS_NOT_COCO' in _emea_bc.columns else False
+        _emea_bc['_notinvolved'] = _emea_bc['IS_NOT_INVOLVED'].fillna(False).astype(bool) if 'IS_NOT_INVOLVED' in _emea_bc.columns else False
+        _emea_bc['_excluded'] = _emea_bc['_notcoco'] | _emea_bc['_notinvolved']
         _ebc_agg = (
             _emea_bc.groupby('_label')
             .agg(COCO_FINAL_UCS=('IS_COCO_FINAL', 'sum'),
                  S3_COCO=('_s3','sum'), S4_COCO=('_s4','sum'), S5_COCO=('_s5','sum'),
                  S6_COCO=('_s6','sum'), S7_COCO=('_s7','sum'),
                  DEPLOYED_COCO=('_s7','sum'),
-                 NOTCOCO_UCS=('_notcoco','sum'))
+                 NOTCOCO_UCS=('_notcoco','sum'),
+                 EXCLUDED_UCS=('_excluded','sum'))
             .reset_index().rename(columns={'_label': 'PARTNER_LABEL'})
         )
         _emea_df = _emea_df.merge(_ebc_agg, on='PARTNER_LABEL', how='left')
-        for _c in ['COCO_FINAL_UCS','S3_COCO','S4_COCO','S5_COCO','S6_COCO','S7_COCO','DEPLOYED_COCO','NOTCOCO_UCS']:
+        for _c in ['COCO_FINAL_UCS','S3_COCO','S4_COCO','S5_COCO','S6_COCO','S7_COCO','DEPLOYED_COCO','NOTCOCO_UCS','EXCLUDED_UCS']:
             _emea_df[_c] = _emea_df[_c].fillna(0).astype(int)
         _emea_bc_eacv = _emea_bc.assign(_coco_eacv=_emea_bc['USE_CASE_EACV'].where(_emea_bc['IS_COCO_FINAL'], 0)).groupby('_label').agg(COCO_EACV=('_coco_eacv', 'sum')).reset_index().rename(columns={'_label':'PARTNER_LABEL'})
         _emea_df = _emea_df.merge(_emea_bc_eacv, on='PARTNER_LABEL', how='left')
@@ -1717,8 +1732,9 @@ with st.expander(":material/globe_uk: EMEA RSI CoCo Adoption (50% Target)", expa
             _emea_df[_c] = _emea_df.get(f'{_c}_SQL', pd.Series(0, index=_emea_df.index)).fillna(0).astype(int)
         _emea_df['DEPLOYED_COCO'] = _emea_df['S7_COCO']
         _emea_df['NOTCOCO_UCS'] = _emea_df.get('NOTCOCO_UCS', pd.Series(0, index=_emea_df.index))
+        _emea_df['EXCLUDED_UCS'] = _emea_df.get('EXCLUDED_UCS', pd.Series(0, index=_emea_df.index))
 
-    _emea_df['COCO_ELIGIBLE_UCS'] = _emea_df['TOTAL_UCS'] - _emea_df.get('NOTCOCO_UCS', 0)
+    _emea_df['COCO_ELIGIBLE_UCS'] = _emea_df['TOTAL_UCS'] - _emea_df.get('EXCLUDED_UCS', 0)
     _emea_df['COCO_PCT'] = (
         _emea_df['COCO_FINAL_UCS'] * 100.0 /
         _emea_df['COCO_ELIGIBLE_UCS'].replace(0, float('nan'))
@@ -1790,11 +1806,14 @@ if len(_bc_managed) > 0 and 'IS_COCO_FINAL' in _bc_managed.columns:
     _bc = _bc_managed.copy()
     _bc['_is_coco_final'] = _bc['IS_COCO_FINAL'].astype(bool)
     _bc['_is_notcoco'] = _bc['IS_NOT_COCO'].fillna(False).astype(bool) if 'IS_NOT_COCO' in _bc.columns else False
+    _bc['_is_notinvolved'] = _bc['IS_NOT_INVOLVED'].fillna(False).astype(bool) if 'IS_NOT_INVOLVED' in _bc.columns else False
+    _bc['_is_excluded'] = _bc['_is_notcoco'] | _bc['_is_notinvolved']
     _stage_agg = (
         _bc.groupby('USE_CASE_STAGE', dropna=True)
         .agg(TOTAL_UCS=('USE_CASE_ID', 'count'),
              COCO_UCS=('_is_coco_final', 'sum'),
              NOTCOCO_UCS=('_is_notcoco', 'sum'),
+             EXCLUDED_UCS=('_is_excluded', 'sum'),
              TOTAL_EACV=('USE_CASE_EACV', 'sum'))
         .reset_index()
     )
@@ -1807,20 +1826,20 @@ else:
     _stage_agg = pd.DataFrame([
         {'USE_CASE_STAGE': '3 - Technical / Business Validation',
          'TOTAL_UCS': int(s['VALIDATION_COUNT']), 'COCO_UCS': int(s.get('VALIDATION_COCO_COUNT', 0)),
-         'TOTAL_EACV': float(s['VALIDATION_EACV'] or 0), 'COCO_EACV': 0, 'NOTCOCO_UCS': 0},
+         'TOTAL_EACV': float(s['VALIDATION_EACV'] or 0), 'COCO_EACV': 0, 'NOTCOCO_UCS': 0, 'EXCLUDED_UCS': 0},
         {'USE_CASE_STAGE': '4 - Use Case Won / Migration Plan',
          'TOTAL_UCS': int(s['WON_COUNT']), 'COCO_UCS': _tech_wins_coco,
-         'TOTAL_EACV': float(s['WON_EACV'] or 0), 'COCO_EACV': 0, 'NOTCOCO_UCS': 0},
+         'TOTAL_EACV': float(s['WON_EACV'] or 0), 'COCO_EACV': 0, 'NOTCOCO_UCS': 0, 'EXCLUDED_UCS': 0},
         {'USE_CASE_STAGE': '5-6 - Implementation',
          'TOTAL_UCS': int(s['IMPL_COUNT']), 'COCO_UCS': _in_impl_coco,
-         'TOTAL_EACV': float(s['IMPL_EACV'] or 0), 'COCO_EACV': 0, 'NOTCOCO_UCS': 0},
+         'TOTAL_EACV': float(s['IMPL_EACV'] or 0), 'COCO_EACV': 0, 'NOTCOCO_UCS': 0, 'EXCLUDED_UCS': 0},
         {'USE_CASE_STAGE': '7 - Deployed',
          'TOTAL_UCS': int(s['DEPLOYED_COUNT']), 'COCO_UCS': _go_live_coco,
-         'TOTAL_EACV': float(s['DEPLOYED_EACV'] or 0), 'COCO_EACV': _coco_eacv, 'NOTCOCO_UCS': 0},
+         'TOTAL_EACV': float(s['DEPLOYED_EACV'] or 0), 'COCO_EACV': _coco_eacv, 'NOTCOCO_UCS': 0, 'EXCLUDED_UCS': 0},
     ])
 
 if len(_stage_agg) > 0:
-    _stage_agg['COCO_ELIGIBLE_UCS'] = _stage_agg['TOTAL_UCS'] - _stage_agg.get('NOTCOCO_UCS', 0)
+    _stage_agg['COCO_ELIGIBLE_UCS'] = _stage_agg['TOTAL_UCS'] - _stage_agg.get('EXCLUDED_UCS', 0)
     _stage_agg['COCO_PCT'] = (
         _stage_agg['COCO_UCS'] * 100.0 /
         _stage_agg['COCO_ELIGIBLE_UCS'].replace(0, float('nan'))

@@ -936,6 +936,8 @@ with st.spinner("Loading data..."):
     # both sides of the CoCo % ratio.
     if len(gsi_bulk_conf) > 0 and 'IS_NOT_COCO' in gsi_bulk_conf.columns:
         gsi_bulk_conf = gsi_bulk_conf[~gsi_bulk_conf['IS_NOT_COCO'].fillna(False).astype(bool)]
+    if len(gsi_bulk_conf) > 0 and 'IS_NOT_INVOLVED' in gsi_bulk_conf.columns:
+        gsi_bulk_conf = gsi_bulk_conf[~gsi_bulk_conf['IS_NOT_INVOLVED'].fillna(False).astype(bool)]
     if len(gsi_bulk_conf) > 0:
         gsi_bulk_conf['IS_COCO_FINAL'] = apply_coco_final(gsi_bulk_conf, ['High'])
         gsi_bulk_conf['REGION'] = gsi_bulk_conf['THEATER_NAME'].map(
@@ -998,6 +1000,8 @@ with st.spinner("Loading data..."):
     # both sides of the CoCo % ratio.
     if len(managed_bulk_conf) > 0 and 'IS_NOT_COCO' in managed_bulk_conf.columns:
         managed_bulk_conf = managed_bulk_conf[~managed_bulk_conf['IS_NOT_COCO'].fillna(False).astype(bool)]
+    if len(managed_bulk_conf) > 0 and 'IS_NOT_INVOLVED' in managed_bulk_conf.columns:
+        managed_bulk_conf = managed_bulk_conf[~managed_bulk_conf['IS_NOT_INVOLVED'].fillna(False).astype(bool)]
     # GSIs: global (all theaters); NOAM RSIs: NoAM only; APJ/EMEA RSIs: geo-restricted.
     _NOAM_THEATERS = ('AMSExpansion', 'USMajors', 'AMSAcquisition', 'USPubSec')
     if len(managed_bulk_conf) > 0:

@@ -9,7 +9,7 @@ def _sf_link(uc_id, uc_name):
     LinkColumn's display_text regex extracts it as link text."""
     safe = _re.sub(r'[\r\n\t#]+', ' ', str(uc_name)).strip()
     return f'https://snowforce.lightning.force.com/lightning/r/Use_Case__c/{uc_id}/view#{safe}'
-from utils.queries import get_okr_partner_summary, get_okr_stage_breakdown, get_okr_coco_adoption, get_partner_credit_consumption, get_usecase_confidence_scores, get_bulk_confidence_scores, get_coco_final_wow, get_coco_final_trend_4w, get_partner_coco_trend_4w, get_partner_weekly_credits_4w, get_partner_surface_trend_4w
+from utils.queries import get_okr_partner_summary, get_okr_stage_breakdown, get_okr_coco_adoption, get_partner_credit_consumption, get_usecase_confidence_scores, get_bulk_confidence_scores, get_coco_final_wow, get_coco_final_trend_4w, get_partner_coco_trend_4w, get_partner_weekly_credits_4w, get_partner_surface_trend_4w, get_notinvolved_use_cases
 from utils.ask_ai import build_filter_context, build_credit_wow_context, build_uc_pattern_context
 from utils import resolve_partner_filter, resolve_region_theaters, PARTNER_RENAME_MAP, filter_out_partner_own_accounts, apply_coco_final
 try:
@@ -181,6 +181,12 @@ def _apply_managed_geo_filter(bc):
 # Compute CoCo using full confidence scoring when account-level is enabled
 _new_wow = new_coco_wow(pd.DataFrame())  # neutral default when scoring is unavailable
 _notcoco_ucs = pd.DataFrame()  # quarter-scoped #notcoco snapshot (audit view)
+# #notinvolved UCs are filtered out of bulk_conf/detail at the source (utils/queries.py) so
+# they never count toward any partner's totals. Fetched independently here for the audit view.
+_notinvolved_ucs = get_notinvolved_use_cases(conn, q_start, q_end, region=region, subregions=selected_subregions or None)
+if len(_notinvolved_ucs) > 0:
+    _notinvolved_ucs = _notinvolved_ucs.copy()
+    _notinvolved_ucs['PARTNER_NAME'] = _notinvolved_ucs['PARTNER_NAME'].replace(PARTNER_RENAME_MAP)
 if include_account_coco:
     bulk_conf = get_bulk_confidence_scores(conn, base_summary['PARTNER_NAME'].tolist(), q_start, q_end)
     if len(bulk_conf) > 0:
@@ -217,10 +223,12 @@ if include_account_coco:
         _sel_stages = st.session_state.get('selected_stages', [])
         if _sel_stages and 'USE_CASE_STAGE' in bulk_conf.columns:
             bulk_conf = bulk_conf[bulk_conf['USE_CASE_STAGE'].isin(_sel_stages)]
-        # Snapshot #notcoco UCs BEFORE the exclude toggle can clear the flag —
+        # Snapshot #notcoco / #notinvolved UCs BEFORE the exclude toggle can clear the flag —
         # the audit section is toggle-independent
         if 'IS_NOT_COCO' in bulk_conf.columns:
             _notcoco_ucs = bulk_conf[bulk_conf['IS_NOT_COCO'].fillna(False) == True].copy()
+        # #notinvolved rows are already filtered out of bulk_conf at the source (utils/queries.py);
+        # _notinvolved_ucs is fetched independently above via get_notinvolved_use_cases().
         bands = confidence_filter if confidence_filter else ['High', 'Medium', 'Low']
         # Honour #notcoco suppression per sidebar toggle (default: exclude them)
         if not exclude_not_coco and 'IS_NOT_COCO' in bulk_conf.columns:
@@ -229,22 +237,28 @@ if include_account_coco:
         bulk_conf['IS_COCO_FINAL'] = apply_coco_final(bulk_conf, bands)
 
         # Recompute per-partner summary
-        # #notcoco UCs are PSE-blocked: excluded from both numerator (already handled by
+        # #notcoco / #notinvolved UCs are excluded from both numerator (already handled by
         # apply_coco_final) and denominator (CoCo % is measured only against UCs actually
         # eligible for CoCo attribution). TOTAL_USE_CASES itself stays the raw, unfiltered count.
+        # Combined into one EXCLUDED flag (OR, not sum) so a UC tagged with both never gets
+        # double-subtracted from the denominator.
         bulk_conf['_NOTCOCO_FLAG'] = bulk_conf['IS_NOT_COCO'].fillna(False).astype(bool) if 'IS_NOT_COCO' in bulk_conf.columns else False
+        bulk_conf['_NOTINVOLVED_FLAG'] = bulk_conf['IS_NOT_INVOLVED'].fillna(False).astype(bool) if 'IS_NOT_INVOLVED' in bulk_conf.columns else False
+        bulk_conf['_EXCLUDED_FLAG'] = bulk_conf['_NOTCOCO_FLAG'] | bulk_conf['_NOTINVOLVED_FLAG']
         coco_eacv = bulk_conf[bulk_conf['IS_COCO_FINAL']].groupby('PARTNER_NAME')['USE_CASE_EACV'].sum().reset_index()
         coco_eacv.columns = ['PARTNER_NAME', 'COCO_EACV']
         summary = bulk_conf.groupby('PARTNER_NAME').agg(
             TOTAL_USE_CASES=('USE_CASE_ID', 'count'),
             COCO_USE_CASES=('IS_COCO_FINAL', 'sum'),
             NOTCOCO_USE_CASES=('_NOTCOCO_FLAG', 'sum'),
+            NOTINVOLVED_USE_CASES=('_NOTINVOLVED_FLAG', 'sum'),
+            EXCLUDED_USE_CASES=('_EXCLUDED_FLAG', 'sum'),
             TOTAL_EACV=('USE_CASE_EACV', 'sum'),
         ).reset_index()
         summary = summary.merge(coco_eacv, on='PARTNER_NAME', how='left')
         summary['COCO_EACV'] = summary['COCO_EACV'].fillna(0)
         summary['NON_COCO_USE_CASES'] = summary['TOTAL_USE_CASES'] - summary['COCO_USE_CASES']
-        summary['COCO_ELIGIBLE_UCS'] = summary['TOTAL_USE_CASES'] - summary['NOTCOCO_USE_CASES']
+        summary['COCO_ELIGIBLE_UCS'] = summary['TOTAL_USE_CASES'] - summary['EXCLUDED_USE_CASES']
         summary['COCO_PCT'] = round(summary['COCO_USE_CASES'] * 100.0 / summary['COCO_ELIGIBLE_UCS'].replace(0, float('nan')), 1).fillna(0)
         # Count account-level use cases at the selected confidence bands
         high_conf_coco = int(bulk_conf['CONFIDENCE_BAND'].isin(bands).sum())
@@ -257,11 +271,12 @@ if include_account_coco:
             TOTAL_UCS=('USE_CASE_ID', 'count'),
             COCO_UCS=('IS_COCO_FINAL', 'sum'),
             NOTCOCO_UCS=('_NOTCOCO_FLAG', 'sum'),
+            EXCLUDED_UCS=('_EXCLUDED_FLAG', 'sum'),
             TOTAL_EACV=('USE_CASE_EACV', 'sum'),
         ).reset_index()
         stage_from_conf = stage_from_conf.merge(stage_coco_eacv, on=['PARTNER_NAME', 'USE_CASE_STAGE'], how='left')
         stage_from_conf['COCO_EACV'] = stage_from_conf['COCO_EACV'].fillna(0)
-        stage_from_conf['COCO_ELIGIBLE_UCS'] = stage_from_conf['TOTAL_UCS'] - stage_from_conf['NOTCOCO_UCS']
+        stage_from_conf['COCO_ELIGIBLE_UCS'] = stage_from_conf['TOTAL_UCS'] - stage_from_conf['EXCLUDED_UCS']
         stage_from_conf['COCO_PCT'] = round(
             stage_from_conf['COCO_UCS'] * 100.0 / stage_from_conf['COCO_ELIGIBLE_UCS'].replace(0, float('nan')), 1
         ).fillna(0)
@@ -946,19 +961,33 @@ if selected_partner:
 
         with tab_noncoco:
             if len(non_coco_ucs) > 0:
-                # Count how many are #notcoco-tagged
+                # Count how many are #notcoco / #notinvolved tagged
                 _notcoco_count = 0
                 if 'IS_NOT_COCO' in non_coco_ucs.columns:
                     _notcoco_count = int(non_coco_ucs['IS_NOT_COCO'].fillna(False).sum())
-                _blocked_note = f" ({_notcoco_count} tagged #notcoco — blocked by PSE)" if _notcoco_count > 0 else ""
+                _notinvolved_count = 0
+                if 'IS_NOT_INVOLVED' in non_coco_ucs.columns:
+                    _notinvolved_count = int(non_coco_ucs['IS_NOT_INVOLVED'].fillna(False).sum())
+                _note_parts = []
+                if _notcoco_count > 0:
+                    _note_parts.append(f"{_notcoco_count} tagged #notcoco — blocked by PSE")
+                if _notinvolved_count > 0:
+                    _note_parts.append(f"{_notinvolved_count} tagged #notinvolved — partner not involved")
+                _blocked_note = f" ({'; '.join(_note_parts)})" if _note_parts else ""
                 st.warning(f"These {len(non_coco_ucs)} use cases do NOT have CoCo attached{_blocked_note}. Adding CoCo to these would help reach the {target}% target.")
                 noncoco_display = non_coco_ucs[uc_cols].copy()
-                # Add a visual #notcoco badge in ATTRIBUTION_FLAGS for blocked UCs
+                # Add a visual #notcoco / #notinvolved badge in ATTRIBUTION_FLAGS for flagged UCs
                 if 'IS_NOT_COCO' in non_coco_ucs.columns:
                     _blocked_mask = non_coco_ucs['IS_NOT_COCO'].fillna(False).values
                     noncoco_display.loc[_blocked_mask, 'ATTRIBUTION_FLAGS'] = (
                         noncoco_display.loc[_blocked_mask, 'ATTRIBUTION_FLAGS']
                         .apply(lambda v: (v + ' | ' if v else '') + '#notcoco')
+                    )
+                if 'IS_NOT_INVOLVED' in non_coco_ucs.columns:
+                    _notinvolved_mask = non_coco_ucs['IS_NOT_INVOLVED'].fillna(False).values
+                    noncoco_display.loc[_notinvolved_mask, 'ATTRIBUTION_FLAGS'] = (
+                        noncoco_display.loc[_notinvolved_mask, 'ATTRIBUTION_FLAGS']
+                        .apply(lambda v: (v + ' | ' if v else '') + '#notinvolved')
                     )
                 noncoco_display['USE_CASE_STAGE'] = noncoco_display['USE_CASE_STAGE'].str.extract(r'^(\d+)').iloc[:, 0]
                 _nc_total = pd.DataFrame([{
@@ -1135,3 +1164,92 @@ if len(_notcoco_ucs) > 0:
     )
 else:
     st.success("No #notcoco tagged use cases in the current scope.")
+
+# --- #notinvolved — Partner Not Involved Use Cases (quarter-scoped audit view) ---
+st.divider()
+st.subheader("#notinvolved — Partner Not Involved Use Cases")
+st.caption(
+    "Use cases tagged #notinvolved by a PSE in partner comments — the partner has no active "
+    "involvement in this deal, so it's excluded from both the CoCo UC count and the CoCo % "
+    "denominator. Scoped to the selected quarter, geo, and partner filters."
+)
+
+if len(_notinvolved_ucs) > 0:
+    _ni_total = len(_notinvolved_ucs)
+    _ni_partners = _notinvolved_ucs['PARTNER_NAME'].nunique()
+    _ni_eacv = pd.to_numeric(_notinvolved_ucs['USE_CASE_EACV'], errors='coerce').fillna(0).sum()
+
+    n1, n2, n3 = st.columns(3)
+    n1.metric("Not-Involved UCs", _ni_total)
+    n2.metric("Partners Affected", _ni_partners)
+    n3.metric("Not-Involved EACV", f"${_ni_eacv:,.0f}")
+
+    # --- Partner summary table ---
+    _ni_by_partner = (
+        _notinvolved_ucs.groupby('PARTNER_NAME')
+        .agg(NOT_INVOLVED_UCS=('USE_CASE_ID', 'count'),
+             NOT_INVOLVED_EACV=('USE_CASE_EACV', lambda s: pd.to_numeric(s, errors='coerce').fillna(0).sum()),
+             THEATERS=('THEATER_NAME', lambda s: ', '.join(sorted(s.dropna().unique()))))
+        .reset_index()
+        .sort_values('NOT_INVOLVED_UCS', ascending=False)
+    )
+    _ni_by_partner['NOT_INVOLVED_EACV'] = _ni_by_partner['NOT_INVOLVED_EACV'].round(0)
+    st.markdown("**By Partner**")
+    st.dataframe(
+        _ni_by_partner,
+        column_config={
+            'PARTNER_NAME':       st.column_config.TextColumn("Partner", width="medium"),
+            'NOT_INVOLVED_UCS':   st.column_config.NumberColumn("Not-Involved UCs", format="%d"),
+            'NOT_INVOLVED_EACV':  st.column_config.NumberColumn("Not-Involved EACV", format="$%.0f"),
+            'THEATERS':           st.column_config.TextColumn("Theaters", width="medium"),
+        },
+        hide_index=True, use_container_width=True,
+        height=38 + 35 * len(_ni_by_partner),
+    )
+
+    # --- Detail table with SF links ---
+    _ni_detail = _notinvolved_ucs.copy()
+    _ni_detail['USE_CASE_NAME'] = _ni_detail.apply(
+        lambda r: _sf_link(r['USE_CASE_ID'], r['USE_CASE_NAME']), axis=1
+    )
+    _ni_detail['USE_CASE_EACV'] = pd.to_numeric(_ni_detail['USE_CASE_EACV'], errors='coerce')
+    _ni_detail_cols = [c for c in ['USE_CASE_NAME', 'ACCOUNT_NAME', 'PARTNER_NAME', 'THEATER_NAME',
+                                   'USE_CASE_STAGE', 'USE_CASE_EACV', 'TECHNICAL_USE_CASE',
+                                   'WORKLOAD_CATEGORY', 'CONFIDENCE_BAND', 'Q2_TOKENS',
+                                   'COCO_SOURCE', 'CREATED_DATE'] if c in _ni_detail.columns]
+    st.markdown("**All Not-Involved Use Cases**")
+    st.dataframe(
+        _ni_detail[_ni_detail_cols],
+        column_config={
+            'USE_CASE_NAME':     st.column_config.LinkColumn("Use Case", display_text=r"#(.+)$", width=200, help="Click to open use case in Salesforce"),
+            'ACCOUNT_NAME':      st.column_config.TextColumn("Account", width=160),
+            'PARTNER_NAME':      st.column_config.TextColumn("Partner", width=140),
+            'THEATER_NAME':      st.column_config.TextColumn("Theater", width=100),
+            'USE_CASE_STAGE':    st.column_config.TextColumn("Stage", width=180),
+            'USE_CASE_EACV':     st.column_config.NumberColumn("EACV", format="$%.0f", width=90),
+            'TECHNICAL_USE_CASE': st.column_config.TextColumn("Technical Type", width=150),
+            'WORKLOAD_CATEGORY': st.column_config.TextColumn("Workload", width=100),
+            'CONFIDENCE_BAND':   st.column_config.TextColumn("Confidence", width=90, help="Account usage confidence band — 'High' means the account has real token consumption despite the flag"),
+            'Q2_TOKENS':         st.column_config.NumberColumn("Tokens", format="%d", width=100),
+            'COCO_SOURCE':       st.column_config.TextColumn("CoCo Source", width=120),
+            'CREATED_DATE':      st.column_config.DateColumn("Created", width=90),
+        },
+        hide_index=True, use_container_width=True,
+        height=38 + 35 * len(_ni_detail),
+    )
+
+    # CSV download
+    _ni_csv_export = _notinvolved_ucs[[
+        'USE_CASE_ID', 'USE_CASE_NAME', 'ACCOUNT_NAME', 'PARTNER_NAME', 'THEATER_NAME',
+        'USE_CASE_STAGE', 'USE_CASE_EACV', 'TECHNICAL_USE_CASE', 'CREATED_DATE'
+    ]].copy() if all(c in _notinvolved_ucs.columns for c in
+        ['USE_CASE_ID', 'USE_CASE_NAME', 'ACCOUNT_NAME', 'PARTNER_NAME', 'THEATER_NAME',
+         'USE_CASE_STAGE', 'USE_CASE_EACV', 'TECHNICAL_USE_CASE', 'CREATED_DATE']) else _notinvolved_ucs
+    st.download_button(
+        "Download #notinvolved list (CSV)",
+        data=_ni_csv_export.to_csv(index=False).encode('utf-8'),
+        file_name=f"notinvolved_usecases_{datetime.now().strftime('%Y%m%d')}.csv",
+        mime="text/csv",
+    )
+else:
+    st.success("No #notinvolved tagged use cases in the current scope.")

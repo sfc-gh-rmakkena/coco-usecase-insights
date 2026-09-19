@@ -186,6 +186,8 @@ def _compute_peer_benchmark(conn, partner, q_start, q_end, coco_pct, bands):
     # compares two differently-defined percentages.
     if "IS_NOT_COCO" in conf.columns:
         conf = conf[~conf["IS_NOT_COCO"].fillna(False).astype(bool)]
+    if "IS_NOT_INVOLVED" in conf.columns:
+        conf = conf[~conf["IS_NOT_INVOLVED"].fillna(False).astype(bool)]
     per_partner = conf.groupby("PARTNER_NAME").agg(
         TOTAL=("USE_CASE_ID", "count"), COCO=("IS_COCO_FINAL", "sum"),
     ).reset_index()
@@ -216,6 +218,8 @@ def _compute_regional_breakdown(detail_df: pd.DataFrame, target: int):
     because the OKR itself is satisfied."""
     if "IS_NOT_COCO" in detail_df.columns:
         detail_df = detail_df[~detail_df["IS_NOT_COCO"].fillna(False).astype(bool)]
+    if "IS_NOT_INVOLVED" in detail_df.columns:
+        detail_df = detail_df[~detail_df["IS_NOT_INVOLVED"].fillna(False).astype(bool)]
     rows = []
     for label in ["AMS", "EMEA", "APJ"]:
         sub = detail_df[detail_df["THEATER_NAME"].apply(_theater_label) == label]
@@ -1718,6 +1722,8 @@ if include_account_coco:
 # and exclude them entirely from the CoCo % denominator -- they aren't "awaiting
 # confirmation", they're explicitly out of scope.
 _notcoco_mask = detail["IS_NOT_COCO"].fillna(False).astype(bool) if "IS_NOT_COCO" in detail.columns else pd.Series(False, index=detail.index)
+_notinvolved_mask = detail["IS_NOT_INVOLVED"].fillna(False).astype(bool) if "IS_NOT_INVOLVED" in detail.columns else pd.Series(False, index=detail.index)
+_notcoco_mask = _notcoco_mask | _notinvolved_mask
 detail.loc[_notcoco_mask, "IS_COCO_ATTACHED"] = False
 detail_scoped = detail[~_notcoco_mask].copy()
 

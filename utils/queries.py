@@ -71,6 +71,12 @@ def _use_case_base(start_date=None, end_date=None):
         FROM {DT_OKR} uc
         LEFT JOIN MDM.MDM_INTERFACES.DIM_USE_CASE mdm ON uc.USE_CASE_ID = mdm.USE_CASE_ID
         WHERE {date_filter}
+        -- #notinvolved: the partner confirmed no active involvement in this deal, so it
+        -- must not count toward that partner's totals anywhere (numerator, denominator,
+        -- or raw counts). Filtered out at the source so every downstream consumer of this
+        -- shared CTE inherits the exclusion automatically. See #notinvolved audit table
+        -- (get_notinvolved_use_cases) for separate reporting of these UCs.
+        AND COALESCE(uc.IS_NOT_INVOLVED, FALSE) = FALSE
     )
 """
 
@@ -310,6 +316,7 @@ def get_partner_metrics_by_theatre(_conn, start_date, end_date, include_account_
     FROM {DT_OKR} uc
     WHERE {date_filter}
       AND uc.THEATER_NAME IS NOT NULL
+      AND COALESCE(uc.IS_NOT_INVOLVED, FALSE) = FALSE
     GROUP BY uc.THEATER_NAME
     ORDER BY TOTAL_PARTNER_UCS DESC
     """)
@@ -369,6 +376,7 @@ def get_partner_metrics_by_region(_conn, start_date, end_date, include_account_c
               * 100.0 / NULLIF(COUNT(*), 0), 1)                                                           AS GO_LIVE_PCT
     FROM {DT_OKR} uc
     WHERE {date_filter}
+      AND COALESCE(uc.IS_NOT_INVOLVED, FALSE) = FALSE
     GROUP BY REGION
     ORDER BY TOTAL_PARTNER_UCS DESC
     """)
@@ -413,6 +421,7 @@ def get_adoption_overview(_conn, start_date, end_date, region=None, partners=Non
     FROM {DT_OKR} uc
     LEFT JOIN coco_active_accounts caa ON UPPER(uc.ACCOUNT_NAME) = caa.ACCOUNT_NAME_UPPER
     WHERE {date_filter}
+    AND COALESCE(uc.IS_NOT_INVOLVED, FALSE) = FALSE
     {tf}{srf}{partner_filter}
     """
     return _conn.query(query)
@@ -438,6 +447,7 @@ def get_adoption_by_partner(_conn, start_date, end_date, region=None, include_ac
     FROM {DT_OKR} uc
     LEFT JOIN coco_active_accounts caa ON UPPER(uc.ACCOUNT_NAME) = caa.ACCOUNT_NAME_UPPER
     WHERE {date_filter}
+    AND COALESCE(uc.IS_NOT_INVOLVED, FALSE) = FALSE
     {tf}
     GROUP BY uc.PARTNER_NAME
     ORDER BY TOTAL_EACV DESC NULLS LAST
@@ -466,6 +476,7 @@ def get_adoption_by_stage(_conn, start_date, end_date, region=None, include_acco
     FROM {DT_OKR} uc
     LEFT JOIN coco_active_accounts caa ON UPPER(uc.ACCOUNT_NAME) = caa.ACCOUNT_NAME_UPPER
     WHERE {date_filter}
+    AND COALESCE(uc.IS_NOT_INVOLVED, FALSE) = FALSE
     {tf}
     GROUP BY uc.USE_CASE_STAGE
     ORDER BY uc.USE_CASE_STAGE
@@ -498,6 +509,7 @@ def get_adoption_by_region(_conn, start_date, end_date, include_account_coco=Tru
     FROM {DT_OKR} uc
     LEFT JOIN coco_active_accounts caa ON UPPER(uc.ACCOUNT_NAME) = caa.ACCOUNT_NAME_UPPER
     WHERE {date_filter}
+    AND COALESCE(uc.IS_NOT_INVOLVED, FALSE) = FALSE
     GROUP BY REGION
     ORDER BY TOTAL_EACV DESC NULLS LAST
     """
@@ -558,6 +570,7 @@ def get_gsi_adoption(_conn, start_date: str, end_date: str, theaters: tuple = No
     FROM {DT_OKR} uc
     WHERE {date_filter}
       AND uc.PARTNER_NAME IN ({_GSI_PARTNERS_SQL})
+      AND COALESCE(uc.IS_NOT_INVOLVED, FALSE) = FALSE
       {theater_clause}
     GROUP BY PARTNER_LABEL
     ORDER BY PARTNER_LABEL
@@ -585,6 +598,7 @@ def get_noam_rsi_adoption(_conn, start_date: str, end_date: str, theaters: tuple
     WHERE {date_filter}
       AND uc.PARTNER_NAME IN ({_NOAM_RSI_PARTNERS_SQL})
       AND uc.THEATER_NAME IN ({','.join(repr(t) for t in _noam_theaters)})
+      AND COALESCE(uc.IS_NOT_INVOLVED, FALSE) = FALSE
     GROUP BY PARTNER_LABEL
     ORDER BY TOTAL_UCS DESC
     """)
@@ -633,6 +647,7 @@ def get_apj_rsi_adoption(_conn, start_date: str, end_date: str):
           OR (uc.PARTNER_NAME IN ('Altis Global Limited','Altis Consulting, ANZ')  AND uc.REGION_NAME = 'ANZ')
           OR (uc.PARTNER_NAME = 'PROLIM Global Corporation'                        AND uc.REGION_NAME = 'India')
       )
+      AND COALESCE(uc.IS_NOT_INVOLVED, FALSE) = FALSE
     GROUP BY PARTNER_LABEL, uc.REGION_NAME
     ORDER BY PARTNER_LABEL
     """)
@@ -676,6 +691,7 @@ def get_emea_rsi_adoption(_conn, start_date: str, end_date: str):
           OR (uc.PARTNER_NAME ILIKE '%Kubrick%' AND uc.REGION_NAME = 'UK')
           OR (uc.PARTNER_NAME ILIKE '%KPC%'     AND uc.REGION_NAME = 'SouthEMEA')
       )
+      AND COALESCE(uc.IS_NOT_INVOLVED, FALSE) = FALSE
     GROUP BY PARTNER_LABEL, uc.REGION_NAME
     ORDER BY PARTNER_LABEL
     """)
@@ -722,6 +738,7 @@ def get_latam_rsi_adoption(_conn, start_date: str, end_date: str):
           OR uc.PARTNER_NAME ILIKE '%SEIDOR ANALYTICS%'
           OR uc.PARTNER_NAME ILIKE '%Keyrus Brasil%'
       )
+      AND COALESCE(uc.IS_NOT_INVOLVED, FALSE) = FALSE
     GROUP BY PARTNER_LABEL, uc.REGION_NAME
     ORDER BY PARTNER_LABEL
     """)
@@ -755,6 +772,7 @@ def get_okr_coco_adoption(_conn, quarter_start, quarter_end, region=None, includ
         CASE WHEN {is_coco} THEN TRUE ELSE FALSE END AS IS_COCO_ATTACHED,
         uc.COCO_SOURCE,
         uc.IS_NOT_COCO,
+        uc.IS_NOT_INVOLVED,
         ARRAY_TO_STRING(ARRAY_CONSTRUCT_COMPACT(
             CASE WHEN caa.ACCOUNT_NAME_UPPER IS NOT NULL THEN 'Account Usage' END,
             CASE WHEN uc.COCO_SOURCE = 'SE_COMMENTS' THEN 'SE Comments' END,
@@ -768,8 +786,37 @@ def get_okr_coco_adoption(_conn, quarter_start, quarter_end, region=None, includ
         (uc.USE_CASE_STAGE IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan') AND uc.DECISION_DATE >= '{quarter_start}' AND uc.DECISION_DATE <= '{quarter_end}')
         OR (uc.USE_CASE_STAGE IN ('5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed') AND uc.GO_LIVE_DATE >= '{quarter_start}' AND uc.GO_LIVE_DATE <= '{quarter_end}')
     )
+    -- #notinvolved: excluded at the source, see get_notinvolved_use_cases() for audit reporting
+    AND COALESCE(uc.IS_NOT_INVOLVED, FALSE) = FALSE
     {tf}{srf}
     ORDER BY uc.PARTNER_NAME, IS_COCO_ATTACHED DESC, uc.USE_CASE_EACV DESC NULLS LAST
+    """
+    return _conn.query(query)
+
+@st.cache_data(ttl=timedelta(minutes=30))
+def get_notinvolved_use_cases(_conn, quarter_start, quarter_end, region=None, subregions=None):
+    """Use cases tagged #notinvolved in the given quarter/geo scope, for the audit view only.
+
+    #notinvolved UCs are filtered out of every partner-attribution query at the source
+    (_use_case_base, get_okr_coco_adoption, _confidence_scored_query) so they never count
+    toward any partner's totals, numerator, or denominator. This is a separate, independent
+    query so those UCs can still be surfaced in a standalone audit/reporting bucket.
+    """
+    tf = _theater_filter(region, alias='uc.')
+    srf = _subregion_filter(subregions)
+    query = f"""
+    SELECT
+        uc.PARTNER_NAME, uc.USE_CASE_ID, uc.USE_CASE_NAME, uc.ACCOUNT_NAME,
+        uc.USE_CASE_STAGE, uc.USE_CASE_EACV, uc.TECHNICAL_USE_CASE,
+        uc.THEATER_NAME, uc.REGION_NAME, uc.CREATED_DATE, uc.COCO_SOURCE
+    FROM {DT_OKR} uc
+    WHERE uc.IS_NOT_INVOLVED = TRUE
+    AND (
+        (uc.USE_CASE_STAGE IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan') AND uc.DECISION_DATE >= '{quarter_start}' AND uc.DECISION_DATE <= '{quarter_end}')
+        OR (uc.USE_CASE_STAGE IN ('5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed') AND uc.GO_LIVE_DATE >= '{quarter_start}' AND uc.GO_LIVE_DATE <= '{quarter_end}')
+    )
+    {tf}{srf}
+    ORDER BY uc.PARTNER_NAME, uc.USE_CASE_EACV DESC NULLS LAST
     """
     return _conn.query(query)
 
@@ -796,6 +843,7 @@ def get_okr_partner_summary(_conn, quarter_start, quarter_end, region=None, incl
         (uc.USE_CASE_STAGE IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan') AND uc.DECISION_DATE >= '{quarter_start}' AND uc.DECISION_DATE <= '{quarter_end}')
         OR (uc.USE_CASE_STAGE IN ('5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed') AND uc.GO_LIVE_DATE >= '{quarter_start}' AND uc.GO_LIVE_DATE <= '{quarter_end}')
     )
+    AND COALESCE(uc.IS_NOT_INVOLVED, FALSE) = FALSE
     {tf}{srf}
     GROUP BY uc.PARTNER_NAME
     HAVING COUNT(*) >= 1
@@ -1149,6 +1197,7 @@ def get_partner_coco_coverage(_conn, region=None, start_date=None, end_date=None
     FROM {DT_OKR} uc
     LEFT JOIN coco_active_accounts caa ON UPPER(uc.ACCOUNT_NAME) = caa.ACCOUNT_NAME_UPPER
     WHERE {date_filter}
+    AND COALESCE(uc.IS_NOT_INVOLVED, FALSE) = FALSE
     {tf}
     GROUP BY uc.PARTNER_NAME
     HAVING COUNT(*) >= 1
@@ -1186,6 +1235,7 @@ def get_okr_stage_breakdown(_conn, region=None, start_date=None, end_date=None, 
     FROM {DT_OKR} uc
     LEFT JOIN coco_active_accounts caa ON UPPER(uc.ACCOUNT_NAME) = caa.ACCOUNT_NAME_UPPER
     WHERE {date_filter}
+    AND COALESCE(uc.IS_NOT_INVOLVED, FALSE) = FALSE
     {tf}{srf}
     GROUP BY uc.PARTNER_NAME, uc.USE_CASE_STAGE
     ORDER BY uc.PARTNER_NAME, uc.USE_CASE_STAGE
@@ -1256,6 +1306,7 @@ def get_partner_credit_consumption(_conn, partners, start_date, end_date=None):
             (USE_CASE_STAGE IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan') AND DECISION_DATE >= '{start_date}' AND DECISION_DATE <= '{ed}')
             OR (USE_CASE_STAGE IN ('5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed') AND GO_LIVE_DATE >= '{start_date}' AND GO_LIVE_DATE <= '{ed}')
         )
+        AND COALESCE(IS_NOT_INVOLVED, FALSE) = FALSE
     ),
     daily_credits AS (
         SELECT f.ds, pca.PARTNER_NAME, pca.ACCOUNT_NAME_UPPER,
@@ -1308,17 +1359,24 @@ WORKLOAD_SKILL_MAP = {
     'Migration': ['%migration%', '%spark%', '%databricks%'],
 }
 
-def _confidence_scored_query(partner_filter_sql, start_date, end_date, include_not_coco=True):
+def _confidence_scored_query(partner_filter_sql, start_date, end_date, include_not_coco=True, include_not_involved=True):
     """Shared SQL body for confidence scoring - used by both single and bulk functions.
     include_not_coco: set False to omit IS_NOT_COCO (fallback when column not yet deployed).
+    include_not_involved: set False to omit IS_NOT_INVOLVED (fallback when column not yet deployed).
     """
     not_coco_col = "COALESCE(uc.IS_NOT_COCO, FALSE) AS IS_NOT_COCO," if include_not_coco else "FALSE AS IS_NOT_COCO,"
+    not_involved_col = "COALESCE(uc.IS_NOT_INVOLVED, FALSE) AS IS_NOT_INVOLVED," if include_not_involved else "FALSE AS IS_NOT_INVOLVED,"
+    # #notinvolved: the partner has no active involvement in this deal, so it must not
+    # count toward that partner's totals at all (excluded at the source, like _use_case_base
+    # and get_okr_coco_adoption). See get_notinvolved_use_cases() for separate audit reporting.
+    not_involved_filter = "AND COALESCE(uc.IS_NOT_INVOLVED, FALSE) = FALSE" if include_not_involved else ""
     return f"""
     WITH partner_ucs AS (
         SELECT uc.USE_CASE_ID, uc.USE_CASE_NAME, uc.ACCOUNT_NAME, UPPER(uc.ACCOUNT_NAME) AS ACCOUNT_NAME_UPPER,
             uc.PARTNER_NAME, uc.TECHNICAL_USE_CASE, uc.USE_CASE_STAGE,
             uc.USE_CASE_EACV, uc.IS_COCO, uc.COCO_SOURCE,
             {not_coco_col}
+            {not_involved_col}
             uc.THEATER_NAME, uc.REGION_NAME,
             uc.CREATED_DATE,
             CASE
@@ -1336,6 +1394,7 @@ def _confidence_scored_query(partner_filter_sql, start_date, end_date, include_n
             (uc.USE_CASE_STAGE IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan') AND uc.DECISION_DATE >= '{start_date}' AND uc.DECISION_DATE <= '{end_date}')
             OR (uc.USE_CASE_STAGE IN ('5 - Implementation In Progress', '6 - Implementation Complete', '7 - Deployed') AND uc.GO_LIVE_DATE >= '{start_date}' AND uc.GO_LIVE_DATE <= '{end_date}')
         )
+        {not_involved_filter}
     ),
     account_ids AS (
         SELECT DISTINCT f.ACCOUNT_ID, UPPER(f.SALESFORCE_ACCOUNT_NAME) AS ACCOUNT_NAME_UPPER
@@ -1510,6 +1569,10 @@ def get_usecase_confidence_scores(_conn, partner, start_date, end_date):
     try:
         return _conn.query(query)
     except Exception as e:
+        if 'IS_NOT_INVOLVED' in str(e):
+            query = _confidence_scored_query(partner_filter, start_date, end_date, include_not_involved=False)
+            query += "\n    ORDER BY TOTAL_SCORE DESC, ACCOUNT_NAME"
+            return _conn.query(query)
         if 'IS_NOT_COCO' in str(e):
             query = _confidence_scored_query(partner_filter, start_date, end_date, include_not_coco=False)
             query += "\n    ORDER BY TOTAL_SCORE DESC, ACCOUNT_NAME"
@@ -1526,6 +1589,10 @@ def get_bulk_confidence_scores(_conn, partners, start_date, end_date):
     try:
         return _conn.query(query)
     except Exception as e:
+        if 'IS_NOT_INVOLVED' in str(e):
+            query = _confidence_scored_query(partner_filter, start_date, end_date, include_not_involved=False)
+            query += "\n    ORDER BY TOTAL_SCORE DESC, PARTNER_NAME, ACCOUNT_NAME"
+            return _conn.query(query)
         if 'IS_NOT_COCO' in str(e):
             query = _confidence_scored_query(partner_filter, start_date, end_date, include_not_coco=False)
             query += "\n    ORDER BY TOTAL_SCORE DESC, PARTNER_NAME, ACCOUNT_NAME"
@@ -1809,6 +1876,7 @@ def get_recent_wins(_conn, partners, start_date, end_date, days_back=7):
         WHERE uc.PARTNER_NAME IN ('{partners_sql}')
         AND uc.THEATER_NAME IN ('AMSExpansion','USMajors','AMSAcquisition','USPubSec')
         AND (uc.IS_COCO = TRUE OR caa.ACCOUNT_NAME_UPPER IS NOT NULL)
+        AND COALESCE(uc.IS_NOT_INVOLVED, FALSE) = FALSE
         AND (
             (uc.USE_CASE_STAGE IN ('3 - Technical / Business Validation','4 - Use Case Won / Migration Plan')
                 AND uc.DECISION_DATE >= '{start_date}' AND uc.DECISION_DATE <= '{end_date}')
@@ -1878,6 +1946,7 @@ def get_adoption_trend_4w(_conn, partners: tuple, region: str = "NoAM") -> list:
                    COUNT(*) AS UC_CNT
             FROM {DT_OKR}
             WHERE PARTNER_NAME IN ('{ps}')
+            AND COALESCE(IS_NOT_INVOLVED, FALSE) = FALSE
             GROUP BY 1, 2
             QUALIFY ROW_NUMBER() OVER (PARTITION BY PARTNER_NAME ORDER BY UC_CNT DESC) = 1
         ),"""
@@ -2149,6 +2218,7 @@ def get_velocity_coco_final_flags(_conn, partners_sql: str, fy27_start: str = '2
           AND sf.STAGE_C = '7 - Deployed'
           AND sf.ACTUAL_GO_LIVE_DATE_C BETWEEN '2025-02-01' AND '2026-07-31'
           AND sf._FIVETRAN_DELETED IS DISTINCT FROM TRUE
+          AND COALESCE(d.IS_NOT_INVOLVED, FALSE) = FALSE
           AND (
               d.PARTNER_NAME IN ({_GSI_VELOCITY_PARTNERS})
               OR d.THEATER_NAME IN ({_NOAM_THEATERS})
@@ -2422,7 +2492,7 @@ def get_coco_final_trend_4w(_conn, partners: tuple, region: str = "NoAM") -> lis
                         WHEN THEATER_NAME = 'EMEA' THEN 'EMEA'
                         WHEN THEATER_NAME = 'APJ' THEN 'APJ' ELSE 'Other' END AS REGION,
                    COUNT(*) AS UC_CNT
-            FROM {DT_OKR} WHERE PARTNER_NAME IN ('{ps}')
+            FROM {DT_OKR} WHERE PARTNER_NAME IN ('{ps}') AND COALESCE(IS_NOT_INVOLVED, FALSE) = FALSE
             GROUP BY 1, 2
             QUALIFY ROW_NUMBER() OVER (PARTITION BY PARTNER_NAME ORDER BY UC_CNT DESC) = 1
         ),"""

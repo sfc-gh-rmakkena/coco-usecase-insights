@@ -65,21 +65,27 @@ if include_account_coco and len(coverage) > 0:
             bulk_conf = bulk_conf[bulk_conf['USE_CASE_STAGE'].isin(_sel_stages)]
         bands = confidence_filter if confidence_filter else ['High', 'Medium', 'Low']
         bulk_conf['IS_COCO_FINAL'] = apply_coco_final(bulk_conf, bands)
-        # #notcoco UCs are PSE-blocked: excluded from both numerator (already handled by
+        # #notcoco / #notinvolved UCs are excluded from both numerator (already handled by
         # apply_coco_final) and denominator. TOTAL_PARTNER_UCS itself stays the raw count.
+        # Combined into one EXCLUDED flag (OR, not sum) so a UC tagged with both never gets
+        # double-subtracted from the denominator.
         bulk_conf['_NOTCOCO_FLAG'] = bulk_conf['IS_NOT_COCO'].fillna(False).astype(bool) if 'IS_NOT_COCO' in bulk_conf.columns else False
+        bulk_conf['_NOTINVOLVED_FLAG'] = bulk_conf['IS_NOT_INVOLVED'].fillna(False).astype(bool) if 'IS_NOT_INVOLVED' in bulk_conf.columns else False
+        bulk_conf['_EXCLUDED_FLAG'] = bulk_conf['_NOTCOCO_FLAG'] | bulk_conf['_NOTINVOLVED_FLAG']
         coco_eacv = bulk_conf[bulk_conf['IS_COCO_FINAL']].groupby('PARTNER_NAME')['USE_CASE_EACV'].sum().reset_index()
         coco_eacv.columns = ['PARTNER_NAME', 'COCO_EACV']
         conf_summary = bulk_conf.groupby('PARTNER_NAME').agg(
             TOTAL_PARTNER_UCS=('USE_CASE_ID', 'count'),
             COCO_UCS=('IS_COCO_FINAL', 'sum'),
             NOTCOCO_UCS=('_NOTCOCO_FLAG', 'sum'),
+            NOTINVOLVED_UCS=('_NOTINVOLVED_FLAG', 'sum'),
+            EXCLUDED_UCS=('_EXCLUDED_FLAG', 'sum'),
             TOTAL_EACV=('USE_CASE_EACV', 'sum'),
         ).reset_index()
         conf_summary = conf_summary.merge(coco_eacv, on='PARTNER_NAME', how='left')
         conf_summary['COCO_EACV'] = conf_summary['COCO_EACV'].fillna(0)
         conf_summary['NON_COCO_UCS'] = conf_summary['TOTAL_PARTNER_UCS'] - conf_summary['COCO_UCS']
-        conf_summary['COCO_ELIGIBLE_UCS'] = conf_summary['TOTAL_PARTNER_UCS'] - conf_summary['NOTCOCO_UCS']
+        conf_summary['COCO_ELIGIBLE_UCS'] = conf_summary['TOTAL_PARTNER_UCS'] - conf_summary['EXCLUDED_UCS']
         conf_summary['COCO_PCT'] = round(
             conf_summary['COCO_UCS'] * 100.0 / conf_summary['COCO_ELIGIBLE_UCS'].replace(0, float('nan')), 1
         ).fillna(0)
@@ -128,11 +134,12 @@ if include_account_coco and len(coverage) > 0:
             TOTAL_UCS=('USE_CASE_ID', 'count'),
             COCO_UCS=('IS_COCO_FINAL', 'sum'),
             NOTCOCO_UCS=('_NOTCOCO_FLAG', 'sum'),
+            EXCLUDED_UCS=('_EXCLUDED_FLAG', 'sum'),
             TOTAL_EACV=('USE_CASE_EACV', 'sum'),
         ).reset_index()
         stage_from_conf = stage_from_conf.merge(stage_coco_eacv, on=['PARTNER_NAME', 'USE_CASE_STAGE'], how='left')
         stage_from_conf['COCO_EACV'] = stage_from_conf['COCO_EACV'].fillna(0)
-        stage_from_conf['COCO_ELIGIBLE_UCS'] = stage_from_conf['TOTAL_UCS'] - stage_from_conf['NOTCOCO_UCS']
+        stage_from_conf['COCO_ELIGIBLE_UCS'] = stage_from_conf['TOTAL_UCS'] - stage_from_conf['EXCLUDED_UCS']
         stage_from_conf['COCO_PCT'] = round(
             stage_from_conf['COCO_UCS'] * 100.0 / stage_from_conf['COCO_ELIGIBLE_UCS'].replace(0, float('nan')), 1
         ).fillna(0)

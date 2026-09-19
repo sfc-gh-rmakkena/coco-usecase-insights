@@ -288,6 +288,11 @@ def apply_coco_final(df, bands=("High",)):
     (has_tokens=True) or a qualifying confidence band from usage data (band_ok=True).
     This lets PSEs flag UCs that cannot use CoCo right now; if they later add #coco
     or consumption evidence appears, the UC automatically becomes CoCo again.
+
+    Exception 3: a use case tagged with "#notinvolved" in PARTNER_COMMENTS
+    (IS_NOT_INVOLVED=TRUE) is suppressed unconditionally — the PSE has confirmed the
+    partner has no active involvement in this deal, so it cannot be attributed to
+    them regardless of token/consumption evidence.
     """
     import pandas as pd
 
@@ -311,6 +316,12 @@ def apply_coco_final(df, bands=("High",)):
     if "IS_NOT_COCO" in df.columns:
         not_coco = df["IS_NOT_COCO"].fillna(False).astype(bool)
         result = result & ~not_coco
+
+    # Exception 3: #notinvolved — PSE confirms the partner has no active involvement in this
+    # deal, so it can't be attributed to them as CoCo regardless of token data
+    if "IS_NOT_INVOLVED" in df.columns:
+        not_involved = df["IS_NOT_INVOLVED"].fillna(False).astype(bool)
+        result = result & ~not_involved
 
     return result
 
