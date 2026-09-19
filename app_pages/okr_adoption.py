@@ -1128,26 +1128,38 @@ if len(_notcoco_ucs) > 0:
                                 'USE_CASE_STAGE', 'USE_CASE_EACV', 'TECHNICAL_USE_CASE',
                                 'WORKLOAD_CATEGORY', 'CONFIDENCE_BAND', 'Q2_TOKENS',
                                 'COCO_SOURCE', 'CREATED_DATE'] if c in _nc_detail.columns]
-    st.markdown("**All Blocked Use Cases**")
-    st.dataframe(
-        _nc_detail[_detail_cols],
-        column_config={
-            'USE_CASE_NAME':     st.column_config.LinkColumn("Use Case", display_text=r"#(.+)$", width=200, help="Click to open use case in Salesforce"),
-            'ACCOUNT_NAME':      st.column_config.TextColumn("Account", width=160),
-            'PARTNER_NAME':      st.column_config.TextColumn("Partner", width=140),
-            'THEATER_NAME':      st.column_config.TextColumn("Theater", width=100),
-            'USE_CASE_STAGE':    st.column_config.TextColumn("Stage", width=180),
-            'USE_CASE_EACV':     st.column_config.NumberColumn("EACV", format="$%.0f", width=90),
-            'TECHNICAL_USE_CASE': st.column_config.TextColumn("Technical Type", width=150),
-            'WORKLOAD_CATEGORY': st.column_config.TextColumn("Workload", width=100),
-            'CONFIDENCE_BAND':   st.column_config.TextColumn("Confidence", width=90, help="Account usage confidence band — 'High' means the account has real token consumption despite the block"),
-            'Q2_TOKENS':         st.column_config.NumberColumn("Tokens", format="%d", width=100),
-            'COCO_SOURCE':       st.column_config.TextColumn("CoCo Source", width=120),
-            'CREATED_DATE':      st.column_config.DateColumn("Created", width=90),
-        },
-        hide_index=True, use_container_width=True,
-        height=38 + 35 * len(_nc_detail),
-    )
+    st.markdown(f"**All Blocked Use Cases ({len(_nc_detail)})**")
+    with st.expander("Show / hide table", expanded=True):
+        _nc_search = st.text_input(
+            "Search", key="notcoco_search",
+            placeholder="Search by use case, account, partner, theater, stage...",
+            label_visibility="collapsed",
+        )
+        _nc_display = _nc_detail[_detail_cols]
+        if _nc_search:
+            _nc_mask = _nc_display.apply(
+                lambda row: row.astype(str).str.contains(_nc_search, case=False, na=False, regex=False).any(), axis=1
+            )
+            _nc_display = _nc_display[_nc_mask]
+        st.dataframe(
+            _nc_display,
+            column_config={
+                'USE_CASE_NAME':     st.column_config.LinkColumn("Use Case", display_text=r"#(.+)$", width=200, help="Click to open use case in Salesforce"),
+                'ACCOUNT_NAME':      st.column_config.TextColumn("Account", width=160),
+                'PARTNER_NAME':      st.column_config.TextColumn("Partner", width=140),
+                'THEATER_NAME':      st.column_config.TextColumn("Theater", width=100),
+                'USE_CASE_STAGE':    st.column_config.TextColumn("Stage", width=180),
+                'USE_CASE_EACV':     st.column_config.NumberColumn("EACV", format="$%.0f", width=90),
+                'TECHNICAL_USE_CASE': st.column_config.TextColumn("Technical Type", width=150),
+                'WORKLOAD_CATEGORY': st.column_config.TextColumn("Workload", width=100),
+                'CONFIDENCE_BAND':   st.column_config.TextColumn("Confidence", width=90, help="Account usage confidence band — 'High' means the account has real token consumption despite the block"),
+                'Q2_TOKENS':         st.column_config.NumberColumn("Tokens", format="%d", width=100),
+                'COCO_SOURCE':       st.column_config.TextColumn("CoCo Source", width=120),
+                'CREATED_DATE':      st.column_config.DateColumn("Created", width=90),
+            },
+            hide_index=True, use_container_width=True,
+            height=38 + 35 * max(len(_nc_display), 1),
+        )
 
     # CSV download
     _csv_export = _notcoco_ucs[[
@@ -1217,26 +1229,38 @@ if len(_notinvolved_ucs) > 0:
                                    'USE_CASE_STAGE', 'USE_CASE_EACV', 'TECHNICAL_USE_CASE',
                                    'WORKLOAD_CATEGORY', 'CONFIDENCE_BAND', 'Q2_TOKENS',
                                    'COCO_SOURCE', 'CREATED_DATE'] if c in _ni_detail.columns]
-    st.markdown("**All Not-Involved Use Cases**")
-    st.dataframe(
-        _ni_detail[_ni_detail_cols],
-        column_config={
-            'USE_CASE_NAME':     st.column_config.LinkColumn("Use Case", display_text=r"#(.+)$", width=200, help="Click to open use case in Salesforce"),
-            'ACCOUNT_NAME':      st.column_config.TextColumn("Account", width=160),
-            'PARTNER_NAME':      st.column_config.TextColumn("Partner", width=140),
-            'THEATER_NAME':      st.column_config.TextColumn("Theater", width=100),
-            'USE_CASE_STAGE':    st.column_config.TextColumn("Stage", width=180),
-            'USE_CASE_EACV':     st.column_config.NumberColumn("EACV", format="$%.0f", width=90),
-            'TECHNICAL_USE_CASE': st.column_config.TextColumn("Technical Type", width=150),
-            'WORKLOAD_CATEGORY': st.column_config.TextColumn("Workload", width=100),
-            'CONFIDENCE_BAND':   st.column_config.TextColumn("Confidence", width=90, help="Account usage confidence band — 'High' means the account has real token consumption despite the flag"),
-            'Q2_TOKENS':         st.column_config.NumberColumn("Tokens", format="%d", width=100),
-            'COCO_SOURCE':       st.column_config.TextColumn("CoCo Source", width=120),
-            'CREATED_DATE':      st.column_config.DateColumn("Created", width=90),
-        },
-        hide_index=True, use_container_width=True,
-        height=38 + 35 * len(_ni_detail),
-    )
+    st.markdown(f"**All Not-Involved Use Cases ({len(_ni_detail)})**")
+    with st.expander("Show / hide table", expanded=True):
+        _ni_search = st.text_input(
+            "Search", key="notinvolved_search",
+            placeholder="Search by use case, account, partner, theater, stage...",
+            label_visibility="collapsed",
+        )
+        _ni_display = _ni_detail[_ni_detail_cols]
+        if _ni_search:
+            _ni_mask = _ni_display.apply(
+                lambda row: row.astype(str).str.contains(_ni_search, case=False, na=False, regex=False).any(), axis=1
+            )
+            _ni_display = _ni_display[_ni_mask]
+        st.dataframe(
+            _ni_display,
+            column_config={
+                'USE_CASE_NAME':     st.column_config.LinkColumn("Use Case", display_text=r"#(.+)$", width=200, help="Click to open use case in Salesforce"),
+                'ACCOUNT_NAME':      st.column_config.TextColumn("Account", width=160),
+                'PARTNER_NAME':      st.column_config.TextColumn("Partner", width=140),
+                'THEATER_NAME':      st.column_config.TextColumn("Theater", width=100),
+                'USE_CASE_STAGE':    st.column_config.TextColumn("Stage", width=180),
+                'USE_CASE_EACV':     st.column_config.NumberColumn("EACV", format="$%.0f", width=90),
+                'TECHNICAL_USE_CASE': st.column_config.TextColumn("Technical Type", width=150),
+                'WORKLOAD_CATEGORY': st.column_config.TextColumn("Workload", width=100),
+                'CONFIDENCE_BAND':   st.column_config.TextColumn("Confidence", width=90, help="Account usage confidence band — 'High' means the account has real token consumption despite the flag"),
+                'Q2_TOKENS':         st.column_config.NumberColumn("Tokens", format="%d", width=100),
+                'COCO_SOURCE':       st.column_config.TextColumn("CoCo Source", width=120),
+                'CREATED_DATE':      st.column_config.DateColumn("Created", width=90),
+            },
+            hide_index=True, use_container_width=True,
+            height=38 + 35 * max(len(_ni_display), 1),
+        )
 
     # CSV download
     _ni_csv_export = _notinvolved_ucs[[
