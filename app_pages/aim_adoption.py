@@ -68,10 +68,13 @@ def _latest(table):
 
 @st.cache_data(ttl=3600)
 def load_aim(_conn):
+    # Source sheet added a new PARTNER column (Sep 26+) while PARTNER_ went blank.
+    # Use COALESCE to pick whichever column is populated.
     return _conn.query(f"""
         SELECT
             ACCOUNT,
-            PARTNER_                    AS PARTNER,
+            COALESCE(NULLIF(TRIM(PARTNER), ''),
+                     NULLIF(TRIM(PARTNER_), ''))  AS PARTNER,
             USE_CASE_S_NAME_SFDC_LINKS  AS USE_CASE_LINK,
             STATUS,
             ENGAGEMENT,
