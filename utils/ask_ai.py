@@ -123,10 +123,11 @@ KEY CONCEPTS:
     'No Signal' = TOTAL_SCORE = 0    → NOT IS_COCO_FINAL      (no CoCo usage detected)
 
 - TOTAL_SCORE = S1 + S2 + S3 + S4 (max ~100 points):
-    S1 (0–30): Bundled skill invocations matching the use case workload category
+    S1 (0–30): Bundled skill invocations matching the workload (10+ → 30, 1–9 → 20, 0 → 0)
     S2 (0–35): Custom skill usage — highest weight, proves partner built CoCo-native workflow
     S3 (0–20): Tool invocations (file edits, terminal runs — proves deep usage)
-    S4 (0–15): Active days × skill rate (sustained, consistent usage over time)
+    S4 (0–15): Relevant skill volume in the period (more than 5 → 15, 1–5 → 5, 0 → 0)
+    S1/S2/S4 are scored for every workload tagged on the use case; WORKLOAD_CATEGORY is the highest-scoring one.
 
 - COCO_PCT = COCO_UCS / TOTAL_UCS * 100. OKR target = 75% per partner.
 - GSIs (global scope): Accenture, Capgemini, Cognizant, Deloitte, EY, IBM

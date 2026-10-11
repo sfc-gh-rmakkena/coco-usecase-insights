@@ -1034,7 +1034,7 @@ if selected_partner:
                         'ACCOUNT_NAME': st.column_config.TextColumn("Account", width="medium"),
                         'THEATER_NAME': st.column_config.TextColumn("Theater", width="small"),
                         'TECHNICAL_USE_CASE': st.column_config.TextColumn("Technical Type", width="medium"),
-                        'WORKLOAD_CATEGORY': st.column_config.TextColumn("Workload", width="small"),
+                        'WORKLOAD_CATEGORY': st.column_config.TextColumn("Workload", width="small", help="Strongest of the use case's tagged workloads; used for scoring"),
                         'RELEVANT_SKILL_INVOCATIONS': st.column_config.NumberColumn("Bundled Skills", format="%d", help="Relevant bundled skill invocations for this workload"),
                         'RELEVANT_CUSTOM_SKILLS': st.column_config.NumberColumn("Custom Skills", format="%d", help="Workload-relevant custom skills (keyword matched)"),
                         'TOOLS_INVOKED': st.column_config.NumberColumn("Tools", format="%d", help="Total tool invocations"),
@@ -1046,7 +1046,7 @@ if selected_partner:
                     hide_index=True, use_container_width=True,
                     height=38 + 35 * len(confidence_data)
                 )
-                st.caption("Scoring: S1 Relevant Bundled Skills (30pts) + S2 Relevant Custom Skills (35pts) + S3 Tools (20pts) + S4 Skill Intensity per Day (15pts)")
+                st.caption("Scoring: S1 Relevant Bundled Skills (30pts) + S2 Relevant Custom Skills (35pts) + S3 Tools (20pts) + S4 Relevant Skill Volume (15pts). Each tagged workload is scored and the highest is used.")
             else:
                 st.info("No confidence scoring data available.")
 

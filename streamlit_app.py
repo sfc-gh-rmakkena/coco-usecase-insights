@@ -254,6 +254,7 @@ st.session_state.exec_email_allowed = _viewer in EXEC_EMAIL_USERS
 
 _okr_pages = [
     st.Page("app_pages/okr_adoption.py", title="OKR: CoCo Adoption", icon=":material/check_circle:"),
+    st.Page("app_pages/acquisition_opportunities.py", title="ACQ Theatre", icon=":material/handshake:"),
 ]
 if st.session_state.exec_email_allowed:
     _okr_pages.append(

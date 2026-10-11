@@ -1379,15 +1379,14 @@ def _confidence_scored_query(partner_filter_sql, start_date, end_date, include_n
             {not_involved_col}
             uc.THEATER_NAME, uc.REGION_NAME,
             uc.CREATED_DATE,
-            CASE
-                WHEN uc.TECHNICAL_USE_CASE ILIKE '%AI:%' THEN 'AI'
-                WHEN uc.TECHNICAL_USE_CASE ILIKE '%Analytics:%' THEN 'Analytics'
-                WHEN uc.TECHNICAL_USE_CASE ILIKE '%DE:%' THEN 'Data Engineering'
-                WHEN uc.TECHNICAL_USE_CASE ILIKE '%Platform:%' THEN 'Platform'
-                WHEN uc.TECHNICAL_USE_CASE ILIKE '%Apps%' THEN 'Apps & Collab'
-                WHEN uc.TECHNICAL_USE_CASE ILIKE '%Migration%' THEN 'Migration'
-                ELSE 'Unclassified'
-            END AS WORKLOAD_CATEGORY
+            ARRAY_TO_STRING(ARRAY_CONSTRUCT_COMPACT(
+                IFF(uc.TECHNICAL_USE_CASE ILIKE '%AI:%', 'AI', NULL),
+                IFF(uc.TECHNICAL_USE_CASE ILIKE '%Analytics:%', 'Analytics', NULL),
+                IFF(uc.TECHNICAL_USE_CASE ILIKE '%DE:%', 'Data Engineering', NULL),
+                IFF(uc.TECHNICAL_USE_CASE ILIKE '%Platform:%', 'Platform', NULL),
+                IFF(uc.TECHNICAL_USE_CASE ILIKE '%Apps%', 'Apps & Collab', NULL),
+                IFF(uc.TECHNICAL_USE_CASE ILIKE '%Migration%', 'Migration', NULL)
+            ), ', ') AS TAGGED_WORKLOADS
         FROM {DT_OKR} uc
         WHERE {partner_filter_sql}
         AND (
@@ -1455,6 +1454,34 @@ def _confidence_scored_query(partner_filter_sql, start_date, end_date, include_n
             ON LOWER(flattened.skill_name) = LOWER(cls.SKILL_NAME)
         GROUP BY flattened.ACCOUNT_NAME_UPPER
     ),
+    -- Score every workload tagged on the use case and keep the strongest one. Use cases
+    -- often carry several tags (or the wrong one first), so scoring only the first tag
+    -- hid usage that matched another tagged workload. ORD keeps the old AI-first order
+    -- as the tie-break.
+    workload_candidates AS (
+        SELECT uc.USE_CASE_ID, w.WL, w.ORD,
+            CASE w.WL WHEN 'AI' THEN COALESCE(rb.ai_skill_count, 0) WHEN 'Analytics' THEN COALESCE(rb.analytics_skill_count, 0) WHEN 'Data Engineering' THEN COALESCE(rb.de_skill_count, 0) WHEN 'Platform' THEN COALESCE(rb.platform_skill_count, 0) WHEN 'Apps & Collab' THEN COALESCE(rb.app_skill_count, 0) WHEN 'Migration' THEN COALESCE(rb.migration_skill_count, 0) ELSE 0 END AS RS,
+            CASE w.WL WHEN 'AI' THEN COALESCE(cs.ai_custom_skills, 0) WHEN 'Analytics' THEN COALESCE(cs.analytics_custom_skills, 0) WHEN 'Data Engineering' THEN COALESCE(cs.de_custom_skills, 0) WHEN 'Platform' THEN COALESCE(cs.platform_custom_skills, 0) WHEN 'Apps & Collab' THEN COALESCE(cs.app_custom_skills, 0) WHEN 'Migration' THEN COALESCE(cs.migration_custom_skills, 0) ELSE 0 END AS RCS,
+            COALESCE(cs.custom_skill_count, 0) AS TCS
+        FROM partner_ucs uc
+        INNER JOIN (SELECT * FROM VALUES
+                ('AI', 1, '%AI:%'), ('Analytics', 2, '%Analytics:%'), ('Data Engineering', 3, '%DE:%'),
+                ('Platform', 4, '%Platform:%'), ('Apps & Collab', 5, '%Apps%'), ('Migration', 6, '%Migration%')
+            AS t(WL, ORD, PAT)) w
+            ON uc.TECHNICAL_USE_CASE ILIKE w.PAT
+        LEFT JOIN relevant_bundled rb ON uc.ACCOUNT_NAME_UPPER = rb.ACCOUNT_NAME_UPPER
+        LEFT JOIN custom_skills cs ON uc.ACCOUNT_NAME_UPPER = cs.ACCOUNT_NAME_UPPER
+    ),
+    best_workload AS (
+        SELECT USE_CASE_ID, WL, RS, RCS,
+            -- S1: a relevant skill doesn't need many invocations to do the work
+            CASE WHEN RS >= 10 THEN 30 WHEN RS >= 1 THEN 20 ELSE 0 END AS S1,
+            CASE WHEN RCS >= 3 THEN 35 WHEN RCS >= 1 THEN 25 WHEN TCS >= 10 THEN 15 WHEN TCS >= 1 THEN 8 ELSE 0 END AS S2,
+            -- S4: relevant skill volume over the quarter (no longer divided by active days)
+            CASE WHEN RS > 5 THEN 15 WHEN RS >= 1 THEN 5 ELSE 0 END AS S4
+        FROM workload_candidates
+        QUALIFY ROW_NUMBER() OVER (PARTITION BY USE_CASE_ID ORDER BY S1 + S2 + S4 DESC, ORD) = 1
+    ),
     tool_usage AS (
         SELECT aid.ACCOUNT_NAME_UPPER, COUNT(*) AS total_tool_invocations
         FROM SNOWSCIENCE.LLM.CORTEX_CODE_REQUEST_STG r
@@ -1510,8 +1537,9 @@ def _confidence_scored_query(partner_filter_sql, start_date, end_date, include_n
     ),
     scored AS (
         SELECT uc.*,
-            CASE WHEN uc.WORKLOAD_CATEGORY = 'AI' THEN COALESCE(rb.ai_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Analytics' THEN COALESCE(rb.analytics_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Data Engineering' THEN COALESCE(rb.de_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Platform' THEN COALESCE(rb.platform_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Apps & Collab' THEN COALESCE(rb.app_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Migration' THEN COALESCE(rb.migration_skill_count, 0) ELSE 0 END AS RELEVANT_SKILL_INVOCATIONS,
-            CASE WHEN uc.WORKLOAD_CATEGORY = 'AI' THEN COALESCE(cs.ai_custom_skills, 0) WHEN uc.WORKLOAD_CATEGORY = 'Analytics' THEN COALESCE(cs.analytics_custom_skills, 0) WHEN uc.WORKLOAD_CATEGORY = 'Data Engineering' THEN COALESCE(cs.de_custom_skills, 0) WHEN uc.WORKLOAD_CATEGORY = 'Platform' THEN COALESCE(cs.platform_custom_skills, 0) WHEN uc.WORKLOAD_CATEGORY = 'Apps & Collab' THEN COALESCE(cs.app_custom_skills, 0) WHEN uc.WORKLOAD_CATEGORY = 'Migration' THEN COALESCE(cs.migration_custom_skills, 0) ELSE 0 END AS RELEVANT_CUSTOM_SKILLS,
+            COALESCE(bw.WL, 'Unclassified') AS WORKLOAD_CATEGORY,
+            COALESCE(bw.RS, 0) AS RELEVANT_SKILL_INVOCATIONS,
+            COALESCE(bw.RCS, 0) AS RELEVANT_CUSTOM_SKILLS,
             COALESCE(cs.custom_skill_count, 0) AS CUSTOM_SKILLS,
             COALESCE(tu.total_tool_invocations, 0) AS TOOLS_INVOKED,
             COALESCE(pu.active_days, 0) AS ACTIVE_DAYS,
@@ -1536,16 +1564,17 @@ def _confidence_scored_query(partner_filter_sql, start_date, end_date, include_n
             COALESCE(ac.UI_REQUESTS, 0)     AS UI_REQUESTS,
             COALESCE(ac.AGENT_REQUESTS, 0)  AS AGENT_REQUESTS,
             COALESCE(ac.REASONING_AGENT_REQUESTS, 0) AS REASONING_AGENT_REQUESTS,
-            CASE WHEN CASE WHEN uc.WORKLOAD_CATEGORY = 'AI' THEN COALESCE(rb.ai_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Analytics' THEN COALESCE(rb.analytics_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Data Engineering' THEN COALESCE(rb.de_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Platform' THEN COALESCE(rb.platform_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Apps & Collab' THEN COALESCE(rb.app_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Migration' THEN COALESCE(rb.migration_skill_count, 0) ELSE 0 END >= 50 THEN 30 WHEN CASE WHEN uc.WORKLOAD_CATEGORY = 'AI' THEN COALESCE(rb.ai_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Analytics' THEN COALESCE(rb.analytics_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Data Engineering' THEN COALESCE(rb.de_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Platform' THEN COALESCE(rb.platform_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Apps & Collab' THEN COALESCE(rb.app_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Migration' THEN COALESCE(rb.migration_skill_count, 0) ELSE 0 END >= 10 THEN 20 WHEN CASE WHEN uc.WORKLOAD_CATEGORY = 'AI' THEN COALESCE(rb.ai_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Analytics' THEN COALESCE(rb.analytics_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Data Engineering' THEN COALESCE(rb.de_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Platform' THEN COALESCE(rb.platform_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Apps & Collab' THEN COALESCE(rb.app_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Migration' THEN COALESCE(rb.migration_skill_count, 0) ELSE 0 END >= 1 THEN 10 ELSE 0 END AS S1_SCORE,
-            CASE WHEN CASE WHEN uc.WORKLOAD_CATEGORY = 'AI' THEN COALESCE(cs.ai_custom_skills, 0) WHEN uc.WORKLOAD_CATEGORY = 'Analytics' THEN COALESCE(cs.analytics_custom_skills, 0) WHEN uc.WORKLOAD_CATEGORY = 'Data Engineering' THEN COALESCE(cs.de_custom_skills, 0) WHEN uc.WORKLOAD_CATEGORY = 'Platform' THEN COALESCE(cs.platform_custom_skills, 0) WHEN uc.WORKLOAD_CATEGORY = 'Apps & Collab' THEN COALESCE(cs.app_custom_skills, 0) WHEN uc.WORKLOAD_CATEGORY = 'Migration' THEN COALESCE(cs.migration_custom_skills, 0) ELSE 0 END >= 3 THEN 35 WHEN CASE WHEN uc.WORKLOAD_CATEGORY = 'AI' THEN COALESCE(cs.ai_custom_skills, 0) WHEN uc.WORKLOAD_CATEGORY = 'Analytics' THEN COALESCE(cs.analytics_custom_skills, 0) WHEN uc.WORKLOAD_CATEGORY = 'Data Engineering' THEN COALESCE(cs.de_custom_skills, 0) WHEN uc.WORKLOAD_CATEGORY = 'Platform' THEN COALESCE(cs.platform_custom_skills, 0) WHEN uc.WORKLOAD_CATEGORY = 'Apps & Collab' THEN COALESCE(cs.app_custom_skills, 0) WHEN uc.WORKLOAD_CATEGORY = 'Migration' THEN COALESCE(cs.migration_custom_skills, 0) ELSE 0 END >= 1 THEN 25 WHEN COALESCE(cs.custom_skill_count, 0) >= 10 THEN 15 WHEN COALESCE(cs.custom_skill_count, 0) >= 1 THEN 8 ELSE 0 END AS S2_SCORE,
+            COALESCE(bw.S1, 0) AS S1_SCORE,
+            COALESCE(bw.S2, CASE WHEN COALESCE(cs.custom_skill_count, 0) >= 10 THEN 15 WHEN COALESCE(cs.custom_skill_count, 0) >= 1 THEN 8 ELSE 0 END) AS S2_SCORE,
             CASE WHEN COALESCE(tu.total_tool_invocations, 0) >= 50000 THEN 20 WHEN COALESCE(tu.total_tool_invocations, 0) >= 10000 THEN 15 WHEN COALESCE(tu.total_tool_invocations, 0) >= 1000 THEN 10 WHEN COALESCE(tu.total_tool_invocations, 0) >= 1 THEN 5 WHEN COALESCE(pu.total_requests, 0) >= 1000 THEN 5 WHEN COALESCE(pu.total_requests, 0) >= 1 THEN 3 ELSE 0 END AS S3_SCORE,
-            CASE WHEN COALESCE(pu.active_days, 0) = 0 THEN 0 WHEN (CASE WHEN uc.WORKLOAD_CATEGORY = 'AI' THEN COALESCE(rb.ai_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Analytics' THEN COALESCE(rb.analytics_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Data Engineering' THEN COALESCE(rb.de_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Platform' THEN COALESCE(rb.platform_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Apps & Collab' THEN COALESCE(rb.app_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Migration' THEN COALESCE(rb.migration_skill_count, 0) ELSE 0 END) / pu.active_days >= 5 THEN 15 WHEN (CASE WHEN uc.WORKLOAD_CATEGORY = 'AI' THEN COALESCE(rb.ai_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Analytics' THEN COALESCE(rb.analytics_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Data Engineering' THEN COALESCE(rb.de_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Platform' THEN COALESCE(rb.platform_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Apps & Collab' THEN COALESCE(rb.app_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Migration' THEN COALESCE(rb.migration_skill_count, 0) ELSE 0 END) / pu.active_days >= 1 THEN 10 WHEN (CASE WHEN uc.WORKLOAD_CATEGORY = 'AI' THEN COALESCE(rb.ai_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Analytics' THEN COALESCE(rb.analytics_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Data Engineering' THEN COALESCE(rb.de_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Platform' THEN COALESCE(rb.platform_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Apps & Collab' THEN COALESCE(rb.app_skill_count, 0) WHEN uc.WORKLOAD_CATEGORY = 'Migration' THEN COALESCE(rb.migration_skill_count, 0) ELSE 0 END) > 0 THEN 5 ELSE 0 END AS S4_SCORE
+            COALESCE(bw.S4, 0) AS S4_SCORE
         FROM partner_ucs uc
         LEFT JOIN relevant_bundled rb ON uc.ACCOUNT_NAME_UPPER = rb.ACCOUNT_NAME_UPPER
         LEFT JOIN custom_skills cs ON uc.ACCOUNT_NAME_UPPER = cs.ACCOUNT_NAME_UPPER
         LEFT JOIN tool_usage tu ON uc.ACCOUNT_NAME_UPPER = tu.ACCOUNT_NAME_UPPER
         LEFT JOIN product_usage pu ON uc.ACCOUNT_NAME_UPPER = pu.ACCOUNT_NAME_UPPER
         LEFT JOIN account_credits ac ON uc.ACCOUNT_NAME_UPPER = ac.ACCOUNT_NAME_UPPER
+        LEFT JOIN best_workload bw ON uc.USE_CASE_ID = bw.USE_CASE_ID
     )
     SELECT *,
         S1_SCORE + S2_SCORE + S3_SCORE + S4_SCORE AS TOTAL_SCORE,
@@ -2203,21 +2232,12 @@ def get_velocity_coco_final_flags(_conn, partners_sql: str, fy27_start: str = '2
             d.USE_CASE_ID,
             UPPER(d.ACCOUNT_NAME) AS ACCOUNT_NAME_UPPER,
             d.IS_COCO,
-            CASE
-                WHEN d.TECHNICAL_USE_CASE ILIKE '%AI:%'        THEN 'AI'
-                WHEN d.TECHNICAL_USE_CASE ILIKE '%Analytics:%' THEN 'Analytics'
-                WHEN d.TECHNICAL_USE_CASE ILIKE '%DE:%'        THEN 'Data Engineering'
-                WHEN d.TECHNICAL_USE_CASE ILIKE '%Platform:%'  THEN 'Platform'
-                WHEN d.TECHNICAL_USE_CASE ILIKE '%Apps%'       THEN 'Apps & Collab'
-                WHEN d.TECHNICAL_USE_CASE ILIKE '%Migration%'  THEN 'Migration'
-                ELSE 'Unclassified'
-            END AS WC
+            d.TECHNICAL_USE_CASE
         FROM {DT_OKR} d
-        JOIN FIVETRAN.SALESFORCE.USE_CASE_C sf ON sf.ID = d.USE_CASE_ID
+        JOIN SNOW_CERTIFIED.SALESFORCE_USE_CASE.DD_SALESFORCE_USE_CASE sf ON sf.SALESFORCE_USE_CASE_ID = d.USE_CASE_ID
         WHERE d.PARTNER_NAME IN ({partners_sql})
-          AND sf.STAGE_C = '7 - Deployed'
-          AND sf.ACTUAL_GO_LIVE_DATE_C BETWEEN '2025-02-01' AND '2026-07-31'
-          AND sf._FIVETRAN_DELETED IS DISTINCT FROM TRUE
+          AND sf.SALESFORCE_USE_CASE_STAGE = '7 - Deployed'
+          AND sf.SALESFORCE_USE_CASE_GO_LIVE_DATE BETWEEN '2025-02-01' AND '2026-07-31'
           AND COALESCE(d.IS_NOT_INVOLVED, FALSE) = FALSE
           AND (
               d.PARTNER_NAME IN ({_GSI_VELOCITY_PARTNERS})
@@ -2279,17 +2299,23 @@ def get_velocity_coco_final_flags(_conn, partners_sql: str, fy27_start: str = '2
         AND UPPER(f.SALESFORCE_ACCOUNT_NAME) IN (SELECT ACCOUNT_NAME_UPPER FROM velocity_ucs)
         GROUP BY UPPER(f.SALESFORCE_ACCOUNT_NAME)
     ),
+    -- One row per tagged workload (untagged use cases keep a single row with WL NULL);
+    -- the use case is scored on its strongest tagged workload, matching _confidence_scored_query.
     account_scores AS (
         SELECT u.ACCOUNT_NAME_UPPER,
-            CASE WHEN u.WC='AI' THEN COALESCE(rb.ai,0) WHEN u.WC='Analytics' THEN COALESCE(rb.ana,0) WHEN u.WC='Data Engineering' THEN COALESCE(rb.de,0) WHEN u.WC='Platform' THEN COALESCE(rb.plt,0) WHEN u.WC='Apps & Collab' THEN COALESCE(rb.app,0) WHEN u.WC='Migration' THEN COALESCE(rb.mig,0) ELSE 0 END AS rs,
-            CASE WHEN u.WC='AI' THEN COALESCE(cs.ai_cs,0) WHEN u.WC='Analytics' THEN COALESCE(cs.ana_cs,0) WHEN u.WC='Data Engineering' THEN COALESCE(cs.de_cs,0) WHEN u.WC='Platform' THEN COALESCE(cs.plt_cs,0) WHEN u.WC='Apps & Collab' THEN COALESCE(cs.app_cs,0) WHEN u.WC='Migration' THEN COALESCE(cs.mig_cs,0) ELSE 0 END AS rcs,
+            CASE WHEN w.WL='AI' THEN COALESCE(rb.ai,0) WHEN w.WL='Analytics' THEN COALESCE(rb.ana,0) WHEN w.WL='Data Engineering' THEN COALESCE(rb.de,0) WHEN w.WL='Platform' THEN COALESCE(rb.plt,0) WHEN w.WL='Apps & Collab' THEN COALESCE(rb.app,0) WHEN w.WL='Migration' THEN COALESCE(rb.mig,0) ELSE 0 END AS rs,
+            CASE WHEN w.WL='AI' THEN COALESCE(cs.ai_cs,0) WHEN w.WL='Analytics' THEN COALESCE(cs.ana_cs,0) WHEN w.WL='Data Engineering' THEN COALESCE(cs.de_cs,0) WHEN w.WL='Platform' THEN COALESCE(cs.plt_cs,0) WHEN w.WL='Apps & Collab' THEN COALESCE(cs.app_cs,0) WHEN w.WL='Migration' THEN COALESCE(cs.mig_cs,0) ELSE 0 END AS rcs,
             COALESCE(cs.total_cs,0) AS tcs,
             COALESCE(tu.ti,0)       AS ti,
-            COALESCE(pu.ad,0)       AS ad,
             COALESCE(pu.tr,0)       AS tr,
             u.USE_CASE_ID,
             u.IS_COCO
         FROM velocity_ucs u
+        LEFT JOIN (SELECT * FROM VALUES
+                ('AI', '%AI:%'), ('Analytics', '%Analytics:%'), ('Data Engineering', '%DE:%'),
+                ('Platform', '%Platform:%'), ('Apps & Collab', '%Apps%'), ('Migration', '%Migration%')
+            AS t(WL, PAT)) w
+            ON u.TECHNICAL_USE_CASE ILIKE w.PAT
         LEFT JOIN rb ON u.ACCOUNT_NAME_UPPER = rb.ACCOUNT_NAME_UPPER
         LEFT JOIN cs ON u.ACCOUNT_NAME_UPPER = cs.ACCOUNT_NAME_UPPER
         LEFT JOIN tu ON u.ACCOUNT_NAME_UPPER = tu.ACCOUNT_NAME_UPPER
@@ -2298,13 +2324,14 @@ def get_velocity_coco_final_flags(_conn, partners_sql: str, fy27_start: str = '2
     SELECT
         USE_CASE_ID,
         IS_COCO,
-        (IS_COCO = TRUE OR (
-            CASE WHEN rs>=50 THEN 30 WHEN rs>=10 THEN 20 WHEN rs>=1 THEN 10 ELSE 0 END +
+        (IS_COCO = TRUE OR MAX(
+            CASE WHEN rs>=10 THEN 30 WHEN rs>=1 THEN 20 ELSE 0 END +
             CASE WHEN rcs>=3 THEN 35 WHEN rcs>=1 THEN 25 WHEN tcs>=10 THEN 15 WHEN tcs>=1 THEN 8 ELSE 0 END +
             CASE WHEN ti>=50000 THEN 20 WHEN ti>=10000 THEN 15 WHEN ti>=1000 THEN 10 WHEN ti>=1 THEN 5 WHEN tr>=1000 THEN 5 WHEN tr>=1 THEN 3 ELSE 0 END +
-            CASE WHEN ad=0 THEN 0 WHEN rs/NULLIF(ad,0)>=5 THEN 15 WHEN rs/NULLIF(ad,0)>=1 THEN 10 WHEN rs>0 THEN 5 ELSE 0 END
-        >= 75)) AS IS_COCO_FINAL
+            CASE WHEN rs>5 THEN 15 WHEN rs>=1 THEN 5 ELSE 0 END
+        ) >= 75) AS IS_COCO_FINAL
     FROM account_scores
+    GROUP BY USE_CASE_ID, IS_COCO
     """)
 
 
