@@ -1,6 +1,6 @@
 ---
 name: partner-coco-okr-snapshot-per-region
-description: "Generate a standalone HTML report of CoCo (Cortex Code) skill-gap opportunities for a given theater/sub-region within the FY27 Q3 OKR window, via the full no-shortcuts REST LLM-as-judge grounding pipeline. Use when the user asks to generate, rerun, or refresh the skill-gap / skill opportunity report for any theater (USMajors, EMEA, APJ, LATAM) and sub-region (MFG, RCG, FSI, etc.), or mentions 'skill gap report', 'CoCo Q3 OKR snapshot', 'non-CoCo skill opportunities report'. Not a Streamlit page -- runs locally and writes an HTML file to disk."
+description: "Generate a standalone HTML report of CoCo (Cortex Code) skill-gap opportunities for a given theater/sub-region within an FY27 OKR quarter (q1-q4, defaults to Q3), via the full no-shortcuts REST LLM-as-judge grounding pipeline. Use when the user asks to generate, rerun, or refresh the skill-gap / skill opportunity report for any theater (USMajors, EMEA, APJ, LATAM), sub-region (MFG, RCG, FSI, etc.), or FY27 quarter, or mentions 'skill gap report', 'CoCo OKR snapshot', 'non-CoCo skill opportunities report'. Not a Streamlit page -- runs locally and writes an HTML file to disk."
 ---
 
 # Partner CoCo OKR Snapshot Per Region
@@ -9,7 +9,7 @@ description: "Generate a standalone HTML report of CoCo (Cortex Code) skill-gap 
 
 Runs `scripts/partner_coco_okr_snapshot_per_region.py` (bundled with this skill), a standalone local script (not a Streamlit page) that:
 
-1. Fetches every use case in a given `--theater` / `--subregion` combination for the FY27 Q3 OKR window (2026-08-01 to 2026-10-31), restricted to partners tracked for that OKR (same `MANAGED_PARTNERS` set `app_pages/executive_email.py` builds).
+1. Fetches every use case in a given `--theater` / `--subregion` combination for a given FY27 OKR quarter (`--quarter`, default `q3` = 2026-08-01 to 2026-10-31), restricted to partners tracked for that OKR (same `MANAGED_PARTNERS` set `app_pages/executive_email.py` builds).
 2. Splits them into CoCo-attached vs non-CoCo-attached (via `apply_coco_final`, same logic as the deployed app).
 3. Runs the full REST-based LLM-as-judge grounding pipeline (identical to Approach 2 in `app_pages/pse_email_hybrid_rest.py` -- no shortcuts, real Cortex REST calls, real GPA scoring) against every non-CoCo use case to recommend CoCo skills.
 4. Pulls account-level CoCo credit/token usage (`get_account_coco_credits`) to corroborate real product engagement.
@@ -23,6 +23,7 @@ Invoke this skill whenever the user wants this report for **any** theater/sub-re
 - "generate the skill gap report for RCG in USMajors"
 - "rerun this for EMEA / FSI"
 - "give me the CoCo Q3 OKR snapshot for APJ MFG"
+- "run this for RCG in USMajors but for FY27 Q4 instead of Q3"
 
 Do not create a new Streamlit page or modify the app for this -- it is intentionally a local script the user runs on demand.
 
@@ -44,13 +45,13 @@ The script blocks on the SSO popup and takes 1-3 minutes total (longer if there 
 
 ```bash
 <repo_root>/.venv/bin/python -u <skill_dir>/scripts/partner_coco_okr_snapshot_per_region.py \
-  --theater <THEATER> --subregion <SUBREGION> [<SUBREGION> ...] \
+  --theater <THEATER> --subregion <SUBREGION> [<SUBREGION> ...] [--quarter q1|q2|q3|q4] \
   > /tmp/skill_gap_report.log 2>&1
 ```
 
 Where `<skill_dir>` is this skill's own directory (`.cortex/skills/partner-coco-okr-snapshot-per-region/`) and `<repo_root>` is the `coco-usecase-insights` checkout containing it -- the script only needs `<repo_root>/.venv` to exist; the output report is always written under `<repo_root>/output/reports/` regardless of where the command is run from.
 
-Multiple `--subregion` values are space-separated (e.g. `--subregion MFG RCG`) and are combined into a single `REGION_NAME IN (...)` filter (not two separate reports).
+Multiple `--subregion` values are space-separated (e.g. `--subregion MFG RCG`) and are combined into a single `REGION_NAME IN (...)` filter (not two separate reports). `--quarter` defaults to `q3` (2026-08-01 to 2026-10-31) if the user doesn't say otherwise; confirm with the user which quarter if it's ambiguous rather than assuming.
 
 ### Step 3: Wait for the SSO login and poll for completion
 
@@ -66,7 +67,7 @@ If the process sits idle for several minutes at step 1 with no new log lines, th
 
 ### Step 4: Verify the output
 
-The report is written to `output/reports/<subregion_slug>_<theater_lower>_skill_report.html` (e.g. `mfg_usmajors_skill_report.html`, `rcg_usmajors_skill_report.html`), or to `--output <path>` if the user specified a custom path. Confirm it was written and spot-check the key numbers make sense (e.g. via a quick `grep`/`python3 -re` pass over the "Full FY27 Q3 OKR Scope" tile block) before telling the user it's ready -- don't just trust the "Report written to" log line blindly, since a partially-wrong report is worse than a slow one.
+The report is written to `output/reports/<subregion_slug>_<theater_lower>_skill_report.html` for `q3` (e.g. `mfg_usmajors_skill_report.html`, `rcg_usmajors_skill_report.html`), or `output/reports/<subregion_slug>_<theater_lower>_<quarter>_skill_report.html` for any other quarter (e.g. `rcg_usmajors_q4_skill_report.html`) -- or to `--output <path>` if the user specified a custom path. Confirm it was written and spot-check the key numbers make sense (e.g. via a quick `grep`/`python3 -re` pass over the "Full FY27 OKR Scope" tile block) before telling the user it's ready -- don't just trust the "Report written to" log line blindly, since a partially-wrong report is worse than a slow one.
 
 ## Tools
 
@@ -74,20 +75,22 @@ The report is written to `output/reports/<subregion_slug>_<theater_lower>_skill_
 
 **Usage:**
 ```bash
-<repo_root>/.venv/bin/python -u <skill_dir>/scripts/partner_coco_okr_snapshot_per_region.py --theater <THEATER> --subregion <SUBREGION...> [--output <path>]
+<repo_root>/.venv/bin/python -u <skill_dir>/scripts/partner_coco_okr_snapshot_per_region.py --theater <THEATER> --subregion <SUBREGION...> [--quarter q1|q2|q3|q4] [--output <path>]
 ```
 
 **Arguments:**
 - `--theater` (required): `THEATER_NAME` value, e.g. `USMajors`.
 - `--subregion` (required, 1+): one or more `REGION_NAME` values, e.g. `MFG` or `RCG FSI`.
-- `--output` (optional): output HTML path. Default: `output/reports/<subregion_slug>_<theater_lower>_skill_report.html`.
+- `--quarter` (optional): FY27 fiscal quarter -- `q1` (Feb-Apr 2026), `q2` (May-Jul 2026), `q3` (Aug-Oct 2026, default), or `q4` (Nov 2026-Jan 2027).
+- `--output` (optional): output HTML path. Default: `output/reports/<subregion_slug>_<theater_lower>_skill_report.html` for `q3`, or with a `_<quarter>` suffix for any other quarter.
 
-**When NOT to use:** for a full FY27 Q3 OKR view across *all* theaters/sub-regions at once -- this script scopes to exactly one theater + one set of sub-regions per run. Run it once per scope needed.
+**When NOT to use:** for a full FY27 OKR view across *all* theaters/sub-regions (or all quarters) at once -- this script scopes to exactly one theater + one set of sub-regions + one quarter per run. Run it once per scope needed.
 
 ## Notes
 
-- The FY27 Q3 window (`Q_START`/`Q_END`, 2026-08-01 to 2026-10-31) is hardcoded at the top of the script, not a CLI flag -- editing those two constants is the only way to point at a different quarter.
+- FY27 quarter boundaries live in the `FY27_QUARTERS` dict at the top of the script (same convention as `utils/verified_metrics.py`'s `QUARTERS` dict) and are selected via `--quarter` (default `q3`) -- editing that dict is the only way to add a quarter outside FY27.
 - `_fetch_use_cases()` is a deliberately self-contained, table-qualified copy of `utils.queries.get_okr_coco_adoption`'s query rather than a call to that shared function -- `get_okr_coco_adoption`'s `_theater_filter()` helper emits an unqualified `THEATER_NAME = '...'` clause that's ambiguous against this script's multi-table join, a latent bug in the shared helper that's out of scope to fix here.
+- `_fetch_use_cases()` excludes `IS_NOT_INVOLVED` rows at the SQL source (matching the deployed app's `_use_case_base` CTE), and selects both `IS_NOT_COCO` and `IS_NOT_INVOLVED` so that `apply_coco_final` Exceptions 2 and 3 can fire in Python. Use cases flagged `#notcoco` by a PSE are also excluded from the non-CoCo skill-recommendation pipeline (they won't appear in the "Non-CoCo Use Cases by Partner" section), since recommending CoCo skills for a PSE-blocked use case is misleading.
 - `_ConnShim.query()` swallows `NotSupportedError` from `fetch_pandas_all()` and returns an empty DataFrame -- this is intentional, since INSERT/CREATE statements (used by the shared `utils/judge_cache.py`) have no result set to fetch and their return value is unused by the caller.
 - The two stacked-bar charts ("CoCo adoption by Workload" and "CoCo Adoption by Partner (Account Split)") encode CoCo-attached-vs-not within each segment as **filled vs. hollow/outlined** blocks, not shading -- a diagonal hatch pattern and later a light color-tint were both tried and rejected as too subtle to read at the ~14px bar height; filled-vs-hollow plus an explicit "X/Y" chip caption under each bar is the current design.
 

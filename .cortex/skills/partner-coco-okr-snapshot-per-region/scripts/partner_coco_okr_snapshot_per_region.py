@@ -87,9 +87,17 @@ from utils.coco_skill_map_v2 import (  # noqa: E402
     build_grounding_judge_prompt, parse_grounding_judge_response,
 )
 
-Q_START = "2026-08-01"
-Q_END = "2026-10-31"
 CONFIDENCE_BANDS = ["High"]
+
+# FY27 quarter boundaries (Snowflake fiscal year starts Feb 1) -- same convention
+# as utils/verified_metrics.py's QUARTERS dict. Selected via --quarter (default q3).
+FY27_QUARTERS = {
+    "q1": ("2026-02-01", "2026-04-30"),
+    "q2": ("2026-05-01", "2026-07-31"),
+    "q3": ("2026-08-01", "2026-10-31"),
+    "q4": ("2026-11-01", "2027-01-31"),
+}
+
 
 REPORTS_DIR = REPO_ROOT / "output" / "reports"
 
@@ -533,7 +541,7 @@ def _build_narrative_data_block(coco_ucs, by_partner_non_coco: dict, credits_loo
 
 
 def _build_narrative_prompt(data_block: str, q_start: str, q_end: str, scope_label: str) -> str:
-    return f"""You are writing an executive narrative for a Snowflake Sales Engineering RVP (Regional Vice President) audience, summarizing CoCo (Cortex Code) adoption within the {scope_label} scope, for the FY27 Q3 window ({q_start} to {q_end}).
+    return f"""You are writing an executive narrative for a Snowflake Sales Engineering RVP (Regional Vice President) audience, summarizing CoCo (Cortex Code) adoption within the {scope_label} scope, for the FY27 window ({q_start} to {q_end}).
 
 Use ONLY the data below. Do not invent, estimate, or round any number that isn't already present in the data -- every figure the narrative needs is already computed correctly. Do not claim credit/token usage is attributed per use case -- it is account-level only, as the data notes.
 
@@ -1128,6 +1136,7 @@ def _build_mfg_skill_report_html(by_partner: dict, q_start: str, q_end: str, the
                                   partner_gap_chart_html: str = "", stage_chart_html: str = "",
                                   partner_workload_mix_html: str = "",
                                   partner_account_split_html: str = "",
+                                  quarter_label: str = "Q3",
                                   scope_stats: dict = None) -> str:
     total_ucs = sum(len(rows) for rows in by_partner.values())
     total_eacv = sum(u["eacv"] for rows in by_partner.values() for u in rows) / 1_000_000
@@ -1141,7 +1150,7 @@ def _build_mfg_skill_report_html(by_partner: dict, q_start: str, q_end: str, the
         scope_tiles = f"""
 <div style="border:1px solid #e5e7eb;border-radius:8px;padding:14px 16px;margin-bottom:16px;background:#fafbfc;">
   <div style="font-size:11px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;color:#6b7280;margin-bottom:8px;">
-    Full FY27 Q3 OKR Scope &mdash; {_h(scope_label)}
+    Full FY27 {_h(quarter_label)} OKR Scope &mdash; {_h(scope_label)}
   </div>
   <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;">
     <div style="border:1.5px solid #e5e7eb;border-radius:6px;padding:12px 14px;background:#fff;">
@@ -1246,7 +1255,7 @@ def _build_mfg_skill_report_html(by_partner: dict, q_start: str, q_end: str, the
   <p style="font-size:12px;color:#6b7280;text-transform:uppercase;letter-spacing:.06em;margin:0 0 6px;">
     {_h(theater)} Theater &middot; {_h(subregion_label)} Industry &middot; FY27 Q3 OKR Partners
   </p>
-  <h1 style="font-size:22px;margin:0 0 6px;color:#0f172a;">{_h(subregion_label)} ({_h(theater)}) FY27 CoCo Q3 OKR Snapshot</h1>
+  <h1 style="font-size:22px;margin:0 0 6px;color:#0f172a;">{_h(subregion_label)} ({_h(theater)}) FY27 CoCo {_h(quarter_label)} OKR Snapshot</h1>
   <p style="font-size:12.5px;color:#6b7280;margin:0 0 16px;">{q_start} &ndash; {q_end}</p>
   {scope_tiles}
   {tiles}
@@ -1307,10 +1316,13 @@ def _fetch_use_cases(conn, theater, subregions, q_start, q_end):
         uc.DECISION_DATE,
         uc.GO_LIVE_DATE,
         uc.IS_COCO AS IS_COCO_ATTACHED,
-        uc.COCO_SOURCE
+        uc.COCO_SOURCE,
+        COALESCE(uc.IS_NOT_COCO, FALSE) AS IS_NOT_COCO,
+        COALESCE(uc.IS_NOT_INVOLVED, FALSE) AS IS_NOT_INVOLVED
     FROM {dt_okr} uc
     LEFT JOIN MDM.MDM_INTERFACES.DIM_USE_CASE mdm ON uc.USE_CASE_ID = mdm.USE_CASE_ID
-    WHERE uc.THEATER_NAME = '{theater}'
+    WHERE COALESCE(uc.IS_NOT_INVOLVED, FALSE) = FALSE
+      AND uc.THEATER_NAME = '{theater}'
       AND uc.REGION_NAME IN ({", ".join(f"'{r}'" for r in subregions)})
       AND (
           (uc.USE_CASE_STAGE IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan') AND uc.DECISION_DATE >= '{q_start}' AND uc.DECISION_DATE <= '{q_end}')
@@ -1326,20 +1338,27 @@ def _fetch_use_cases(conn, theater, subregions, q_start, q_end):
 # ─────────────────────────────────────────────────────────────────────────────
 def main():
     parser = argparse.ArgumentParser(
-        description="Generate the CoCo skill-gap HTML report for a given theater/sub-region, FY27 Q3 OKR window."
+        description="Generate the CoCo skill-gap HTML report for a given theater/sub-region, FY27 OKR window."
     )
     parser.add_argument("--theater", required=True, help="THEATER_NAME value, e.g. USMajors, EMEA, APJ.")
     parser.add_argument("--subregion", required=True, nargs="+",
                          help="One or more REGION_NAME values, e.g. MFG or RCG FSI (space-separated for multiple).")
+    parser.add_argument("--quarter", default="q3", choices=sorted(FY27_QUARTERS.keys()),
+                         help="FY27 fiscal quarter to scope use cases to (default: q3, Aug-Oct 2026). "
+                              "q1=Feb-Apr, q2=May-Jul, q3=Aug-Oct, q4=Nov-Jan.")
     parser.add_argument("--output", default=None,
                          help="Output HTML path (default: output/reports/<subregion>_<theater>_skill_report.html).")
     args = parser.parse_args()
 
     theater = args.theater
     subregions = args.subregion
+    q_start, q_end = FY27_QUARTERS[args.quarter]
     subregion_slug = "_".join(s.lower() for s in subregions)
-    output_path = Path(args.output) if args.output else REPORTS_DIR / f"{subregion_slug}_{theater.lower()}_skill_report.html"
+    quarter_suffix = "" if args.quarter == "q3" else f"_{args.quarter}"  # q3 keeps the original filename for backward compat
+    output_path = (Path(args.output) if args.output
+                   else REPORTS_DIR / f"{subregion_slug}_{theater.lower()}{quarter_suffix}_skill_report.html")
     scope_label = f"{theater} / {'+'.join(subregions)}"
+
 
     print("Connecting to Snowflake (externalbrowser SSO -- a browser window should open)...")
     raw_conn = snowflake.connector.connect(
@@ -1355,8 +1374,8 @@ def main():
     print(f"Connected. Using schema: {get_schema()}")
 
     print(f"\nFetching use cases for THEATER_NAME='{theater}', REGION_NAME in {subregions}, "
-          f"{Q_START} to {Q_END}...")
-    detail = _fetch_use_cases(conn, theater, subregions, Q_START, Q_END).copy()
+          f"{q_start} to {q_end}...")
+    detail = _fetch_use_cases(conn, theater, subregions, q_start, q_end).copy()
     detail["PARTNER_NAME"] = detail["PARTNER_NAME"].replace(PARTNER_RENAME_MAP)
     detail = detail[detail["PARTNER_NAME"].isin(MANAGED_PARTNERS)].copy()
     print(f"  {len(detail)} use cases across {detail['PARTNER_NAME'].nunique()} OKR-tracked partner(s).")
@@ -1366,15 +1385,35 @@ def main():
         return
 
     partners = tuple(sorted(detail["PARTNER_NAME"].unique()))
-    conf_scores = get_bulk_confidence_scores(conn, partners, Q_START, Q_END)
+    conf_scores = get_bulk_confidence_scores(conn, partners, q_start, q_end)
     if len(conf_scores) > 0:
-        conf_map = conf_scores[["USE_CASE_ID", "CONFIDENCE_BAND", "Q2_TOKENS"]].set_index("USE_CASE_ID")
+        cols_to_map = ["USE_CASE_ID", "CONFIDENCE_BAND", "Q2_TOKENS"]
+        if "IS_NOT_COCO" in conf_scores.columns:
+            cols_to_map.append("IS_NOT_COCO")
+        if "IS_NOT_INVOLVED" in conf_scores.columns:
+            cols_to_map.append("IS_NOT_INVOLVED")
+        conf_map = conf_scores[cols_to_map].set_index("USE_CASE_ID")
         detail["CONFIDENCE_BAND"] = detail["USE_CASE_ID"].map(conf_map["CONFIDENCE_BAND"])
         detail["Q2_TOKENS"] = detail["USE_CASE_ID"].map(conf_map["Q2_TOKENS"])
-        detail["IS_COCO"] = detail["IS_COCO_ATTACHED"]
-        detail["IS_COCO_ATTACHED"] = apply_coco_final(detail, CONFIDENCE_BANDS)
+        # Prefer SQL-sourced IS_NOT_COCO (from _fetch_use_cases); fall back to conf_scores
+        if "IS_NOT_COCO" in conf_map.columns and "IS_NOT_COCO" not in detail.columns:
+            detail["IS_NOT_COCO"] = detail["USE_CASE_ID"].map(conf_map["IS_NOT_COCO"])
+        if "IS_NOT_INVOLVED" in conf_map.columns and "IS_NOT_INVOLVED" not in detail.columns:
+            detail["IS_NOT_INVOLVED"] = detail["USE_CASE_ID"].map(conf_map["IS_NOT_INVOLVED"])
+
+    # Ensure columns exist even when conf_scores was empty, so apply_coco_final
+    # can always apply all three exceptions rather than silently skipping them.
+    if "CONFIDENCE_BAND" not in detail.columns:
+        detail["CONFIDENCE_BAND"] = "No Signal"
+    if "Q2_TOKENS" not in detail.columns:
+        detail["Q2_TOKENS"] = 0
+    detail["IS_COCO"] = detail["IS_COCO_ATTACHED"]
+    detail["IS_COCO_ATTACHED"] = apply_coco_final(detail, CONFIDENCE_BANDS)
 
     non_coco = detail[detail["IS_COCO_ATTACHED"] == False].copy()  # noqa: E712
+    # Don't recommend CoCo skills for use cases a PSE explicitly blocked via #notcoco
+    if "IS_NOT_COCO" in non_coco.columns:
+        non_coco = non_coco[~non_coco["IS_NOT_COCO"].fillna(False).astype(bool)].copy()
     coco_ucs = detail[detail["IS_COCO_ATTACHED"] == True].copy()  # noqa: E712
     print(f"  {len(non_coco)} non-CoCo-attached use case(s), {len(coco_ucs)} CoCo-attached use case(s).")
     if len(non_coco) == 0:
@@ -1383,7 +1422,7 @@ def main():
 
     print("\nFetching account-level CoCo credit/token usage...")
     distinct_accounts = tuple(sorted(detail["ACCOUNT_NAME"].dropna().str.upper().unique()))
-    credits_df = get_account_coco_credits(conn, distinct_accounts, Q_START)
+    credits_df = get_account_coco_credits(conn, distinct_accounts, q_start)
     credits_lookup = {
         row["ACCOUNT_NAME_UPPER"]: {
             "Q2_CREDITS": float(row["Q2_CREDITS"] or 0), "Q2_TOKENS": float(row["Q2_TOKENS"] or 0),
@@ -1405,7 +1444,7 @@ def main():
     print(f"\nDone. {total} REST call(s) total -- {ok} succeeded, {err} failed, {cached} served from cache.")
 
     print("\nGenerating executive narrative...")
-    narrative_text = _generate_narrative(conn, coco_ucs, by_partner, credits_lookup, Q_START, Q_END, scope_label)
+    narrative_text = _generate_narrative(conn, coco_ucs, by_partner, credits_lookup, q_start, q_end, scope_label)
     narrative_html = _build_narrative_html(narrative_text)
     credit_usage_html = _build_credit_usage_html(credits_lookup, detail)
     attach_split_html = _attach_split_chart_html(coco_ucs, non_coco)
@@ -1426,11 +1465,12 @@ def main():
 
     print("\nBuilding HTML report...")
     html = _build_mfg_skill_report_html(
-        by_partner, Q_START, Q_END, theater, subregions, narrative_html=narrative_html,
+        by_partner, q_start, q_end, theater, subregions, narrative_html=narrative_html,
         credit_usage_html=credit_usage_html, attach_split_html=attach_split_html,
         partner_gap_chart_html=partner_gap_chart_html, stage_chart_html=stage_chart_html,
         partner_workload_mix_html=partner_workload_mix_html,
         partner_account_split_html=partner_account_split_html,
+        quarter_label=args.quarter.upper(),
         scope_stats=scope_stats,
     )
     output_path.parent.mkdir(parents=True, exist_ok=True)
