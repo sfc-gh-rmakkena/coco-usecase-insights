@@ -1,3 +1,19 @@
+import os
+import sys
+
+# On the container runtime the Streamlit server is long-lived and shared, so after a deploy it keeps
+# the utils modules it imported earlier while pages are re-read from disk; a page then fails importing
+# a name that only exists in the new utils (e.g. ImportError: cannot import name ...). When the utils
+# files on disk change, drop the cached modules so this run imports the deployed versions.
+_UTILS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "utils")
+_utils_signature = tuple(sorted(
+    (entry.name, entry.stat().st_mtime_ns, entry.stat().st_size)
+    for entry in os.scandir(_UTILS_DIR) if entry.name.endswith(".py")))
+if getattr(sys, "_coco_utils_signature", None) != _utils_signature:
+    for _name in [name for name in sys.modules if name == "utils" or name.startswith("utils.")]:
+        del sys.modules[_name]
+    sys._coco_utils_signature = _utils_signature
+
 import streamlit as st
 from utils.queries import get_distinct_partners, get_distinct_subregions
 from utils import PARTNER_GROUPS
