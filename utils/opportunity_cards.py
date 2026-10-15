@@ -11,6 +11,9 @@ OPPORTUNITY = "SNOW_CERTIFIED.SALESFORCE_OPPORTUNITY.DD_SALESFORCE_OPPORTUNITY"
 ACCOUNT = "SNOW_CERTIFIED.SALESFORCE_ACCOUNT.DD_SALESFORCE_ACCOUNT"
 USE_CASE = "SNOW_CERTIFIED.SALESFORCE_USE_CASE.DD_SALESFORCE_USE_CASE"
 ACTIVITY = "SALES.SE_REPORTING.DIM_SE_ACTIVITY"
+# Salesforce sales territory of each opportunity (one district per opportunity).
+TERRITORY = "SNOW_CERTIFIED.PARTNER.DD_SALESFORCE_OPPORTUNITY_PARTNER"
+LATAM_TERRITORIES = ("Brazil", "Mexico", "CALA", "Colombia")
 COCO = "SNOWSCIENCE.LLM.CORTEX_CODE_USER_DAY_FACT"
 SF = "https://snowforce.lightning.force.com/lightning/r"
 OPP_ID = re.compile(r"\b(006[a-zA-Z0-9]{12}(?:[a-zA-Z0-9]{3})?)\b")
@@ -26,6 +29,25 @@ def quarter_start(day: date) -> date:
     """Snowflake fiscal quarters start in Feb, May, Aug and Nov."""
     month = ((day.month - 2) % 12) // 3 * 3 + 2
     return date(day.year - (month > day.month), month, 1)
+
+
+def latam_territory(region, district):
+    """Brazil / Mexico / CALA / Colombia for LATAM opportunities, from the territory district
+    (e.g. CommAcqBrazil, EntAcqBrazilExp, EntAcqCALA); None outside LATAM."""
+    if region != "LATAM":
+        return None
+    district = district.lower() if isinstance(district, str) else ""
+    return next((t for t in LATAM_TERRITORIES if t.lower() in district), "Unassigned")
+
+
+def territory_sql(opps_sql):
+    """Territory district for the opportunity IDs selected by `opps_sql`."""
+    return f"""
+        SELECT SALESFORCE_OPPORTUNITY_ID AS OPPORTUNITY_ID, ANY_VALUE(SALESFORCE_TERRITORY_DISTRICT) AS DISTRICT
+        FROM {TERRITORY}
+        WHERE SALESFORCE_OPPORTUNITY_ID IN ({opps_sql})
+        GROUP BY SALESFORCE_OPPORTUNITY_ID
+    """
 
 
 def engagement_sql(opps_sql):
@@ -134,11 +156,13 @@ def load_details(conn, ids, account_ids, coco_since):
                o.SALESFORCE_OPPORTUNITY_USE_CASES AS PRODUCT_CATEGORIES,
                o.SALESFORCE_OPPORTUNITY_LEAD_SOLUTION_ENGINEER_NAME AS LEAD_SE,
                o.SALESFORCE_OPPORTUNITY_NEXT_STEPS AS NEXT_STEPS,
-               a.SALESFORCE_ACCOUNT_BILLING_COUNTRY AS COUNTRY
+               a.SALESFORCE_ACCOUNT_BILLING_COUNTRY AS COUNTRY,
+               t.DISTRICT
         FROM {OPPORTUNITY} o
         LEFT JOIN {ACCOUNT} a ON a.SALESFORCE_ACCOUNT_ID = o.SALESFORCE_ACCOUNT_ID
+        LEFT JOIN ({territory_sql(placeholders(ids))}) t ON t.OPPORTUNITY_ID = o.SALESFORCE_OPPORTUNITY_ID
         WHERE o.SALESFORCE_OPPORTUNITY_ID IN ({placeholders(ids)})
-    """, params=ids, ttl=0)
+    """, params=[*ids, *ids], ttl=0)
     use_cases = conn.query(f"""
         SELECT SALESFORCE_OPPORTUNITY_ID AS OPPORTUNITY_ID, SALESFORCE_USE_CASE_ID AS USE_CASE_ID,
                SALESFORCE_USE_CASE_NUMBER AS USE_CASE_NUMBER, SALESFORCE_USE_CASE_NAME AS USE_CASE_NAME,
@@ -242,11 +266,17 @@ def card_rows(opp, ucs, coco_since):
                          usage(opp.get("TRIAL_COCO_USERS"), opp.get("TRIAL_COCO_DAYS"), "trial / PoC")) if p]
     coco = ("; ".join(parts) + f" since {coco_since:%b %d}") if parts else f"None since {coco_since:%b %d}"
     partner_count = int(num(opp["PARTNER_COUNT"]))
+    territory = latam_territory(opp["REGION"], opp.get("DISTRICT"))
 
-    return {
+    rows = {
         "Opportunity": opp_link,
         "Customer": f"{txt(opp['CUSTOMER'])} ({txt(opp.get('COUNTRY'), txt(opp['REGION']))})",
         "Theater / region": f"{txt(opp['THEATER'])} / {txt(opp['REGION'])}",
+    }
+    if territory:
+        # Only LATAM cards carry this row; other cards show "—" when compared side by side.
+        rows["LATAM territory"] = f"**{md(territory)}**"
+    return rows | {
         close_label: f"**{close:%b %d, %Y}**" if pd.notna(close) else "—",
         "Status / stage": f"{md(opp['STATUS'])} / {txt(opp.get('STAGE'))}",
         "Type": f"{cap}, {txt(opp.get('OPPORTUNITY_TYPE'))}",
@@ -265,7 +295,15 @@ def card_rows(opp, ucs, coco_since):
 
 
 def render_cards(cards, titles):
-    labels = list(dict.fromkeys(label for card in cards for label in card))
+    # Merge row labels in card order: a row only some cards have (e.g. LATAM territory) goes
+    # right after the row it follows on those cards, not at the bottom.
+    labels = []
+    for card in cards:
+        previous = None
+        for label in card:
+            if label not in labels:
+                labels.insert(labels.index(previous) + 1 if previous else 0, label)
+            previous = label
     header = "| | " + " | ".join(f"**{md(t)}**" for t in titles) + " |"
     lines = [header, "|---|" + "---|" * len(cards)]
     lines += ["| " + label + " | " + " | ".join(card.get(label, "—") for card in cards) + " |" for label in labels]

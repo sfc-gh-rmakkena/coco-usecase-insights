@@ -5,7 +5,13 @@ import re
 import pandas as pd
 import streamlit as st
 
-from utils.opportunity_cards import CARDS_PER_ROW, OPP_ID, engagement_sql, find_opportunities, show_cards
+from utils.opportunity_cards import (CARDS_PER_ROW, OPP_ID, TERRITORY, engagement_sql, find_opportunities,
+                                     latam_territory, quarter_start, show_cards, territory_sql, USE_CASE)
+from utils.filter_table import filter_table
+from utils.region_cards import region_cards
+from utils.acq_report import DEFAULT_PROMPT, build_context as build_acq_context
+from utils.cortex_helpers import cortex_complete
+from utils.report import copy_rich_text_button, md_to_html
 
 
 # Grain: opportunity x partner x booking split. ACV columns are already multiplied by
@@ -99,6 +105,26 @@ def load_se_activity(conn, start, end_exclusive, customer_region):
     return conn.query(query, params=params, ttl=0)
 
 
+def load_territories(conn, start, end_exclusive, customer_region):
+    """Salesforce territory district per opportunity (shared definition with the opportunity cards)."""
+    where, params = opportunity_filters(start, end_exclusive, customer_region)
+    query = territory_sql(f"SELECT OPPORTUNITY_ID FROM {SOURCE} WHERE {where}")
+    return conn.query(query, params=params, ttl=0)
+
+
+def load_use_cases(conn, start, end_exclusive, customer_region):
+    """Use cases linked to each opportunity (same source as the opportunity cards)."""
+    where, params = opportunity_filters(start, end_exclusive, customer_region)
+    return conn.query(f"""
+        SELECT SALESFORCE_OPPORTUNITY_ID AS OPPORTUNITY_ID, SALESFORCE_USE_CASE_ID AS USE_CASE_ID,
+               SALESFORCE_USE_CASE_NUMBER AS USE_CASE_NUMBER, SALESFORCE_USE_CASE_NAME AS USE_CASE_NAME,
+               SALESFORCE_USE_CASE_STAGE AS USE_CASE_STAGE
+        FROM {USE_CASE}
+        WHERE SALESFORCE_OPPORTUNITY_ID IN (SELECT OPPORTUNITY_ID FROM {SOURCE} WHERE {where})
+        ORDER BY SALESFORCE_USE_CASE_NUMBER
+    """, params=params, ttl=0)
+
+
 st.title(":material/handshake: ACQ Theatre")
 st.caption(f"Partner-attached opportunities credited to {THEATER} with partners in "
            f"{' and '.join(PARTNER_REGIONS)}, from {SOURCE}. "
@@ -106,6 +132,12 @@ st.caption(f"Partner-attached opportunities credited to {THEATER} with partners 
            "open deals use expected close dates.")
 
 today = date.today()
+# The source tables carry row access policies (RAP_SALESFORCE_ACCOUNT_ACCESS), which evaluate the
+# executing identity. In Snowflake the default connection runs as the app owner and sees no rows, so
+# query as the viewer through the caller's-rights connection opened in streamlit_app.py. Falls back
+# to the default connection locally, where it already runs as the developer. Queries use ttl=0, so
+# no viewer's filtered results are cached for another viewer.
+conn = st.session_state.get("_callers_rights_conn") or st.session_state.conn
 with st.sidebar:
     st.divider()
     st.markdown("**ACQ Theatre**")
@@ -125,7 +157,7 @@ period = f"{start_date:%b %d, %Y} – {last_day:%b %d, %Y}"
 st.caption(f"Close-date window: {period} | Customer region: {customer_region}")
 
 try:
-    rows = load_opportunities(st.session_state.conn, start_date, end_date, customer_region)
+    rows = load_opportunities(conn, start_date, end_date, customer_region)
 except Exception as exc:
     st.error(f"Could not load ACQ partner opportunities: {exc}")
     st.stop()
@@ -145,13 +177,23 @@ rows["CAP"] = rows.groupby("OPPORTUNITY_ID")["IS_CAP_ONE"].transform("max").map(
 
 activity_columns = ["OPPORTUNITY_ID", "SE_ACTIVITIES", "LAST_SE_ACTIVITY", "SE_PEOPLE", "PSE_INVOLVED", "PSE_PEOPLE"]
 try:
-    activity = load_se_activity(st.session_state.conn, start_date, end_date, customer_region)
+    activity = load_se_activity(conn, start_date, end_date, customer_region)
 except Exception as exc:
     st.warning(f"SE activity could not be loaded from {ACTIVITY_SOURCE}: {exc}")
     activity = pd.DataFrame(columns=activity_columns)
 rows = rows.merge(activity[activity_columns], on="OPPORTUNITY_ID", how="left")
 rows["SE_ACTIVITIES"] = pd.to_numeric(rows["SE_ACTIVITIES"], errors="coerce").fillna(0).astype(int)
 rows["PSE_INVOLVED"] = rows["PSE_INVOLVED"].astype("boolean").fillna(False).astype(bool)
+
+try:
+    territories = load_territories(conn, start_date, end_date, customer_region)
+except Exception as exc:
+    st.warning(f"LATAM territories could not be loaded from {TERRITORY}: {exc}")
+    territories = pd.DataFrame(columns=["OPPORTUNITY_ID", "DISTRICT"])
+rows = rows.merge(territories, on="OPPORTUNITY_ID", how="left")
+# Brazil / Mexico / CALA / Colombia for LATAM opportunities; blank elsewhere.
+rows["LATAM_TERRITORY"] = [latam_territory(region, district)
+                           for region, district in zip(rows["CUSTOMER_REGION"], rows["DISTRICT"])]
 
 partner_types = sorted(rows["PARTNER_TYPE"].unique())
 partner_regions = rows["PARTNER_REGION"].value_counts().index.tolist()
@@ -221,7 +263,7 @@ cap = {c: summarize(rows[rows["CAP"] == c]) for c in ("Cap 1", "Cap N")}
 opp_level = rows.drop_duplicates("OPPORTUNITY_ID")
 partner_sourced = int(opp_level["PIPELINE_SOURCE"].fillna("").str.contains("PARTNER").sum())
 try:
-    theater = load_theater_totals(st.session_state.conn, start_date, end_date, customer_region).iloc[0]
+    theater = load_theater_totals(conn, start_date, end_date, customer_region).iloc[0]
     theater = {key: int(theater[key]) for key in ("OPPORTUNITIES", "WON", "LOST", "OPEN")}
 except Exception as exc:
     st.warning(f"Theater totals could not be loaded: {exc}")
@@ -278,7 +320,7 @@ weeks_clipped = (week_start, week_end) != (last_week, next_week)
 try:
     if week_start >= week_end:
         raise LookupError
-    weekly = load_opportunities(st.session_state.conn, week_start, week_end, customer_region)
+    weekly = load_opportunities(conn, week_start, week_end, customer_region)
     weekly = weekly[weekly["PARTNER_REGION"].isin(selected_regions or partner_regions)
                     & weekly["PARTNER_TYPE"].isin(selected_types or partner_types)].copy()
     weekly["CLOSE_DATE"] = pd.to_datetime(weekly["CLOSE_DATE"]).dt.date
@@ -329,48 +371,66 @@ st.caption("An opportunity can have several partners, so partner counts can over
            "or partner comments on its use case (PSEs often record their work only there).")
 
 st.subheader("Customer regions")
-st.caption("Select one or more region tiles to filter the Partners table. With none selected, all regions are shown.")
 rows = rows.assign(CUSTOMER_REGION=rows["CUSTOMER_REGION"].fillna("Unassigned"))
 by_region = pd.DataFrame([{"CUSTOMER_REGION": region, **summarize(group)}
                           for region, group in rows.groupby("CUSTOMER_REGION")])
 by_region = by_region.sort_values("OPPORTUNITIES", ascending=False)
-region_keys = {region: "acq_region_" + re.sub(r"\W+", "_", str(region)) for region in by_region["CUSTOMER_REGION"]}
+latam_rows = rows[rows["LATAM_TERRITORY"].notna()]
+by_territory = pd.DataFrame([{"LATAM_TERRITORY": territory, **summarize(group)}
+                             for territory, group in latam_rows.groupby("LATAM_TERRITORY")])
+if not by_territory.empty:
+    by_territory = by_territory.sort_values("OPPORTUNITIES", ascending=False)
+territories = list(by_territory.get("LATAM_TERRITORY", []))
+TERRITORY_PREFIX = "LATAM · "
+region_options = list(by_region["CUSTOMER_REGION"]) + [TERRITORY_PREFIX + t for t in territories]
 
 
 def clear_region_selection():
-    for key in region_keys.values():
-        st.session_state[key] = False
+    st.session_state["acq_region_filter"] = []
 
 
-with st.container(key="acq_tiles_regions"), st.container(horizontal=True):
-    for _, region_row in by_region.iterrows():
-        region = str(region_row["CUSTOMER_REGION"])
-        with st.container(border=True, key=f"{region_keys[region]}_tile"):
-            st.metric(region, f'{int(region_row["OPPORTUNITIES"]):,} opps',
-                      f'{money_short(region_row["WON_ACV_USD"])} won · {int(region_row["OPEN"])} open',
-                      delta_color="off", delta_arrow="off")
-            st.checkbox("Select", key=region_keys[region])
-selected_customer_regions = [region for region, key in region_keys.items() if st.session_state.get(key)]
-if selected_customer_regions:
-    # Highlight selected tiles like the headline boxes.
-    st.markdown("<style>" + "".join(
-        f".st-key-{region_keys[region]}_tile {{ border: 2px solid #29B5E8 !important; "
-        "background: rgba(41,181,232,0.08) !important; }"
-        for region in selected_customer_regions) + "</style>", unsafe_allow_html=True)
+# Drop selections that are no longer in the data (e.g. after changing the sidebar dates).
+st.session_state["acq_region_filter"] = [o for o in st.session_state.get("acq_region_filter") or []
+                                         if o in region_options]
+st.caption("Click a region to filter the Partners table (click again to remove it). On LATAM, click a "
+           "territory to narrow to it. Pick several to combine them.")
+region_cards([{"id": str(r["CUSTOMER_REGION"]), "name": str(r["CUSTOMER_REGION"]),
+               "value": f"{int(r['OPPORTUNITIES']):,}", "unit": "opps",
+               "stats": [(money_short(r["WON_ACV_USD"]), "won"), (f"{int(r['OPEN'])}", "open"),
+                         (money_short(r["PIPELINE_ACV_USD"]), "pipeline")],
+               "chips": ([{"id": TERRITORY_PREFIX + t["LATAM_TERRITORY"],
+                           "label": f"{t['LATAM_TERRITORY']} {int(t['OPPORTUNITIES'])}"}
+                          for t in by_territory.to_dict("records")] if r["CUSTOMER_REGION"] == "LATAM" else [])}
+              for r in by_region.to_dict("records")],
+             "acq_region_filter", key="acq_region_cards")
+region_filter = st.session_state["acq_region_filter"]
+selected_customer_regions = [o for o in region_filter if not o.startswith(TERRITORY_PREFIX)]
+selected_territories = [o[len(TERRITORY_PREFIX):] for o in region_filter if o.startswith(TERRITORY_PREFIX)]
+if territories:
+    st.caption("LATAM territories come from the opportunity's Salesforce territory district "
+               "(Brazil = CommAcqBrazil, EntAcqBrazil, EntAcqBrazilExp; CALA = EntAcqCALA; and so on).")
 
 money = lambda label: st.column_config.NumberColumn(label, format="$%.0f")
 st.subheader("Partners")
-partner_rows = rows[rows["CUSTOMER_REGION"].isin(selected_customer_regions)] if selected_customer_regions else rows
+if selected_territories:
+    # Territories replace the LATAM tile: LATAM rows are limited to the selected territories.
+    other_regions = [r for r in selected_customer_regions if r != "LATAM"]
+    partner_rows = rows[rows["CUSTOMER_REGION"].isin(other_regions) | rows["LATAM_TERRITORY"].isin(selected_territories)]
+    selection_label = other_regions + [f"LATAM · {t}" for t in selected_territories]
+else:
+    partner_rows = rows[rows["CUSTOMER_REGION"].isin(selected_customer_regions)] if selected_customer_regions else rows
+    selection_label = selected_customer_regions
 with st.container(horizontal=True, vertical_alignment="center"):
-    st.caption(f"Customer regions: **{', '.join(selected_customer_regions) if selected_customer_regions else 'All'}** · "
+    st.caption(f"Customer regions: **{', '.join(selection_label) if selection_label else 'All'}** · "
                f"{partner_rows['PARTNER_PARENT'].nunique():,} partners · "
                f"{partner_rows['OPPORTUNITY_ID'].nunique():,} opportunities")
-    if selected_customer_regions:
+    if region_filter:
         st.button("Clear selection", icon=":material/close:", on_click=clear_region_selection,
                   key="acq_region_clear", type="tertiary")
 by_partner = pd.DataFrame([{"PARTNER_PARENT": partner, **summarize(group),
                             "PARTNER_TYPES": ", ".join(sorted(group["PARTNER_TYPE"].unique())),
-                            "CUSTOMER_REGIONS": ", ".join(group["CUSTOMER_REGION"].value_counts().index)}
+                            "CUSTOMER_REGIONS": ", ".join(group["CUSTOMER_REGION"].value_counts().index),
+                            "LATAM_TERRITORIES": ", ".join(group["LATAM_TERRITORY"].dropna().value_counts().index)}
                            for partner, group in partner_rows.groupby("PARTNER_PARENT")])
 by_partner = by_partner.sort_values(["WON_ACV_USD", "OPPORTUNITIES"], ascending=False)
 by_partner = by_partner.drop(columns=["WEIGHTED_PIPELINE_USD", "WITH_SE_ACTIVITY"])
@@ -381,7 +441,8 @@ st.dataframe(by_partner, hide_index=True, use_container_width=True,
                             "PIPELINE_ACV_USD": money("Open pipeline ACV"),
                             "WITH_PSE": "Opps with PSE",
                             "PARTNER_TYPES": "Partner types",
-                            "CUSTOMER_REGIONS": "Customer regions (most deals first)"})
+                            "CUSTOMER_REGIONS": "Customer regions (most deals first)",
+                            "LATAM_TERRITORIES": "LATAM territories (most deals first)"})
 
 QUICK_PICKS = {"Closing this week": ":material/event:", "Closed last week": ":material/history:",
                "Largest open deals": ":material/trending_up:"}
@@ -419,7 +480,7 @@ with st.container(border=True):
         card_ids = [in_scope[opp_id[:15]] for opp_id in card_ids if opp_id[:15] in in_scope]
         if outside:
             try:
-                found = find_opportunities(st.session_state.conn, outside, None, None)
+                found = find_opportunities(conn, outside, None, None)
             except Exception:
                 found = pd.DataFrame(columns=["OPPORTUNITY_ID"])
             for opp_id in outside:
@@ -469,38 +530,126 @@ with st.container(border=True):
                 key=f"acq_card_selected_{quick}_{card_search}")
             card_ids = [labels[label] for label in chosen]
     if card_ids:
-        show_cards(st.session_state.conn, card_ids, coco_since=start_date)
+        show_cards(conn, card_ids, coco_since=start_date)
     elif candidates is None and not card_search:
         st.info("Choose a quick pick or search for a partner, customer or opportunity ID to see its cards here.",
                 icon=":material/touch_app:")
 
 st.subheader("Opportunity and partner detail")
-detail = rows[["OPPORTUNITY_ID", "OPPORTUNITY", "CUSTOMER", "CUSTOMER_REGION", "OWNER", "PARTNER",
+detail = rows[["OPPORTUNITY_ID", "OPPORTUNITY", "CUSTOMER", "CUSTOMER_REGION", "LATAM_TERRITORY", "OWNER", "PARTNER",
                "PARTNER_PARENT", "PARTNER_TYPE", "PARTNER_REGION", "STATUS", "CLOSE_DATE",
                "PARTNER_SPLIT", "BOOKING_SPLIT", "ACV_USD", "SE_ACTIVITIES", "LAST_SE_ACTIVITY",
                "SE_PEOPLE", "PSE_INVOLVED", "PSE_PEOPLE"]].copy()
-# Build links only for Salesforce opportunity IDs; encode names for safe display in LinkColumn.
+# Link only Salesforce opportunity IDs.
 valid_id = detail["OPPORTUNITY_ID"].astype("string").str.fullmatch(r"[a-zA-Z0-9]{15}(?:[a-zA-Z0-9]{3})?").fillna(False)
-
-
-def opportunity_link(opportunity_id, name):
-    clean_name = re.sub(r"[\r\n\t#]+", " ", str(name)).strip()
-    return f"https://snowforce.lightning.force.com/lightning/r/Opportunity/{opportunity_id}/view#{clean_name}"
-
-
 detail["OPPORTUNITY"] = [
-    opportunity_link(opportunity_id, name) if valid and pd.notna(name) else None
+    (name, f"https://snowforce.lightning.force.com/lightning/r/Opportunity/{opportunity_id}/view" if valid else None)
     for valid, opportunity_id, name in zip(valid_id, detail["OPPORTUNITY_ID"], detail["OPPORTUNITY"])
 ]
-st.dataframe(detail, hide_index=True, use_container_width=True,
-             column_config={"OPPORTUNITY": st.column_config.LinkColumn(
-                                "Opportunity", display_text=r"#(.+)$", help="Open opportunity in Salesforce"),
-                            "PARTNER_SPLIT": st.column_config.NumberColumn("Partner split", format="percent"),
-                            "BOOKING_SPLIT": st.column_config.NumberColumn("Booking split", format="percent"),
-                            "ACV_USD": money("ACV (after splits)"),
-                            "SE_ACTIVITIES": st.column_config.NumberColumn("SE activities", format="%d",
-                                                                           help="Meetings and deliverables logged on the opportunity"),
-                            "LAST_SE_ACTIVITY": st.column_config.DateColumn("Last SE activity"),
-                            "SE_PEOPLE": "SEs / PSEs involved",
-                            "PSE_INVOLVED": st.column_config.CheckboxColumn("PSE involved"),
-                            "PSE_PEOPLE": "PSEs"})
+# Linked use cases, shown like the opportunity cards: UC number "name" (stage), linked to Salesforce.
+try:
+    use_cases = load_use_cases(conn, start_date, end_date, customer_region)
+except Exception as exc:
+    st.warning(f"Linked use cases could not be loaded from {USE_CASE}: {exc}")
+    use_cases = pd.DataFrame(columns=["OPPORTUNITY_ID", "USE_CASE_ID", "USE_CASE_NUMBER", "USE_CASE_NAME",
+                                      "USE_CASE_STAGE"])
+use_case_links = {}
+for uc in use_cases.itertuples(index=False):
+    valid = isinstance(uc.USE_CASE_ID, str) and re.fullmatch(r"[a-zA-Z0-9]{15}(?:[a-zA-Z0-9]{3})?", uc.USE_CASE_ID)
+    text = str(uc.USE_CASE_NUMBER)
+    if pd.notna(uc.USE_CASE_NAME):
+        text += f' "{uc.USE_CASE_NAME}"'
+    if pd.notna(uc.USE_CASE_STAGE):
+        text += f" ({uc.USE_CASE_STAGE})"
+    url = f"https://snowforce.lightning.force.com/lightning/r/Use_Case__c/{uc.USE_CASE_ID}/view" if valid else None
+    use_case_links.setdefault(uc.OPPORTUNITY_ID, []).append((text, url))
+detail["USE_CASES"] = [use_case_links.get(opportunity_id, []) for opportunity_id in detail["OPPORTUNITY_ID"]]
+# Excel-style filters in each column header (▾); filtering and sorting happen in the browser.
+filter_table(detail, {
+    "OPPORTUNITY_ID": ("Opportunity ID", "text"),
+    "OPPORTUNITY": ("Opportunity", "link"),
+    "USE_CASES": ("Linked use cases", "links"),
+    "CUSTOMER_REGION": ("Customer region", "text"),
+    "LATAM_TERRITORY": ("LATAM territory", "text"),
+    "PSE_INVOLVED": ("PSE involved", "bool"),
+    "PSE_PEOPLE": ("PSEs", "text"),
+    "STATUS": ("Status", "text"),
+    "CLOSE_DATE": ("Close date", "date"),
+    "PARTNER": ("Partner", "text"),
+    "PARTNER_TYPE": ("Partner type", "text"),
+    "PARTNER_REGION": ("Partner region", "text"),
+    "PARTNER_SPLIT": ("Partner split", "percent"),
+    "BOOKING_SPLIT": ("Booking split", "percent"),
+    "ACV_USD": ("ACV (after splits)", "money"),
+    "SE_ACTIVITIES": ("SE activities", "number"),
+    "LAST_SE_ACTIVITY": ("Last SE activity", "date"),
+    "SE_PEOPLE": ("SEs / PSEs involved", "text"),
+    "CUSTOMER": ("Customer", "text"),
+    "OWNER": ("Owner", "text"),
+}, key="acq_detail_table", count_key="OPPORTUNITY_ID", count_label="opportunities", file_name="acq_partner_detail")
+
+# ============================ Generate report ===============================
+st.divider()
+st.subheader("Generate report")
+
+
+def add_months(day, months):
+    month = day.month - 1 + months
+    return date(day.year + month // 12, month % 12 + 1, 1)
+
+
+def load_window(start, end_exclusive):
+    """Page rows for another close-date window, with the same partner filters, PSE and territory columns."""
+    other = load_opportunities(conn, start, end_exclusive, customer_region)
+    if other.empty:
+        return other
+    for col in ("ACV_USD", "WEIGHTED_ACV_USD"):
+        other[col] = pd.to_numeric(other[col], errors="coerce").fillna(0)
+    engagement = load_se_activity(conn, start, end_exclusive, customer_region)
+    other = other.merge(engagement[["OPPORTUNITY_ID", "PSE_INVOLVED", "PSE_PEOPLE"]], on="OPPORTUNITY_ID", how="left")
+    other["PSE_INVOLVED"] = other["PSE_INVOLVED"].astype("boolean").fillna(False).astype(bool)
+    districts = load_territories(conn, start, end_exclusive, customer_region)
+    other = other.merge(districts, on="OPPORTUNITY_ID", how="left")
+    other["LATAM_TERRITORY"] = [latam_territory(r, d) for r, d in zip(other["CUSTOMER_REGION"], other["DISTRICT"])]
+    return other[other["PARTNER_REGION"].isin(selected_regions or partner_regions)
+                 & other["PARTNER_TYPE"].isin(selected_types or partner_types)]
+
+
+st.caption("Writes an ACQ Theatre update from this page's data (sidebar dates, customer region and the partner "
+           "region / type filters above), plus the previous and next fiscal quarters for comparison and outlook.")
+acq_prompt = st.text_area("Prompt", value=DEFAULT_PROMPT, height=300, key="acq_report_prompt",
+                          help="Edit this prompt to customize the report. The page's figures are included automatically.")
+
+if st.button("Generate report", type="primary", key="acq_report_generate"):
+    with st.spinner("Generating the ACQ Theatre update with Cortex Complete..."):
+        this_quarter = quarter_start(start_date)
+        previous_start, following_start = add_months(this_quarter, -3), add_months(quarter_start(last_day), 3)
+        windows = {}
+        for name, window_start in (("previous", previous_start), ("following", following_start)):
+            window_end = add_months(window_start, 3)
+            label = f"{window_start:%b %Y} – {window_end - timedelta(days=1):%b %Y} fiscal quarter"
+            try:
+                windows[name] = (label, load_window(window_start, window_end))
+            except Exception as exc:
+                st.warning(f"The {label} could not be loaded for comparison: {exc}")
+                windows[name] = None
+        data_context = build_acq_context(rows, period=period, customer_region=customer_region, today=today,
+                                         theater=theater, previous=windows["previous"], following=windows["following"])
+        try:
+            st.session_state["acq_report"] = cortex_complete(
+                conn, "claude-sonnet-4-5", f"{acq_prompt}\n\nDATA:\n{data_context}\n\nWrite the ACQ Theatre update:")
+        except Exception as exc:
+            st.error(f"The report could not be generated: {exc}")
+
+if st.session_state.get("acq_report"):
+    report = st.session_state["acq_report"]
+    # Escape $ before digits so Streamlit doesn't treat $1.2M as LaTeX math.
+    st.markdown(re.sub(r"\$(\d)", r"\\$\1", report))
+    st.divider()
+    st.caption("Click **Copy Rich Text**, then paste into Slack, email or a doc — tables keep their formatting.")
+    copy_column, download_column = st.columns(2)
+    with copy_column:
+        copy_rich_text_button(md_to_html(report), report, button_id="acqCopyBtn")
+    with download_column:
+        st.download_button("Download as HTML", data=md_to_html(report), file_name="acq_theatre_update.html",
+                           mime="text/html", key="acq_report_download")
