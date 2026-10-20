@@ -48,3 +48,43 @@ def test_html_empty_values_and_body_cap():
     ws = [dict(WS[0], session2={"recipe": dict(WS[0]["session2"]["recipe"], body="z" * 30000), "plan": {}})]
     h = render_workshop_html(ws)
     assert "z" * 20000 + "…" in h and "z" * 20001 not in h
+
+
+import io
+from reportlab.lib.pagesizes import letter
+from reportlab.platypus import SimpleDocTemplate
+from reportlab.lib.styles import getSampleStyleSheet
+from utils.workshop.render_pdf import workshop_pdf_flowables, scope_note_flowable
+
+
+def _styles():
+    ss = getSampleStyleSheet()
+    return {"heading2": ss["Heading2"], "body": ss["BodyText"], "cell": ss["BodyText"]}
+
+
+def _build(ws):
+    styles = _styles()
+    buf = io.BytesIO()
+    story = [scope_note_flowable(styles)] + workshop_pdf_flowables(ws, styles)
+    SimpleDocTemplate(buf, pagesize=letter).build(story)
+    return buf.getvalue()
+
+
+def test_pdf_flowables_build():
+    assert _build(WS)[:4] == b"%PDF"
+
+
+def test_pdf_empty_plan_and_markup_chars():
+    ws = EMPTY + [dict(WS[0], name="A & B <c>", session2={
+        "recipe": dict(WS[0]["session2"]["recipe"], confidence=88.0),
+        "plan": {"docs": [{"title": "Good", "url": "https://x.com/?a=1&b=2"},
+                          {"title": "Bad <i>", "url": "javascript:alert(1)"}]}})]
+    assert _build(ws)[:4] == b"%PDF"
+
+
+from utils.workshop import filter_not_deployed
+
+
+def test_filter_not_deployed():
+    out = filter_not_deployed({"NoAM": [{"stage_label": "Deployed"}, {"stage_label": "POC"}]})
+    assert out == {"NoAM": [{"stage_label": "POC"}]}
