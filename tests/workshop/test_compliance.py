@@ -34,3 +34,73 @@ def test_scrub_drops_bad_sentences_and_unlisted_links():
     assert "evil.example.com" not in out
     assert "docs.snowflake.com" in out
     assert out.startswith("Use Cortex Search.")
+
+
+import pytest
+
+A = "https://docs.snowflake.com/en/x"
+
+
+@pytest.mark.parametrize("t", ["Spend is USD 40,000.", "EUR 40k spend.", "Budget 1.2 million dollars.",
+                               "It costs 40K/month.", "Revenue of 2M.", "Pricing ¥10"])
+def test_money_variants_flagged(t):
+    assert find_violations(t)
+
+
+def test_tokens_not_money():
+    assert find_violations("1.5M tokens per day") == []
+
+
+@pytest.mark.parametrize("t", ["5k credits", "5,000 Snowflake credits", "credits: 5000"])
+def test_credit_variants_flagged(t):
+    assert find_violations(t)
+
+
+def test_credit_card_not_flagged():
+    assert find_violations("credit card fraud detection") == []
+
+
+@pytest.mark.parametrize("t", ["greenlisted", "red-lighted"])
+def test_list_variants_flagged(t):
+    assert find_violations(t)
+
+
+@pytest.mark.parametrize("t", ["Load into stage 1 table.", "create a stage"])
+def test_data_stage_not_flagged(t):
+    assert find_violations(t) == []
+
+
+def test_sales_stage_flagged():
+    assert find_violations("use case stage 7")
+
+
+def test_arr_lowercase_code_not_flagged():
+    assert find_violations("arr[0]") == []
+    assert find_violations("ARR grew") and find_violations("Run-Rate")
+
+
+def test_scrub_preserves_lines():
+    out = scrub("Line1\n\n- item $5\n- item2", set())
+    assert out == "Line1\n\n- item2"
+
+
+def test_scrub_link_in_backticks_kept():
+    assert A in scrub(f"See `{A}` now.", {A})
+
+
+def test_scrub_markdown_link_trailing_punct_kept():
+    out = scrub(f"[doc]({A}).", {A + "/"})
+    assert out == f"[doc]({A})."
+
+
+def test_scrub_disallowed_link_removed_keeps_punct():
+    out = scrub("Go to https://evil.example.com/x.", {A})
+    assert "evil" not in out and out.endswith(".")
+
+
+def test_normalize_unicode_and_dotted():
+    assert normalize_company("Nestlé S.A.") == "nestle"
+
+
+def test_normalize_never_empty_for_nonempty():
+    assert normalize_company("The Company") != ""

@@ -9,13 +9,13 @@ _ASSETS = _DIR / "assets"
 
 @functools.lru_cache(maxsize=None)
 def recipes_index() -> list:
-    return json.loads((_ASSETS / "recipes_index.json").read_text())
+    return json.loads((_ASSETS / "recipes_index.json").read_text(encoding="utf-8"))
 
 
 @functools.lru_cache(maxsize=None)
 def recipe_body(recipe_id: str) -> str:
     p = _ASSETS / "recipes" / (recipe_id.replace("/", "__") + ".md")
-    return p.read_text() if p.exists() else ""
+    return p.read_text(encoding="utf-8") if p.exists() else ""
 
 
 def recipe_meta(recipe_id: str) -> dict:
@@ -24,17 +24,17 @@ def recipe_meta(recipe_id: str) -> dict:
 
 @functools.lru_cache(maxsize=None)
 def skill_text(rel_path: str) -> str:
-    return (_ASSETS / "skills" / rel_path).read_text()
+    return (_ASSETS / "skills" / rel_path).read_text(encoding="utf-8")
 
 
 @functools.lru_cache(maxsize=None)
 def override_text() -> str:
-    return (_DIR / "skill_override.md").read_text()
+    return (_DIR / "skill_override.md").read_text(encoding="utf-8")
 
 
 @functools.lru_cache(maxsize=None)
 def link_allowlist() -> frozenset:
-    return frozenset(json.loads((_ASSETS / "link_allowlist.json").read_text()))
+    return frozenset(json.loads((_ASSETS / "link_allowlist.json").read_text(encoding="utf-8")))
 
 
 @functools.lru_cache(maxsize=None)
