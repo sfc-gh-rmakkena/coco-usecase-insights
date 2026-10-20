@@ -45,14 +45,24 @@ def normalize_company(name: str) -> str:
     return " ".join(s) or re.sub(r"[^a-z0-9]+", "", raw)
 
 
-def find_violations(text: str) -> list:
+def sql_quote(s) -> str:
+    """Escape for a single-quoted Snowflake string literal (backslash first, then quote)."""
+    return (s or "").replace("\\", "\\\\").replace("'", "''")
+
+
+def _deny_patterns(deny):
+    terms = sorted({t.strip() for t in (deny or ()) if t and t.strip()}, key=len, reverse=True)
+    return [re.compile(r"(?<!\w)" + re.escape(t) + r"(?!\w)", re.I) for t in terms]
+
+
+def find_violations(text: str, deny=()) -> list:
     hits = []
-    for p in _PATTERNS:
+    for p in _PATTERNS + _deny_patterns(deny):
         hits.extend(m.group(0) for m in p.finditer(text or ""))
     return hits
 
 
-def scrub(text: str, allowed_links: set) -> str:
+def scrub(text: str, allowed_links: set, deny=()) -> str:
     allowed = {u.rstrip("/") for u in (allowed_links or ())}
 
     def _link(m):
@@ -64,7 +74,7 @@ def scrub(text: str, allowed_links: set) -> str:
     text = _URL.sub(_link, text or "")
     lines = []
     for line in text.split("\n"):
-        kept = [s for s in _SENT_SPLIT.split(line) if not find_violations(s)]
+        kept = [s for s in _SENT_SPLIT.split(line) if not find_violations(s, deny)]
         lines.append(re.sub(r"[ \t]{2,}", " ", " ".join(kept)).rstrip())
     out = "\n".join(lines)
     return re.sub(r"\n{3,}", "\n\n", out).strip()

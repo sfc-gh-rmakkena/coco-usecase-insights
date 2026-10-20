@@ -5,7 +5,7 @@ from . import assets
 S1_SCHEMA = ('{"prompts": [{"title": str, "purpose": str, "prompt": str}] '
              '(exactly 3: 1 discovery of relevant data/objects, 2 build with the proposed CoCo skill, 3 extend)}')
 S2_SCHEMA = ('{"problem_statement": str, "architecture": [str], '
-             '"steps": [{"title": str, "detail": str, "sql": str}], '
+             '"steps": [{"title": str, "detail": str, "sql": str}] (at most 8 steps), '
              '"coco_prompts": [str], "considerations": [str], "docs": [{"title": str, "url": str}]}')
 RECIPE_SCHEMA = '{"recipe_id": str, "confidence": int 0-100, "rationale": str}'
 

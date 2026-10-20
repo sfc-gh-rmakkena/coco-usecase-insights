@@ -1,5 +1,5 @@
 """Internal account eligibility + policy-safe A360 signals. Never rendered."""
-from .compliance import normalize_company
+from .compliance import normalize_company, sql_quote
 
 LISTED_SQL = "SELECT COMPANY_NAME FROM SNOWHOUSE.IT.RAW_GOOGLE_SHEETS.TOP_SNOWFLAKE_COMPANIES"
 BIG_TIER_MIN_ACTIVE_USERS = 25
@@ -17,6 +17,8 @@ def is_listed(account: str, listed: frozenset) -> bool:
 
 
 def usage_tier(active_users) -> str:
+    if active_users is None or active_users != active_users:  # None / NaN
+        return "No"
     n = int(active_users or 0)
     if n >= BIG_TIER_MIN_ACTIVE_USERS:
         return "Big"
@@ -24,7 +26,7 @@ def usage_tier(active_users) -> str:
 
 
 def _in_list(accounts) -> str:
-    return ", ".join("'" + a.upper().replace("'", "''") + "'" for a in sorted(set(accounts)) if a)
+    return ", ".join("'" + sql_quote(a.upper()) + "'" for a in sorted(set(accounts)) if a)
 
 
 def fetch_a360_context(conn, accounts: list) -> dict:

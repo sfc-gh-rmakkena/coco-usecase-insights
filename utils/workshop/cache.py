@@ -1,6 +1,8 @@
 import hashlib
 import json
 
+from .compliance import sql_quote
+
 from utils.config import get_schema
 
 
@@ -25,15 +27,17 @@ def compute_hash(inputs: dict, asset_version: str) -> str:
     return hashlib.sha256(blob.encode()).hexdigest()
 
 
-def _q(s):
-    return (s or "").replace("\\", "\\\\").replace("'", "''")
+_q = sql_quote
+MAX_ROWS_PER_INSERT = 20
+MAX_SQL_CHARS = 400_000
 
 
 def lookup(conn, hashes: list) -> dict:
     if not hashes:
         return {}
     df = conn.query(f"""SELECT CACHE_KEY_HASH, PAYLOAD FROM {_t('COCO_PSE_WORKSHOP_CACHE')}
-        WHERE CACHE_KEY_HASH IN ({', '.join(f"'{h}'" for h in hashes)})""", ttl=0)
+        WHERE CACHE_KEY_HASH IN ({', '.join(f"'{_q(h)}'" for h in hashes)})
+        QUALIFY ROW_NUMBER() OVER (PARTITION BY CACHE_KEY_HASH ORDER BY CREATED_AT DESC) = 1""", ttl=0)
     out = {}
     for _, r in df.iterrows():
         p = r["PAYLOAD"]
@@ -45,11 +49,24 @@ def insert(conn, rows: list, asset_version: str = ""):
     """rows: (hash, partner, uc_id, payload_dict)."""
     if not rows:
         return
-    sel = " UNION ALL ".join(
-        f"SELECT '{h}', '{_q(asset_version)}', '{_q(p)}', '{_q(u)}', PARSE_JSON('{_q(json.dumps(pl))}')"
-        for h, p, u, pl in rows)
-    conn.query(f"""INSERT INTO {_t('COCO_PSE_WORKSHOP_CACHE')}
-        (CACHE_KEY_HASH, ASSET_VERSION, PARTNER_NAME, USE_CASE_ID, PAYLOAD) {sel}""", ttl=0)
+    head = f"""INSERT INTO {_t('COCO_PSE_WORKSHOP_CACHE')}
+        (CACHE_KEY_HASH, ASSET_VERSION, PARTNER_NAME, USE_CASE_ID, PAYLOAD) """
+    sep = " UNION ALL "
+    chunk, size = [], len(head)
+
+    def _flush():
+        if chunk:
+            conn.query(head + sep.join(chunk), ttl=0)
+
+    for h, p, u, pl in rows:
+        sel = (f"SELECT '{_q(h)}', '{_q(asset_version)}', '{_q(p)}', '{_q(u)}', "
+               f"PARSE_JSON('{_q(json.dumps(pl))}')")
+        if chunk and (len(chunk) >= MAX_ROWS_PER_INSERT or size + len(sep) + len(sel) > MAX_SQL_CHARS):
+            _flush()
+            chunk, size = [], len(head)
+        chunk.append(sel)
+        size += len(sep) + len(sel)
+    _flush()
 
 
 def audit(conn, rows: list):

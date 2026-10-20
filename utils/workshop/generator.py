@@ -9,7 +9,7 @@ from .context import fetch_uc_context
 from .gate import fetch_a360_context, is_listed, load_listed_names
 
 MODEL = "claude-sonnet-4-5"
-MAX_WORKERS = 32
+MAX_WORKERS = 16
 _FENCE = re.compile(r"^```(?:json)?|```$", re.M)
 
 
@@ -19,24 +19,38 @@ def recipe_band(conf: int) -> str:
 
 def _parse(raw: str) -> dict:
     s = _FENCE.sub("", raw or "").strip()
-    start, end = s.find("{"), s.rfind("}")
-    return json.loads(s[start:end + 1]) if start >= 0 else {}
+    dec = json.JSONDecoder()
+    i = s.find("{")
+    while i >= 0:
+        try:
+            obj, _ = dec.raw_decode(s, i)
+            if isinstance(obj, dict):
+                return obj
+        except ValueError:
+            pass
+        i = s.find("{", i + 1)
+    return {}
 
 
-def _clean_sql(sql):
+PLAN_DEFAULT = {"problem_statement": "", "architecture": [], "steps": [], "coco_prompts": [],
+                "considerations": [], "docs": []}
+RECIPE_DEFAULT = {"band": "none", "id": "", "title": "", "confidence": 0, "rationale": "", "body": ""}
+
+
+def _clean_sql(sql, deny=()):
     # SQL is not sentence-scrubbed (would mangle it), but is blanked if it leaks.
     if not isinstance(sql, str):
         return ""
-    return "" if find_violations(sql) else sql
+    return "" if find_violations(sql, deny) else sql
 
 
-def _clean(value, allow):
+def _clean(value, allow, deny=()):
     if isinstance(value, str):
-        return scrub(value, allow)
+        return scrub(value, allow, deny)
     if isinstance(value, list):
-        return [v for v in (_clean(x, allow) for x in value) if v not in ("", [], {})]
+        return [v for v in (_clean(x, allow, deny) for x in value) if v not in ("", [], {})]
     if isinstance(value, dict):
-        return {k: _clean_sql(v) if k == "sql" else _clean(v, allow) for k, v in value.items()}
+        return {k: _clean_sql(v, deny) if k == "sql" else _clean(v, allow, deny) for k, v in value.items()}
     return value
 
 
@@ -47,14 +61,14 @@ def _to_conf(v) -> int:
         return 0
 
 
-def _call_json(llm, prompt, validate):
+def _call_json(llm, prompt, validate, deny=()):
     """One call + one regeneration if the result fails validation or still leaks."""
     for _ in range(2):
         try:
             data = _parse(llm(prompt))
         except Exception:
             continue
-        if isinstance(data, dict) and validate(data) and not find_violations(json.dumps(data)):
+        if isinstance(data, dict) and validate(data) and not find_violations(json.dumps(data), deny):
             return data
     return None
 
@@ -71,30 +85,43 @@ def _fallback_session1(uc):
     ]
 
 
-def build_one(uc, partner, account_signals, private_context, llm) -> dict:
+def _valid_s1(d):
+    p = d.get("prompts")
+    return (isinstance(p, list) and len(p) == 3
+            and all(isinstance(x, dict) and isinstance(x.get("prompt"), str) and x["prompt"].strip() for x in p))
+
+
+def build_one(uc, partner, account_signals, private_context, llm, deny=()) -> dict:
+    """Result carries "_degraded": True when Session 1 fell back or the Session 2 plan failed."""
     allow = assets.link_allowlist()
-    s1 = _call_json(llm, prompts.session1_prompt(uc, partner, account_signals),
-                    lambda d: len(d.get("prompts", [])) == 3)
-    session1 = _clean(s1["prompts"], allow) if s1 else _fallback_session1(uc)
+    s1 = _call_json(llm, prompts.session1_prompt(uc, partner, account_signals), _valid_s1, deny)
+    session1 = _clean(s1["prompts"], allow, deny) if s1 else None
+    if not session1 or len(session1) != 3:
+        session1 = None
+    degraded = session1 is None
+    if session1 is None:
+        session1 = _fallback_session1(uc)
 
     rm = _call_json(llm, prompts.recipe_match_prompt(uc),
-                    lambda d: assets.recipe_meta(d.get("recipe_id", "")) != {})
-    recipe = {"band": "none"}
+                    lambda d: assets.recipe_meta(d.get("recipe_id", "")) != {}, deny)
+    recipe = dict(RECIPE_DEFAULT)
     if rm:
         conf = _to_conf(rm.get("confidence", 0))
         band = recipe_band(conf)
         if band != "none":
             meta = assets.recipe_meta(rm["recipe_id"])
             recipe = {"band": band, "id": meta["id"], "title": meta["title"], "confidence": conf,
-                      "rationale": scrub(rm.get("rationale", ""), allow),
+                      "rationale": scrub(rm.get("rationale", ""), allow, deny),
                       "body": assets.recipe_body(meta["id"]) if band == "full" else ""}
 
-    plan_recipe = {k: recipe[k] for k in ("id", "title") if k in recipe} or None
+    plan_recipe = {k: recipe[k] for k in ("id", "title")} if recipe["id"] else None
     s2 = _call_json(llm, prompts.session2_prompt(uc, partner, private_context, plan_recipe),
-                    lambda d: bool(d.get("steps")))
-    plan = _clean(s2, allow) if s2 else {}
-    brief = plan.get("problem_statement") or scrub(uc.get("sanitized_desc", ""), allow)
-    return {"uc_id": uc["uc_id"], "account": uc["account"], "name": uc["name"], "skills": uc["skills"],
+                    lambda d: isinstance(d.get("steps"), list) and bool(d["steps"]), deny)
+    cleaned = _clean(s2, allow, deny) if s2 else {}
+    plan = {**PLAN_DEFAULT, **{k: v for k, v in cleaned.items() if k in PLAN_DEFAULT}}
+    degraded = degraded or not plan["steps"]
+    brief = plan.get("problem_statement") or scrub(uc.get("sanitized_desc", ""), allow, deny)
+    return {"_degraded": degraded, "uc_id": uc["uc_id"], "account": uc["account"], "name": uc["name"], "skills": uc["skills"],
             "brief": brief, "session1": session1, "session2": {"recipe": recipe, "plan": plan}}
 
 
@@ -114,7 +141,7 @@ def generate_workshops(conn, rows: list, partner: str, complete_fn, call_log=Non
     for r in rows:
         listed_flag = is_listed(r["account"], listed)
         signals = a360.get((r["account"] or "").upper()) if listed_flag else None
-        ctx = sfdc.get(r["uc_id"], {})
+        ctx = sfdc.get(r["uc_id"]) or {"llm": {}, "deny": []}
         key = cache.compute_hash({"uc": {k: r.get(k) for k in ("uc_id", "name", "account", "skills", "sanitized_desc")},
                                   "partner": partner, "signals": signals, "ctx": ctx}, version)
         jobs.append((r, signals, ctx, key, "listed" if listed_flag else "unlisted"))
@@ -130,12 +157,14 @@ def generate_workshops(conn, rows: list, partner: str, complete_fn, call_log=Non
             if log_wrap and call_log is not None:
                 return log_wrap(call_log, "workshop", r["name"], complete_fn, conn, MODEL, prompt)
             return complete_fn(conn, MODEL, prompt)
-        return build_one(r, partner, signals, ctx, llm)
+        return build_one(r, partner, signals, ctx["llm"], llm, deny=ctx["deny"])
 
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
         results = list(ex.map(_run, jobs))
 
-    cache.insert(conn, [(j[3], partner, j[0]["uc_id"], res) for j, res in zip(jobs, results) if j[3] not in hits],
+    degraded = [bool(res.pop("_degraded", False)) for res in results]
+    cache.insert(conn, [(j[3], partner, j[0]["uc_id"], res) for j, res, bad in zip(jobs, results, degraded)
+                        if j[3] not in hits and not bad],
                  asset_version=version)
     cache.audit(conn, [(partner, j[0]["uc_id"], j[4], j[3] in hits) for j in jobs])
     return results

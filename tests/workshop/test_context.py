@@ -8,7 +8,9 @@ def test_fetch_uc_context_maps_fields_and_drops_never_sent():
     df = pd.DataFrame({"USE_CASE_ID": [uid], "DESCRIPTION": ["Forecast demand"],
                        "SE_COMMENTS": ["Customer on Databricks"], "TECHNICAL_CHAMPION": ["Jane Doe"],
                        "FUTURE_STATE_DIAGRAM": ["https://docs.google.com/x"], "INDUSTRY": ["Pharma"]})
-    ctx = fetch_uc_context(FakeConn({"DD_SALESFORCE_USE_CASE": df}), [uid, "bad'id"])
+    full = fetch_uc_context(FakeConn({"DD_SALESFORCE_USE_CASE": df}), [uid, "bad'id"])
+    assert full[uid]["deny"] == ["Jane Doe"]
+    ctx = {uid: full[uid]["llm"]}
     assert ctx[uid]["DESCRIPTION"] == "Forecast demand"
     assert ctx[uid]["TECHNICAL_CHAMPION"] == "named champion identified"
     assert "FUTURE_STATE_DIAGRAM" not in ctx[uid]

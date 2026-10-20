@@ -4,6 +4,10 @@ import re
 _ID_RE = re.compile(r"^[A-Za-z0-9]{15,18}$")
 PEOPLE = {"TECHNICAL_CHAMPION", "POC_LED_BY", "IMPLEMENTER"}
 NEVER_SENT = {"FUTURE_STATE_DIAGRAM", "EACV", "USE_CASE_NUMBER"}
+# Raw values of these fields are never echoed in output (people are also masked in the LLM context).
+DENY_FIELDS = PEOPLE | {"COMPETITORS", "INCUMBENT_VENDOR"}
+_DENY_SPLIT = re.compile(r"[;,/|\n]")
+_GENERIC = {"none", "n/a", "other", "snowflake", "tbd"}
 
 UC_CONTEXT_SQL = """
 SELECT u.SALESFORCE_USE_CASE_ID AS USE_CASE_ID,
@@ -41,17 +45,31 @@ WHERE u.SALESFORCE_USE_CASE_ID IN ({ids})
 """
 
 
+def _deny_terms(values) -> list:
+    out, seen = [], set()
+    for v in values:
+        for t in _DENY_SPLIT.split(v):
+            t = t.strip()
+            if len(t) >= 3 and t.lower() not in _GENERIC and t.lower() not in seen:
+                seen.add(t.lower())
+                out.append(t)
+    return out
+
+
 def fetch_uc_context(conn, uc_ids: list) -> dict:
+    """{uc_id: {"llm": {field: value}, "deny": [terms]}}. Only "llm" is sent to the model."""
     safe = [i for i in uc_ids if i and _ID_RE.match(i)]
     if not safe:
         return {}
     df = conn.query(UC_CONTEXT_SQL.format(ids=", ".join(f"'{i}'" for i in safe)), ttl=3600)
     out = {}
     for _, r in df.iterrows():
-        d = {}
+        d, raw_deny = {}, []
         for k, v in r.items():
             if k in NEVER_SENT or k == "USE_CASE_ID" or v is None or str(v).strip() in ("", "nan", "None"):
                 continue
+            if k in DENY_FIELDS:
+                raw_deny.append(str(v))
             d[k] = "named champion identified" if k in PEOPLE else str(v)
-        out[r["USE_CASE_ID"]] = d
+        out[r["USE_CASE_ID"]] = {"llm": d, "deny": _deny_terms(raw_deny)}
     return out

@@ -32,7 +32,7 @@ def test_recipe_band_full_reference_none():
 def test_build_one_shape_identical_for_both_paths():
     a = generator.build_one(UC, "Deloitte", {"usage_tier": "Low"}, {}, fake_llm_factory())
     b = generator.build_one(UC, "Deloitte", None, {}, fake_llm_factory())
-    assert set(a) == set(b) == {"uc_id", "account", "name", "skills", "brief", "session1", "session2"}
+    assert set(a) == set(b) == {"_degraded", "uc_id", "account", "name", "skills", "brief", "session1", "session2"}
     assert len(a["session1"]) == 3
     assert a["session2"]["recipe"]["band"] == "full"
 
