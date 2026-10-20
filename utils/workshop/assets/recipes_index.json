@@ -1,0 +1,705 @@
+[
+ {
+  "id": "ai-observability/agent-feedback-to-evals",
+  "title": "Turn agent feedback and rephrased questions into an evaluation dataset",
+  "description": "Mine thumbs-down feedback and user rephrases from agent traces, confirm each with one LLM call, and write a deduplicated eval dataset.",
+  "topics": [
+   "ai-observability",
+   "cortex-agents"
+  ],
+  "features": [
+   "feedback",
+   "agent-traces",
+   "agent-evaluation"
+  ],
+  "stages": [
+   "evaluate",
+   "operate"
+  ],
+  "estimated_time": "40min",
+  "sql_files": [
+   "01_setup.sql",
+   "02_grant_unredacted.sql",
+   "03_agent.sql",
+   "04_simulate_traffic.sql",
+   "05_mine_signals.sql",
+   "99_teardown.sql"
+  ],
+  "related_skills": [
+   "agent-studio",
+   "cortex-ai-function-studio"
+  ]
+ },
+ {
+  "id": "ai-observability/ai-usage-cost-attribution",
+  "title": "AI usage and cost attribution across agents, CoWork, Cortex Code, and AI functions",
+  "description": "One reconciled view of Cortex AI credits by surface, user, agent, model, and cost center, plus budgets and per-user quotas.",
+  "topics": [
+   "ai-observability",
+   "cortex-code",
+   "cortex-ai-functions"
+  ],
+  "features": [
+   "cost-attribution",
+   "budgets-quotas"
+  ],
+  "stages": [
+   "operate"
+  ],
+  "estimated_time": "30min",
+  "sql_files": [
+   "01_setup.sql",
+   "02_views.sql",
+   "03_attribution_queries.sql",
+   "04_budget_and_quota.sql",
+   "05_quota_limit.sql",
+   "99_teardown.sql"
+  ],
+  "related_skills": [
+   "cost-intelligence"
+  ]
+ },
+ {
+  "id": "ai-observability/coco-user-budget-sizing",
+  "title": "Size Cortex Code per-user limits from real usage",
+  "description": "Tiered per-user CoCo quotas, daily limits, and alert-only team budgets, starting from conservative defaults and sized from your own ACCOUNT_USAGE.",
+  "topics": [
+   "ai-observability",
+   "cortex-code"
+  ],
+  "features": [
+   "budgets-quotas",
+   "cost-attribution"
+  ],
+  "stages": [
+   "operate"
+  ],
+  "estimated_time": "30min",
+  "sql_files": [
+   "01_setup.sql",
+   "02_size_your_limits.sql",
+   "03_quotas_and_budget.sql",
+   "04_limits.sql",
+   "05_account_backstop.sql",
+   "99_teardown.sql"
+  ],
+  "related_skills": [
+   "cost-intelligence"
+  ]
+ },
+ {
+  "id": "ai-observability/diagnose-agent-requests",
+  "title": "Diagnose slow Cortex Agent requests from their traces",
+  "description": "A caller's-rights procedure that reads one agent request's trace, computes a time breakdown by span, and returns an LLM explanation.",
+  "topics": [
+   "ai-observability",
+   "cortex-agents"
+  ],
+  "features": [
+   "agent-traces"
+  ],
+  "stages": [
+   "operate"
+  ],
+  "estimated_time": "20min",
+  "sql_files": [
+   "01_setup.sql",
+   "02_agent.sql",
+   "03_diagnose_request.sql",
+   "04_run_and_diagnose.sql",
+   "99_teardown.sql"
+  ],
+  "related_skills": [
+   "agent-studio"
+  ]
+ },
+ {
+  "id": "cortex-agents/agent-causal-grounding",
+  "title": "Causally grounded Cortex Agent that refuses when the data cannot answer",
+  "description": "A Cortex Agent whose every number comes from a persisted causal estimator, and which declines to answer for cohorts where no honest estimate exists.",
+  "topics": [
+   "cortex-agents",
+   "semantic-views"
+  ],
+  "features": [
+   "agent-grounding",
+   "data-agent-run",
+   "access-control"
+  ],
+  "stages": [
+   "build",
+   "evaluate"
+  ],
+  "estimated_time": "90min",
+  "sql_files": [
+   "00_verify_packages.sql",
+   "10_agent_user_role.sql",
+   "99_teardown.sql"
+  ],
+  "related_skills": [
+   "machine-learning",
+   "agent-studio"
+  ]
+ },
+ {
+  "id": "cortex-agents/agent-ci-cd-with-dbt",
+  "title": "Agent CI/CD with dbt: per-PR builds, versioned deploys, and an evaluation gate",
+  "description": "dbt builds the tables and semantic view, the agent ships as a versioned spec from a stage, and an evaluation gate in GitHub Actions blocks promotion.",
+  "topics": [
+   "cortex-agents",
+   "semantic-views"
+  ],
+  "features": [
+   "agent-ci-cd",
+   "agent-versioning",
+   "agent-evaluation"
+  ],
+  "stages": [
+   "operate",
+   "evaluate"
+  ],
+  "estimated_time": "60min",
+  "sql_files": [
+   "01_setup.sql",
+   "02_pipeline_procedures.sql",
+   "03_eval_dataset.sql",
+   "04_ci_service_user.sql",
+   "99_teardown.sql"
+  ],
+  "related_skills": [
+   "dbt-projects-on-snowflake",
+   "agent-studio"
+  ]
+ },
+ {
+  "id": "cortex-agents/agent-evaluations",
+  "title": "Evaluate and promote Cortex Agent versions",
+  "description": "Run Cortex Agent evaluations with pinned metric versions and a custom judge, compare two committed versions, and promote the winner by alias.",
+  "topics": [
+   "cortex-agents"
+  ],
+  "features": [
+   "agent-evaluation",
+   "agent-versioning",
+   "data-agent-run"
+  ],
+  "stages": [
+   "evaluate",
+   "operate"
+  ],
+  "estimated_time": "45min",
+  "sql_files": [
+   "01_setup.sql",
+   "02_agent.sql",
+   "03_eval_dataset.sql",
+   "04_run_baseline.sql",
+   "05_results.sql",
+   "06_candidate.sql",
+   "07_compare_and_promote.sql",
+   "99_teardown.sql"
+  ],
+  "related_skills": [
+   "agent-studio"
+  ]
+ },
+ {
+  "id": "cortex-agents/agent-versioning-and-promotion",
+  "title": "Agent versioning and promotion",
+  "description": "Commit, alias, promote, A/B route, and roll back Cortex Agent versions with runnable SQL and the behaviors observed along the way.",
+  "topics": [
+   "cortex-agents"
+  ],
+  "features": [
+   "agent-versioning",
+   "data-agent-run",
+   "agent-ci-cd"
+  ],
+  "stages": [
+   "operate"
+  ],
+  "estimated_time": "30min",
+  "sql_files": [
+   "01_setup.sql",
+   "02_commit_candidate.sql",
+   "03_route_by_version.sql",
+   "04_ab_routing.sql",
+   "05_promote.sql",
+   "06_rollback.sql",
+   "07_import_version_from_stage.sql",
+   "99_teardown.sql"
+  ],
+  "related_skills": [
+   "agent-studio"
+  ]
+ },
+ {
+  "id": "cortex-agents/document-context",
+  "title": "Attach documents to Cortex Agent conversations",
+  "description": "Let users attach PDFs, Office files, images, and CSVs to a custom agent frontend with a caller's-rights document tool, per-user stage folders, and authenticated middleware.",
+  "topics": [
+   "cortex-agents"
+  ],
+  "features": [
+   "document-context",
+   "agent-rest-api",
+   "data-agent-run",
+   "access-control"
+  ],
+  "stages": [
+   "build",
+   "secure"
+  ],
+  "estimated_time": "45min",
+  "sql_files": [
+   "01_setup.sql",
+   "02_objects.sql",
+   "03_upload_samples.sql",
+   "04_ask_agent.sql",
+   "99_teardown.sql"
+  ],
+  "related_skills": [
+   "document-intelligence",
+   "check-agent-access"
+  ]
+ },
+ {
+  "id": "cortex-agents/embedded-app-context",
+  "title": "Embedded app context for a Cortex Agent",
+  "description": "Give an agent embedded in a Streamlit dashboard the page, filters, and persona the user is looking at, by prepending an app-context block to the user message.",
+  "topics": [
+   "cortex-agents"
+  ],
+  "features": [
+   "embedded-context",
+   "agent-rest-api",
+   "access-control"
+  ],
+  "stages": [
+   "build"
+  ],
+  "estimated_time": "30min",
+  "sql_files": [
+   "01_setup.sql",
+   "02_data.sql",
+   "03_agent.sql",
+   "04_app_grants.sql",
+   "99_teardown.sql"
+  ],
+  "related_skills": []
+ },
+ {
+  "id": "cortex-agents/multi-agent-orchestration",
+  "title": "Multi-agent orchestration with caller's-rights delegation",
+  "description": "One orchestrator agent delegates to specialist agents through caller's-rights DATA_AGENT_RUN bridges, so Snowflake grants decide which specialist each user reaches.",
+  "topics": [
+   "cortex-agents",
+   "semantic-views"
+  ],
+  "features": [
+   "multi-agent",
+   "data-agent-run",
+   "access-control",
+   "agent-evaluation"
+  ],
+  "stages": [
+   "build",
+   "secure"
+  ],
+  "estimated_time": "60min",
+  "sql_files": [
+   "01_setup.sql",
+   "02_data.sql",
+   "03_semantic_views.sql",
+   "04_row_access_policy.sql",
+   "05_bridges.sql",
+   "06_agents.sql",
+   "07_grants.sql",
+   "08_routing_eval.sql",
+   "99_teardown.sql"
+  ],
+  "related_skills": [
+   "check-agent-access"
+  ]
+ },
+ {
+  "id": "cortex-agents/multi-tenant-agents",
+  "title": "Multi-tenant agents with session attributes and fail-closed policies",
+  "description": "Serve many tenants from one Cortex Agent: the app server names the end user in an immutable session attribute, and policies derive the tenant from an entitlement.",
+  "topics": [
+   "cortex-agents",
+   "semantic-views"
+  ],
+  "features": [
+   "multi-tenancy",
+   "session-attributes",
+   "agent-rest-api",
+   "data-agent-run",
+   "access-control"
+  ],
+  "stages": [
+   "secure",
+   "build"
+  ],
+  "estimated_time": "45min",
+  "sql_files": [
+   "01_setup.sql",
+   "02_data.sql",
+   "03_policies.sql",
+   "04_agent.sql",
+   "05_grants.sql",
+   "99_teardown.sql"
+  ],
+  "related_skills": []
+ },
+ {
+  "id": "cortex-agents/oauth-token-passthrough",
+  "title": "OAuth token passthrough to a Cortex Agent",
+  "description": "Relay each signed-in user's Entra ID token to a Cortex Agent so the agent runs as that person, with per-user results from a row access policy on CURRENT_USER().",
+  "topics": [
+   "cortex-agents"
+  ],
+  "features": [
+   "oauth",
+   "agent-rest-api",
+   "access-control"
+  ],
+  "stages": [
+   "secure"
+  ],
+  "estimated_time": "60min",
+  "sql_files": [
+   "01_setup.sql",
+   "02_security_integration.sql",
+   "03_data_and_policy.sql",
+   "04_agent.sql",
+   "99_teardown.sql"
+  ],
+  "related_skills": [
+   "rbac"
+  ]
+ },
+ {
+  "id": "cortex-agents/scoping-agentic-implementations",
+  "title": "Scoping agentic implementations: from 'talk to your data' to a testable agent spec",
+  "description": "A workshop method for turning a broad agent idea into personas, a question taxonomy, a registered evaluation dataset, and a phased delivery plan.",
+  "topics": [
+   "cortex-agents",
+   "ai-observability",
+   "cortex-ai-functions"
+  ],
+  "features": [
+   "agent-scoping",
+   "agent-evaluation",
+   "access-control"
+  ],
+  "stages": [
+   "scope",
+   "evaluate"
+  ],
+  "estimated_time": "75min",
+  "sql_files": [
+   "01_setup.sql",
+   "02_question_taxonomy.sql",
+   "03_eval_dataset.sql",
+   "04_observability.sql",
+   "99_teardown.sql"
+  ],
+  "related_skills": [
+   "agent-studio",
+   "cortex-ai-function-studio",
+   "check-agent-access"
+  ]
+ },
+ {
+  "id": "cortex-ai-functions/agentic-schema-mapping",
+  "title": "Agentic schema mapping: messy CSVs to canonical tables with a Cortex Agent",
+  "description": "A Cortex Agent profiles messy CSV files, proposes column mappings with AI_COMPLETE, resolves free-text values, and loads approved mappings through allowlisted SQL.",
+  "topics": [
+   "cortex-ai-functions",
+   "cortex-agents"
+  ],
+  "features": [
+   "schema-mapping",
+   "ai-complete",
+   "structured-output",
+   "data-agent-run",
+   "agent-grounding"
+  ],
+  "stages": [
+   "build"
+  ],
+  "estimated_time": "45min",
+  "sql_files": [
+   "01_setup.sql",
+   "02_seed_reference_data.sql",
+   "03_stage_sample_files.sql",
+   "04_deploy_tools.sql",
+   "05_semantic_view.sql",
+   "06_agent.sql",
+   "07_run_and_test.sql",
+   "99_teardown.sql"
+  ],
+  "related_skills": [
+   "cortex-ai-function-studio",
+   "agent-optimization",
+   "check-agent-access",
+   "semantic-view-patterns"
+  ]
+ },
+ {
+  "id": "cortex-ai-functions/pii-redaction",
+  "title": "PII redaction with AI_REDACT, AI_COMPLETE extraction, and an entity cache",
+  "description": "Redact PII in free text with AI_REDACT, cover domain identifiers with AI_COMPLETE structured extraction, and serve redactions from a stream-maintained cache.",
+  "topics": [
+   "cortex-ai-functions"
+  ],
+  "features": [
+   "ai-redact",
+   "ai-complete",
+   "structured-output",
+   "pii-redaction"
+  ],
+  "stages": [
+   "build",
+   "secure"
+  ],
+  "estimated_time": "30min",
+  "sql_files": [
+   "01_setup.sql",
+   "02_ai_redact.sql",
+   "03_extract_and_replace.sql",
+   "04_incremental_cache.sql",
+   "99_teardown.sql"
+  ],
+  "related_skills": [
+   "cortex-ai-function-studio",
+   "snowflake-tasks"
+  ]
+ },
+ {
+  "id": "cortex-ai-gateway/gateway-governance-quickstart",
+  "title": "Cortex AI Gateway governance quickstart",
+  "description": "Route an app through Cortex AI Gateway with its own identity: both API formats, a model allowlist, traces, per-user cost, and a blocking quota.",
+  "topics": [
+   "cortex-ai-gateway",
+   "ai-observability"
+  ],
+  "features": [
+   "gateway-spec",
+   "gateway-tracing",
+   "gateway-cost",
+   "budgets-quotas"
+  ],
+  "stages": [
+   "operate",
+   "secure"
+  ],
+  "estimated_time": "45min",
+  "sql_files": [
+   "01_setup.sql",
+   "02_snapshot_gateway_spec.sql",
+   "03_service_user_pat.sql",
+   "04_per_user_quota.sql",
+   "05_allowlist_restrict.sql",
+   "06_restore_gateway_spec.sql",
+   "07_shared_resource_budget_optional.sql",
+   "99_teardown.sql"
+  ],
+  "related_skills": [
+   "cost-intelligence"
+  ]
+ },
+ {
+  "id": "cortex-ai-gateway/langchain-mcp-agent-tracing",
+  "title": "LangChain agents on Cortex AI Gateway with MCP tools and traces",
+  "description": "External LangChain agents reason through Cortex AI Gateway, act through a Snowflake MCP server, and are analyzed from gateway traces and per-user cost.",
+  "topics": [
+   "cortex-ai-gateway",
+   "snowflake-mcp",
+   "ai-observability"
+  ],
+  "features": [
+   "external-agents",
+   "gateway-tracing",
+   "gateway-cost",
+   "mcp-server",
+   "mcp-clients",
+   "agent-traces"
+  ],
+  "stages": [
+   "operate",
+   "build"
+  ],
+  "estimated_time": "45min",
+  "sql_files": [
+   "01_setup.sql",
+   "02_data_and_mcp_server.sql",
+   "03_service_user_pat.sql",
+   "04_trace_queries.sql",
+   "99_teardown.sql"
+  ],
+  "related_skills": [
+   "cost-intelligence",
+   "semantic-view-patterns"
+  ]
+ },
+ {
+  "id": "semantic-views/description-quality",
+  "title": "Semantic view description quality: a rubric, a linter, and how to apply fixes",
+  "description": "Grade semantic view descriptions on preciseness, conciseness, non-circularity, and correctness, lint them in SQL, and apply fixes with CREATE OR ALTER or the YAML procedure.",
+  "topics": [
+   "semantic-views",
+   "cortex-ai-functions"
+  ],
+  "features": [
+   "semantic-descriptions",
+   "ai-complete",
+   "structured-output"
+  ],
+  "stages": [
+   "evaluate"
+  ],
+  "estimated_time": "20min",
+  "sql_files": [
+   "01_example_setup.sql",
+   "02_lint_descriptions.sql",
+   "03_apply_descriptions.sql",
+   "99_teardown.sql"
+  ],
+  "related_skills": [
+   "agent-studio",
+   "semantic-view-patterns"
+  ]
+ },
+ {
+  "id": "semantic-views/mixed-grain-and-verified-queries",
+  "title": "Mixed-grain tables: diagnose and fix wrong agent answers with a GRAIN dimension and verified queries",
+  "description": "An agent double-counts a table that holds daily and monthly rows. Diagnose it from wrong answers, fix the semantic view with a GRAIN enum, rules, and verified queries, re-test.",
+  "topics": [
+   "semantic-views",
+   "cortex-agents"
+  ],
+  "features": [
+   "mixed-grain",
+   "verified-queries",
+   "semantic-descriptions",
+   "agent-evaluation"
+  ],
+  "stages": [
+   "build",
+   "evaluate"
+  ],
+  "estimated_time": "30min",
+  "sql_files": [
+   "01_setup.sql",
+   "02_semantic_view_before.sql",
+   "03_agent_and_test_harness.sql",
+   "04_test_before.sql",
+   "05_diagnose.sql",
+   "06_fix_semantic_view.sql",
+   "07_test_after.sql",
+   "99_teardown.sql"
+  ],
+  "related_skills": [
+   "semantic-view-patterns",
+   "agent-studio"
+  ]
+ },
+ {
+  "id": "semantic-views/refinement-loop-from-agent-logs",
+  "title": "Refine a semantic view from agent logs: triage, SME review, and verified queries",
+  "description": "Mine Cortex Agent traces for guessed, exploratory, and no-data answers, get the right answer from a subject matter expert, ship it into the semantic view, and re-test.",
+  "topics": [
+   "semantic-views",
+   "ai-observability",
+   "cortex-agents"
+  ],
+  "features": [
+   "semantic-refinement",
+   "verified-queries",
+   "semantic-descriptions",
+   "agent-traces"
+  ],
+  "stages": [
+   "evaluate",
+   "operate"
+  ],
+  "estimated_time": "30min",
+  "sql_files": [
+   "01_example_setup.sql",
+   "02_grant_unredacted.sql",
+   "03_generate_traffic.sql",
+   "04_triage.sql",
+   "05_apply_refinements.sql",
+   "06_retest.sql",
+   "99_teardown.sql"
+  ],
+  "related_skills": [
+   "semantic-view-patterns",
+   "agent-studio"
+  ]
+ },
+ {
+  "id": "snowflake-mcp/long-running-agents-over-mcp",
+  "title": "Long-running Cortex Agent runs over managed MCP",
+  "description": "Split one long MCP tool call into a fast submit and a bounded fetch over background agent runs, so no call nears a client's timeout and caller's rights still apply.",
+  "topics": [
+   "snowflake-mcp",
+   "cortex-agents"
+  ],
+  "features": [
+   "long-running-agents",
+   "mcp-server",
+   "data-agent-run"
+  ],
+  "stages": [
+   "build",
+   "operate"
+  ],
+  "estimated_time": "45min",
+  "sql_files": [
+   "01_setup.sql",
+   "02_agent.sql",
+   "03_run_procs.sql",
+   "04_slow_test_agent.sql",
+   "05_mcp_server.sql",
+   "99_teardown.sql"
+  ],
+  "related_skills": [
+   "check-agent-access"
+  ]
+ },
+ {
+  "id": "snowflake-mcp/mcp-or-agent-rest-api",
+  "title": "Snowflake-managed MCP or the Cortex Agents REST API",
+  "description": "Decide how people reach a Cortex Agent, with identity and policies in each lane, then best practices for managed MCP servers and the Agents REST API.",
+  "topics": [
+   "snowflake-mcp",
+   "cortex-agents"
+  ],
+  "features": [
+   "mcp-server",
+   "mcp-clients",
+   "agent-rest-api",
+   "access-control",
+   "oauth",
+   "multi-tenancy"
+  ],
+  "stages": [
+   "scope",
+   "secure",
+   "build"
+  ],
+  "estimated_time": "45min",
+  "sql_files": [
+   "01_setup.sql",
+   "02_mcp_server.sql",
+   "03_oauth_integration.sql",
+   "99_teardown.sql"
+  ],
+  "related_skills": [
+   "check-agent-access",
+   "rbac"
+  ]
+ }
+]

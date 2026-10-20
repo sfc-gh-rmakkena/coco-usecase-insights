@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="snowflake-source" content="cortex-agent-authored" />
+<title>{{ACCOUNT_NAME}} — {{USE_CASE_SHORT_NAME}} Solution Guide</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    font-size: clamp(14px, 1.6vw, 16px);
+    --sf-blue: #29B5E8;
+    --sf-dark: #1B2A4A;
+    --sf-light: #F0F8FF;
+    --sf-green: #2E844A;
+    --sf-amber: #E87722;
+    --sf-red: #C23934;
+    --sf-gray: #706E6B;
+    --border: #E1E5EE;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+    color: #333; line-height: 1.6; max-width: 1100px; margin: 0 auto; padding: 0 24px;
+    background: #fff;
+  }
+  .header {
+    background: linear-gradient(135deg, var(--sf-dark) 0%, #2D3F5E 100%);
+    color: white; padding: 48px 40px; margin: 0 -24px 32px; text-align: center;
+  }
+  .header .logo { font-size: 1.1em; letter-spacing: 4px; font-weight: 700; color: var(--sf-blue); margin-bottom: 8px; }
+  .header h1 { font-size: 2em; font-weight: 300; margin: 16px 0 8px; color: #FFFFFF; }
+  .header h2 { font-size: 1.2em; font-weight: 400; color: #93C5FD; }
+  .header .meta { margin-top: 16px; font-size: 0.9em; opacity: 0.7; }
+  h1 { font-size: 1.8em; color: var(--sf-dark); margin: 40px 0 16px; padding-bottom: 8px; border-bottom: 2px solid var(--sf-blue); }
+  h2 { font-size: 1.3em; color: var(--sf-dark); margin: 28px 0 12px; }
+  h3 { font-size: 1.1em; color: #555; margin: 20px 0 8px; }
+  p { margin: 8px 0; }
+  table { width: 100%; border-collapse: collapse; margin: 16px 0 24px; font-size: 0.92em; }
+  th { background: var(--sf-dark); color: white; padding: 10px 14px; text-align: left; font-weight: 600; }
+  td { padding: 10px 14px; border-bottom: 1px solid var(--border); }
+  tr:nth-child(even) td { background: #F8FAFC; }
+  tr:hover td { background: #EDF2F7; }
+  .badge {
+    display: inline-block; padding: 2px 10px; border-radius: 12px;
+    font-size: 0.82em; font-weight: 600; letter-spacing: 0.5px;
+  }
+  .badge-green { background: #E6F4EA; color: var(--sf-green); }
+  .badge-amber { background: #FFF3E0; color: var(--sf-amber); }
+  .badge-blue { background: #E3F2FD; color: #1565C0; }
+  .badge-red { background: #FDECEA; color: var(--sf-red); }
+  .badge-gray { background: #F0F0F0; color: var(--sf-gray); }
+  .callout {
+    background: var(--sf-light); border-left: 4px solid var(--sf-blue);
+    padding: 16px 20px; margin: 16px 0; border-radius: 0 8px 8px 0;
+  }
+  .callout-warn {
+    background: #FFF8E1; border-left: 4px solid var(--sf-amber);
+    padding: 16px 20px; margin: 16px 0; border-radius: 0 8px 8px 0;
+  }
+  .callout strong { color: var(--sf-dark); }
+  code {
+    background: #F0F2F5; padding: 2px 6px; border-radius: 4px;
+    font-family: 'SF Mono', 'Fira Code', monospace; font-size: 0.9em;
+  }
+  pre {
+    background: #1E293B; color: #E2E8F0; padding: 16px 20px;
+    border-radius: 8px; overflow-x: auto; margin: 12px 0;
+    font-family: 'SF Mono', 'Fira Code', monospace; font-size: 0.88em;
+    line-height: 1.5;
+  }
+  .toc { background: #F8FAFC; padding: 20px 28px; border-radius: 8px; margin: 24px 0; }
+  .toc h3 { margin-top: 0; color: var(--sf-dark); }
+  .toc ol { padding-left: 20px; }
+  .toc li { margin: 4px 0; }
+  .toc a { color: var(--sf-blue); text-decoration: none; }
+  .toc a:hover { text-decoration: underline; }
+  a { color: var(--sf-blue); }
+  .source { font-size: 0.82em; color: var(--sf-gray); margin-top: -8px; font-style: italic; }
+  .source a { color: var(--sf-blue); }
+  .coco-prompt {
+    background: linear-gradient(135deg, #F0F8FF 0%, #E8F4FD 100%);
+    border-left: 4px solid var(--sf-blue); padding: 12px 16px;
+    margin: 12px 0; border-radius: 0 8px 8px 0; font-style: italic;
+  }
+  .coco-prompt strong { color: var(--sf-dark); font-style: normal; }
+  ul, ol { margin: 8px 0 8px 24px; }
+  li { margin: 4px 0; }
+  .summary-box {
+    background: linear-gradient(135deg, #F0F8FF 0%, #E8F4FD 100%);
+    border: 1px solid #B3DAF1; border-radius: 8px; padding: 20px 24px; margin: 20px 0;
+  }
+  .footer {
+    text-align: center; color: var(--sf-gray); font-size: 0.85em;
+    margin: 48px 0 32px; padding-top: 16px; border-top: 1px solid var(--border);
+  }
+  @media print {
+    .header { break-after: avoid; }
+    table { page-break-inside: avoid; }
+    pre { white-space: pre-wrap; }
+  }
+</style>
+</head>
+<body>
+
+<!-- HEADER -->
+<div class="header">
+  <div class="logo">SNOWFLAKE</div>
+  <h1>{{ACCOUNT_NAME}}</h1>
+  <h2 style="font-size: 1.1em; font-weight: 400; color: #93C5FD; margin: 4px 0;">{{USE_CASE_NAME}}</h2>
+  <h3 style="font-size: 0.95em; font-weight: 300; color: rgba(255,255,255,0.7); margin: 2px 0;">{{REPORT_SUBTITLE}}</h3>
+  <div style="margin: 12px 0 8px; font-size: 0.95em; letter-spacing: 2px; text-transform: uppercase; color: #93C5FD; font-weight: 600;">Recommended Implementation Plan</div>
+  <div class="meta">
+    Prepared for: {{ACCOUNT_NAME}} / {{PARTNER_NAME}}<br />
+    Prepared by: Snowflake Partner Solutions Engineering (PSE)<br />
+    Date: {{DATE}}
+  </div>
+</div>
+
+<!-- TABLE OF CONTENTS -->
+<div class="toc">
+  <h3>Table of Contents</h3>
+  <ol>
+    <li><a href="#context">Context &amp; Background</a></li>
+    <li><a href="#architecture">Solution Architecture</a></li>
+    <li><a href="#technical">Detailed Technical Approach</a></li>
+    <li><a href="#coco">CoCo Skills Acceleration</a></li>
+    <li><a href="#decision">Summary &amp; Decision Matrix</a></li>
+    <li><a href="#nextsteps">Recommended Next Steps</a></li>
+    <li><a href="#resources">Quickstart Resources &amp; Documentation</a></li>
+  </ol>
+</div>
+
+<!-- SECTIONS — Replace {{PLACEHOLDERS}} with real content -->
+
+<h1 id="context">1. Context &amp; Background</h1>
+<!-- Customer context, problem statement, executive summary table -->
+
+<h1 id="architecture">2. Solution Architecture</h1>
+<!-- Layered architecture, component status table -->
+
+<h1 id="technical">3. Detailed Technical Approach</h1>
+<!-- Per-topic sections with SQL, CLI, configuration, decision matrices -->
+
+<h1 id="coco">4. CoCo Skills Acceleration</h1>
+<!-- Skills table + Before vs After -->
+
+<h1 id="decision">5. Summary &amp; Decision Matrix</h1>
+<!-- Topic | Verdict | Production Ready | Action Required -->
+
+<h1 id="nextsteps">6. Recommended Next Steps</h1>
+<!-- Numbered action items -->
+
+<h1 id="resources">7. Quickstart Resources &amp; Documentation</h1>
+<!-- Links tables -->
+
+<div class="footer">
+  Generated by Cortex Code (CoCo)<br />
+  Snowflake Partner Solutions Engineering
+</div>
+
+</body>
+</html>
