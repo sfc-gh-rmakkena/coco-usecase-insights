@@ -197,6 +197,8 @@ BEGIN
             uc.COCO_SOURCE,
             uc.IS_NOT_COCO,
             uc.CREATED_DATE,
+            -- "AI - Cortex Code" prioritized feature, independent of COCO_SOURCE priority
+            COALESCE(mdm.PRIORITIZED_FEATURES ILIKE '%AI - Cortex Code%', FALSE) AS HAS_FEATURE_FLAG,
             CASE
                 WHEN uc.TECHNICAL_USE_CASE ILIKE '%AI:%'         THEN 'AI'
                 WHEN uc.TECHNICAL_USE_CASE ILIKE '%Analytics:%'  THEN 'Analytics'
@@ -207,6 +209,7 @@ BEGIN
                 ELSE 'Unclassified'
             END AS WORKLOAD_CATEGORY
         FROM TEMP.COCO_PARTNER_ADOPTION.DT_OKR_USE_CASES uc
+        LEFT JOIN MDM.MDM_INTERFACES.DIM_USE_CASE mdm ON mdm.USE_CASE_ID = uc.USE_CASE_ID
         WHERE (
             (uc.USE_CASE_STAGE IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan')
              AND uc.DECISION_DATE >= :Q_START AND uc.DECISION_DATE <= :Q_END)
@@ -244,6 +247,7 @@ BEGIN
             u.COCO_SOURCE,
             u.IS_NOT_COCO,
             u.CREATED_DATE,
+            u.HAS_FEATURE_FLAG,
             (caa.ACCOUNT_NAME_UPPER IS NOT NULL)         AS HAS_ACCOUNT_COCO,
             COALESCE(tok.Q2_TOKENS, 0)                   AS Q2_TOKENS,
             CASE
@@ -269,13 +273,15 @@ BEGIN
         CREATED_DATE,
         -- IS_COCO_FINAL mirrors apply_coco_final() in utils/__init__.py:
         --   IS_COCO=TRUE qualifies, EXCEPT PARTNER_COMMENTS-only without tokens
+        --   (that exception is skipped when the AI - Cortex Code feature flag is set)
         --   IS_NOT_COCO suppresses only when no token evidence exists
         --   Account-level token usage always overrides #notcoco
         CASE WHEN (
                 (IS_COCO = TRUE
                  AND NOT (COCO_SOURCE = 'PARTNER_COMMENTS'
                           AND HAS_ACCOUNT_COCO = FALSE
-                          AND Q2_TOKENS = 0))
+                          AND Q2_TOKENS = 0
+                          AND HAS_FEATURE_FLAG = FALSE))
                 OR (IS_COCO = FALSE AND HAS_ACCOUNT_COCO = TRUE)
              )
              AND NOT (IS_NOT_COCO = TRUE AND Q2_TOKENS = 0 AND HAS_ACCOUNT_COCO = FALSE)
@@ -316,6 +322,7 @@ BEGIN
             uc.USE_CASE_ID, uc.PARTNER_NAME, uc.THEATER_NAME,
             UPPER(TRIM(uc.ACCOUNT_NAME)) AS ACCOUNT_NAME_UPPER,
             uc.IS_COCO, uc.COCO_SOURCE, uc.IS_NOT_COCO, uc.CREATED_DATE,
+            COALESCE(mdm.PRIORITIZED_FEATURES ILIKE '%AI - Cortex Code%', FALSE) AS HAS_FEATURE_FLAG,
             CASE
                 WHEN uc.TECHNICAL_USE_CASE ILIKE '%AI:%'        THEN 'AI'
                 WHEN uc.TECHNICAL_USE_CASE ILIKE '%Analytics:%' THEN 'Analytics'
@@ -326,6 +333,7 @@ BEGIN
                 ELSE 'Unclassified'
             END AS WORKLOAD_CATEGORY
         FROM TEMP.COCO_PARTNER_ADOPTION_DEV.DT_OKR_USE_CASES uc
+        LEFT JOIN MDM.MDM_INTERFACES.DIM_USE_CASE mdm ON mdm.USE_CASE_ID = uc.USE_CASE_ID
         WHERE (
             (uc.USE_CASE_STAGE IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan')
              AND uc.DECISION_DATE >= :Q_START AND uc.DECISION_DATE <= :Q_END)
@@ -353,7 +361,7 @@ BEGIN
     ),
     uc_joined AS (
         SELECT u.USE_CASE_ID, u.PARTNER_NAME, u.THEATER_NAME, u.IS_COCO, u.COCO_SOURCE,
-               u.IS_NOT_COCO, u.CREATED_DATE,
+               u.IS_NOT_COCO, u.CREATED_DATE, u.HAS_FEATURE_FLAG,
                (caa.ACCOUNT_NAME_UPPER IS NOT NULL) AS HAS_ACCOUNT_COCO,
                COALESCE(tok.Q2_TOKENS, 0) AS Q2_TOKENS,
                CASE WHEN COALESCE(tok.Q2_TOKENS, 0) >= 1000 THEN 'High'
@@ -369,7 +377,8 @@ BEGIN
         -- #notcoco always wins: if IS_NOT_COCO=TRUE, IS_COCO_FINAL=FALSE regardless of tokens
         CASE WHEN IS_NOT_COCO = TRUE THEN FALSE
              WHEN (IS_COCO = TRUE
-                   AND NOT (COCO_SOURCE = 'PARTNER_COMMENTS' AND HAS_ACCOUNT_COCO = FALSE AND Q2_TOKENS = 0))
+                   AND NOT (COCO_SOURCE = 'PARTNER_COMMENTS' AND HAS_ACCOUNT_COCO = FALSE AND Q2_TOKENS = 0
+                            AND HAS_FEATURE_FLAG = FALSE))
                   OR (IS_COCO = FALSE AND HAS_ACCOUNT_COCO = TRUE)
              THEN TRUE
              ELSE FALSE

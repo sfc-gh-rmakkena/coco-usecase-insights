@@ -282,6 +282,10 @@ def apply_coco_final(df, bands=("High",)):
     admitting cases whose comments said things like "will update #coco details once
     partner starts work" or "Deloitte has been cortex code #coco enabled" (partner
     enablement, not customer usage). SE_COMMENTS and FEATURE_FLAG are unchanged.
+    The rule is skipped when the UC also has "AI - Cortex Code" in Prioritized
+    Features (HAS_FEATURE_FLAG): the PSE comment plus the structured flag together
+    count as CoCo even before consumption shows up (or when telemetry lands under a
+    differently named account, e.g. a parent billing entity).
 
     Exception 2: a use case tagged with "#notcoco" in PARTNER_COMMENTS (IS_NOT_COCO=TRUE)
     is suppressed from CoCo counting UNLESS the account shows actual token consumption
@@ -308,8 +312,11 @@ def apply_coco_final(df, bands=("High",)):
     band_ok = (df["CONFIDENCE_BAND"].isin(list(bands))
                if "CONFIDENCE_BAND" in df.columns else False)
 
-    # Exception 1: PARTNER_COMMENTS-only requires token evidence
+    # Exception 1: PARTNER_COMMENTS-only requires token evidence, unless the
+    # "AI - Cortex Code" prioritized feature flag is also set on the UC
     partner_only = (df["COCO_SOURCE"] == "PARTNER_COMMENTS")
+    if "HAS_FEATURE_FLAG" in df.columns:
+        partner_only = partner_only & ~df["HAS_FEATURE_FLAG"].fillna(False).astype(bool)
     result = base & ~(partner_only & ~has_tokens & ~band_ok)
 
     # Exception 2: #notcoco always wins — PSE explicitly blocks the UC regardless of token data

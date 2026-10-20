@@ -1375,6 +1375,10 @@ def _confidence_scored_query(partner_filter_sql, start_date, end_date, include_n
         SELECT uc.USE_CASE_ID, uc.USE_CASE_NAME, uc.ACCOUNT_NAME, UPPER(uc.ACCOUNT_NAME) AS ACCOUNT_NAME_UPPER,
             uc.PARTNER_NAME, uc.TECHNICAL_USE_CASE, uc.USE_CASE_STAGE,
             uc.USE_CASE_EACV, uc.IS_COCO, uc.COCO_SOURCE,
+            -- COCO_SOURCE keeps only the highest-priority signal, so a #coco partner comment
+            -- hides the "AI - Cortex Code" prioritized feature. Expose the flag separately
+            -- so apply_coco_final() can exempt flagged UCs from the token-evidence rule.
+            COALESCE(mdm.PRIORITIZED_FEATURES ILIKE '%AI - Cortex Code%', FALSE) AS HAS_FEATURE_FLAG,
             {not_coco_col}
             {not_involved_col}
             uc.THEATER_NAME, uc.REGION_NAME,
@@ -1388,6 +1392,7 @@ def _confidence_scored_query(partner_filter_sql, start_date, end_date, include_n
                 IFF(uc.TECHNICAL_USE_CASE ILIKE '%Migration%', 'Migration', NULL)
             ), ', ') AS TAGGED_WORKLOADS
         FROM {DT_OKR} uc
+        LEFT JOIN MDM.MDM_INTERFACES.DIM_USE_CASE mdm ON mdm.USE_CASE_ID = uc.USE_CASE_ID
         WHERE {partner_filter_sql}
         AND (
             (uc.USE_CASE_STAGE IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan') AND uc.DECISION_DATE >= '{start_date}' AND uc.DECISION_DATE <= '{end_date}')
@@ -2838,7 +2843,7 @@ def get_pc_usecase_counts(_conn):
 # Combined = A ∪ B (deduplicated, a UC can only count once)
 # IS_COCO_FINAL mirrors apply_coco_final():
 #   (AI_flag OR SE_comments OR confidence_band='High')
-#   AND NOT (PARTNER_COMMENTS only AND Q2_TOKENS=0 AND band!='High')
+#   AND NOT (PARTNER_COMMENTS only AND Q2_TOKENS=0 AND band!='High' AND no AI feature flag)
 
 def get_newly_coco_counts(_conn):
     """Two-bucket new-CoCo counts for the last two completed weeks.

@@ -705,6 +705,10 @@ if selected_partner:
                 conf_map = conf_scores[['USE_CASE_ID', 'CONFIDENCE_BAND', 'Q2_TOKENS']].set_index('USE_CASE_ID')
                 partner_detail['CONFIDENCE_BAND'] = partner_detail['USE_CASE_ID'].map(conf_map['CONFIDENCE_BAND'])
                 partner_detail['Q2_TOKENS'] = partner_detail['USE_CASE_ID'].map(conf_map['Q2_TOKENS']).fillna(0)
+                if 'HAS_FEATURE_FLAG' in conf_scores.columns:
+                    partner_detail['HAS_FEATURE_FLAG'] = partner_detail['USE_CASE_ID'].map(
+                        conf_scores[['USE_CASE_ID', 'HAS_FEATURE_FLAG']].set_index('USE_CASE_ID')['HAS_FEATURE_FLAG']
+                    ).fillna(False)
                 partner_detail['IS_COCO'] = partner_detail['IS_COCO_ATTACHED']  # pre-override value = raw IS_COCO
                 bands = confidence_filter if confidence_filter else ['High', 'Medium', 'Low']
                 # Carry IS_NOT_COCO from conf_scores if available

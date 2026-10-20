@@ -1584,6 +1584,10 @@ if include_account_coco:
         conf_map = conf_scores[["USE_CASE_ID", "CONFIDENCE_BAND", "Q2_TOKENS"]].set_index("USE_CASE_ID")
         detail["CONFIDENCE_BAND"] = detail["USE_CASE_ID"].map(conf_map["CONFIDENCE_BAND"])
         detail["Q2_TOKENS"] = detail["USE_CASE_ID"].map(conf_map["Q2_TOKENS"])
+        if "HAS_FEATURE_FLAG" in conf_scores.columns:
+            detail["HAS_FEATURE_FLAG"] = detail["USE_CASE_ID"].map(
+                conf_scores[["USE_CASE_ID", "HAS_FEATURE_FLAG"]].set_index("USE_CASE_ID")["HAS_FEATURE_FLAG"]
+            ).fillna(False)
         # get_okr_coco_adoption's IS_COCO_ATTACHED is already just the raw
         # uc.IS_COCO flag (see _is_coco_expanded()'s docstring) -- rename it
         # so apply_coco_final (the SAME function _compute_peer_benchmark uses
