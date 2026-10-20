@@ -14,3 +14,19 @@ class FakeConn:
             if needle in sql:
                 return df
         return pd.DataFrame()
+
+    def cursor(self):
+        """Mimics conn.cursor() context manager used for DDL (see utils/judge_cache.ensure_table)."""
+        conn = self
+
+        class _Cur:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def execute(self, sql):
+                conn.queries.append(sql)
+
+        return _Cur()
