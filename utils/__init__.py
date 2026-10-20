@@ -99,7 +99,8 @@ PARTNER_ALIASES = {
     'Blend360, LLC':          ['Blend360, LLC'],
     'Tiger Analytics Inc.':   ['Tiger Analytics Inc.'],
     'Atrium':                 ['Atrium'],
-    'SDK Tek Services Ltd.':  ['SDK Tek Services Ltd.'],
+    # SDK Tek Services rebranded as Ateko; keep the old name for legacy use cases/history
+    'Ateko':                  ['Ateko', 'SDK Tek Services Ltd.'],
     'Archetype Consulting':   ['Archetype Consulting'],
     'Everforth Apex Systems': ['Everforth Apex Systems'],
     'OneSix':                 ['OneSix'],
@@ -119,7 +120,7 @@ PARTNER_ALIASES = {
         'Slalom, LLC.', 'Squadron Data Inc', 'Tredence Inc.',
         # Former PSE Managed Partners
         'Spaulding Ridge', 'TEKsystems Global Services, LLC.', 'Blend360, LLC',
-        'Tiger Analytics Inc.', 'Atrium', 'Perficient Inc.', 'SDK Tek Services Ltd.',
+        'Tiger Analytics Inc.', 'Atrium', 'Perficient Inc.', 'Ateko', 'SDK Tek Services Ltd.',
         'Merkle', 'Archetype Consulting', 'Everforth Apex Systems',  'Tata Consultancy Services',
         'OneSix', 'Icon Analytics', 'Sparq Holdings, Inc.', 'CitiusTech Inc.',
         'Hexaware Technologies',
@@ -130,7 +131,8 @@ PARTNER_ALIASES = {
         'Infinite Lambda Limited',           # ASEAN
         'Infinite Lambda Inc',               # ASEAN (alias)
         'INFINITE LAMBDA (SINGAPORE) PTE. LTD.',  # ASEAN (alias)
-        'Altis Consulting, ANZ',             # ANZ
+        'Altis Global Limited',              # ANZ (PARTNER_HIERARCHY rolls Altis up to this)
+        'Altis Consulting, ANZ',             # ANZ (alias - MDM raw name, consultant tables)
         'PROLIM Global Corporation',         # India
     ],
     '--- EMEA RSIs ---': [
@@ -161,6 +163,7 @@ APJ_RSI_REGION_MAP = {
     'Infinite Lambda Limited':                  ('Infinite Lambda',   'ASEAN'),
     'Infinite Lambda Inc':                      ('Infinite Lambda',   'ASEAN'),
     'INFINITE LAMBDA (SINGAPORE) PTE. LTD.':   ('Infinite Lambda',   'ASEAN'),
+    'Altis Global Limited':                     ('Altis',             'ANZ'),
     'Altis Consulting, ANZ':                    ('Altis',             'ANZ'),
     'PROLIM Global Corporation':                ('Prolim',            'India'),
 }
@@ -224,7 +227,7 @@ def canonical_partner(name):
 #   Tata Consultancy Services -> the pipeline has 'Tata Group of Companies' and
 #     'Tata Elxsi', which are different legal entities from TCS.
 #   Everforth Apex Systems, Blend360, Hexaware Technologies, KPC, kipi.ai, LTM/LTI Mindtree,
-#     Merkle, SDK Tek Services, Squadron Data Inc, TEKsystems -> no pipeline entry at
+#     Merkle, Squadron Data Inc, TEKsystems -> no pipeline entry at
 #     all, so they have genuinely no resolved consultants rather than a naming gap.
 PARTNER_PIPELINE_CROSSWALK = {
     'Aimpoint Digital':                       ['Aimpoint Digital, LP'],

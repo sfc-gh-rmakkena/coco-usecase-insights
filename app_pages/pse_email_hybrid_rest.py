@@ -141,12 +141,13 @@ def _peer_group_for(partner: str):
     if partner in NOAM_RSI_NAMES:
         return ([p for p in NOAM_RSI_NAMES if p != partner], "theater", NOAM_THEATERS, 75, "NoAM RSIs")
     if partner in APJ_RSI_REGION_MAP:
-        region = APJ_RSI_REGION_MAP[partner][1]
-        peers = [p for p, v in APJ_RSI_REGION_MAP.items() if p != partner and v[1] == region]
+        label, region = APJ_RSI_REGION_MAP[partner]
+        # Skip aliases of the same partner (same display label), e.g. both Altis names
+        peers = [p for p, v in APJ_RSI_REGION_MAP.items() if v[0] != label and v[1] == region]
         return (peers, "region", region, 50, f"{region} RSIs")
     if partner in EMEA_RSI_REGION_MAP:
-        region = EMEA_RSI_REGION_MAP[partner][1]
-        peers = [p for p, v in EMEA_RSI_REGION_MAP.items() if p != partner and v[1] == region]
+        label, region = EMEA_RSI_REGION_MAP[partner]
+        peers = [p for p, v in EMEA_RSI_REGION_MAP.items() if v[0] != label and v[1] == region]
         return (peers, "region", region, 50, f"{region} RSIs")
     if partner in LATAM_RSI_REGION_MAP:
         peers = [p for p in LATAM_RSI_REGION_MAP if p != partner]

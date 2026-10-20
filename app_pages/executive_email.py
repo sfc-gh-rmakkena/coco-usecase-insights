@@ -75,7 +75,7 @@ _HEATMAP_NOAM = [
     ('TEKsystems',  'TEKsystems Global Services, LLC.'),
     ('Blend360',    'Blend360, LLC'),      ('Tiger',     'Tiger Analytics Inc.'),
     ('Atrium',      'Atrium'),             ('Perficient','Perficient Inc.'),
-    ('SDK Tek',     'SDK Tek Services Ltd.'), ('Merkle',  'Merkle'),
+    ('Ateko',       'Ateko'),             ('Merkle',  'Merkle'),
     ('Archetype',   'Archetype Consulting'), ('Apex',    'Everforth Apex Systems'),
     ('TCS',         'Tata Consultancy Services'), ('OneSix', 'OneSix'),
     ('Icon',        'Icon Analytics'),    ('Sparq',     'Sparq Holdings, Inc.'),

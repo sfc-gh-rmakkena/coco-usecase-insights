@@ -20,7 +20,7 @@ _MANAGED_PARTNERS_SQL = (
     "'Slalom, LLC.','Squadron Data Inc','Tredence Inc.',"
     "'Spaulding Ridge','Spaulding Ridge, EMEA','Spaulding Ridge Advisory Spain, S.L.',"
     "'TEKsystems Global Services, LLC.','TEKsystems - Canada','TEKSYSTEMS GLOBAL SERVICES (UK) LIMITED',"
-    "'Blend360, LLC','Tiger Analytics Inc.','Atrium','SDK Tek Services Ltd.',"
+    "'Blend360, LLC','Tiger Analytics Inc.','Atrium','Ateko','SDK Tek Services Ltd.',"
     "'Perficient Inc.','Perficient India Pvt Ltd',"
     "'Merkle','Merkle inc USA','Merkle ANZ Pty Ltd','Merkle Switzerland AG',"
     "'PT Merkle Inovasi Teknologi','Davanti a Merkle Company',"

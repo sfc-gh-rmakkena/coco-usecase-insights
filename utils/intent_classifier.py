@@ -8,13 +8,15 @@ from utils import PARTNER_CANONICAL_BY_LOWER
 # Short-form names not in PARTNER_ALIASES (common spoken names → canonical)
 _SHORT_FORMS = {
     "deloitte":    "Deloitte Consulting",
+    "ateko":       "Ateko",
+    "sdk tek":     "Ateko",
     "capgemini":   "Capgemini Technologies LLC",
     "cognizant":   "Cognizant Technology Solutions US Corp",
     "ntt data":    "NTT DATA Group Corporation",
     "ntt":         "NTT DATA Group Corporation",
     "megazone":    "MegazoneCloud Corporation",
     "infinite lambda": "Infinite Lambda Limited",
-    "altis":       "Altis Consulting, ANZ",
+    "altis":       "Altis Global Limited",
     "prolim":      "PROLIM Global Corporation",
     "infomotion":  "INFOMOTION GMBH",
     "civica":      "CIVICA SOFTWARE, S.L.",

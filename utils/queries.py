@@ -524,7 +524,7 @@ _NOAM_RSI_PARTNERS_SQL = (
     "'evolv Consulting','Infostrux Solutions Inc.','Infosys','KPMG LLP',"
     "'LTM','LTI Mindtree','phData, Inc.','Slalom, LLC.','Squadron Data Inc','Tredence Inc.',"
     "'Spaulding Ridge','TEKsystems Global Services, LLC.','Blend360, LLC',"
-    "'Tiger Analytics Inc.','Atrium','Perficient Inc.','SDK Tek Services Ltd.',"
+    "'Tiger Analytics Inc.','Atrium','Perficient Inc.','Ateko','SDK Tek Services Ltd.',"
     "'Merkle','Archetype Consulting','Everforth Apex Systems','Tata Consultancy Services',"
     "'OneSix','Icon Analytics','Sparq Holdings, Inc.','CitiusTech Inc.','Hexaware Technologies'"
 )
@@ -1653,7 +1653,7 @@ def get_segment_by_impl_start(_conn):
             'Infosys','KPMG LLP','LTM','LTI Mindtree','NTT DATA Group Corporation',
             'phData, Inc.','Slalom, LLC.','Squadron Data Inc','Tredence Inc.',
             'Spaulding Ridge','TEKsystems Global Services, LLC.','Blend360, LLC',
-            'Tiger Analytics Inc.','Atrium','Perficient Inc.','SDK Tek Services Ltd.',
+            'Tiger Analytics Inc.','Atrium','Perficient Inc.','Ateko','SDK Tek Services Ltd.',
             'Merkle','Archetype Consulting','Everforth Apex Systems','Tata Consultancy Services',
             'OneSix','Icon Analytics','Sparq Holdings, Inc.','CitiusTech Inc.',
             'Hexaware Technologies'
@@ -1731,7 +1731,7 @@ def get_segment_velocity(_conn):
             'Infosys','KPMG LLP','LTM','LTI Mindtree','NTT DATA Group Corporation',
             'phData, Inc.','Slalom, LLC.','Squadron Data Inc','Tredence Inc.',
             'Spaulding Ridge','TEKsystems Global Services, LLC.','Blend360, LLC',
-            'Tiger Analytics Inc.','Atrium','Perficient Inc.','SDK Tek Services Ltd.',
+            'Tiger Analytics Inc.','Atrium','Perficient Inc.','Ateko','SDK Tek Services Ltd.',
             'Merkle','Archetype Consulting','Everforth Apex Systems','Tata Consultancy Services',
             'OneSix','Icon Analytics','Sparq Holdings, Inc.','CitiusTech Inc.',
             'Hexaware Technologies'

@@ -89,7 +89,7 @@ RSIs → NOAM RSIs (all NoAM scope — Regional SIs + PSE Managed Partners merge
 
 PSE Managed Partners (now merged into NOAM RSIs above — NoAM scope):
   'Spaulding Ridge', 'TEKsystems Global Services, LLC.', 'Blend360, LLC',
-  'Tiger Analytics Inc.', 'Atrium', 'Perficient Inc.', 'SDK Tek Services Ltd.',
+  'Tiger Analytics Inc.', 'Atrium', 'Perficient Inc.', 'Ateko','SDK Tek Services Ltd.',
   'Merkle', 'Archetype Consulting', 'Everforth Apex Systems',  'Tata Consultancy Services',
   'OneSix', 'Icon Analytics', 'Sparq Holdings, Inc.', 'CitiusTech Inc.',
   'Hexaware Technologies'
@@ -102,7 +102,7 @@ ALL MANAGED (use for "all partners" questions — combine GSI + NOAM RSIs):
   'LTM','LTI Mindtree','NTT DATA Group Corporation','phData, Inc.','Slalom, LLC.',
   'Squadron Data Inc','Tredence Inc.',
   'Spaulding Ridge','TEKsystems Global Services, LLC.','Blend360, LLC',
-  'Tiger Analytics Inc.','Atrium','Perficient Inc.','SDK Tek Services Ltd.',
+  'Tiger Analytics Inc.','Atrium','Perficient Inc.','Ateko','SDK Tek Services Ltd.',
   'Merkle','Archetype Consulting','Everforth Apex Systems','Tata Consultancy Services',
   'OneSix','Icon Analytics','Sparq Holdings, Inc.','CitiusTech Inc.','Hexaware Technologies'
 
@@ -254,7 +254,7 @@ WITH all_partner_ucs AS (
         'LTM','LTI Mindtree','NTT DATA Group Corporation','phData, Inc.','Slalom, LLC.',
         'Squadron Data Inc','Tredence Inc.',
         'Spaulding Ridge','TEKsystems Global Services, LLC.','Blend360, LLC',
-        'Tiger Analytics Inc.','Atrium','Perficient Inc.','SDK Tek Services Ltd.',
+        'Tiger Analytics Inc.','Atrium','Perficient Inc.','Ateko','SDK Tek Services Ltd.',
         'Merkle','Archetype Consulting','Everforth Apex Systems','Tata Consultancy Services',
         'OneSix','Icon Analytics','Sparq Holdings, Inc.','CitiusTech Inc.','Hexaware Technologies'
     )
@@ -862,7 +862,7 @@ _NOAM_RSI_PARTNERS = frozenset({
     'Squadron Data Inc','Tredence Inc.',
     # Former PSE Managed Partners
     'Spaulding Ridge','TEKsystems Global Services, LLC.','Blend360, LLC',
-    'Tiger Analytics Inc.','Atrium','Perficient Inc.','SDK Tek Services Ltd.',
+    'Tiger Analytics Inc.','Atrium','Perficient Inc.','Ateko','SDK Tek Services Ltd.',
     'Merkle','Archetype Consulting','Everforth Apex Systems','Tata Consultancy Services',
     'OneSix','Icon Analytics','Sparq Holdings, Inc.','CitiusTech Inc.',
     'Hexaware Technologies',
