@@ -6,7 +6,7 @@ BIG_TIER_MIN_ACTIVE_USERS = 25
 
 
 def load_listed_names(conn) -> frozenset:
-    df = conn.query(LISTED_SQL, ttl=3600)
+    df = conn.query(LISTED_SQL, ttl=0)
     names = df["COMPANY_NAME"].tolist() if "COMPANY_NAME" in df.columns else []
     return frozenset(n for n in (normalize_company(x) for x in names) if n)
 
@@ -41,7 +41,7 @@ def fetch_a360_context(conn, accounts: list) -> dict:
                BOOLOR_AGG(IS_COCO_BLOCKED) AS IS_COCO_BLOCKED
         FROM SALES.REPORTING.COCO_ACCOUNT_COCO_USAGE
         WHERE IS_YESTERDAY AND UPPER(SALESFORCE_ACCOUNT_NAME) IN ({in_list})
-        GROUP BY 1""", ttl=3600)
+        GROUP BY 1""", ttl=0)
     maturity = conn.query(f"""
         SELECT ACCOUNT_UPPER, USER_MATURITY FROM (
           SELECT UPPER(SALESFORCE_ACCOUNT_NAME) AS ACCOUNT_UPPER, USER_MATURITY,
@@ -49,7 +49,7 @@ def fetch_a360_context(conn, accounts: list) -> dict:
           FROM SALES.REPORTING.COCO_USER_MATURITY_SNAPSHOT
           WHERE DS = (SELECT MAX(DS) FROM SALES.REPORTING.COCO_USER_MATURITY_SNAPSHOT)
             AND UPPER(SALESFORCE_ACCOUNT_NAME) IN ({in_list}) AND USER_MATURITY IS NOT NULL
-          GROUP BY 1, 2) WHERE RN = 1""", ttl=3600)
+          GROUP BY 1, 2) WHERE RN = 1""", ttl=0)
     mat = dict(zip(maturity.get("ACCOUNT_UPPER", []), maturity.get("USER_MATURITY", [])))
     out = {}
     for _, r in usage.iterrows():

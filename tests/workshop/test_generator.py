@@ -67,3 +67,40 @@ def test_generate_workshops_cache_and_audit():
     audit = [q for q in conn.queries if "INSERT INTO" in q and "WORKSHOP_GENERATION_AUDIT" in q]
     assert audit and "'listed'" in audit[0] and "'unlisted'" in audit[0]
     assert "ACCOUNT_SIGNALS" not in s1_prompts["other"]
+
+
+def _rows():
+    return [UC, dict(UC, uc_id="a0X3n00000ZZZZZZZZ", account="Acme Unlisted")]
+
+
+def test_generate_workshops_reads_on_data_conn_writes_on_owner():
+    owner = FakeConn()
+    data = FakeConn({"TOP_SNOWFLAKE_COMPANIES": pd.DataFrame({"COMPANY_NAME": ["Roche"]})})
+    llm = fake_llm_factory()
+    out = generator.generate_workshops(owner, _rows(), "Deloitte", lambda c, m, p: llm(p), data_conn=data)
+    assert len(out) == 2
+    for needle in ("TOP_SNOWFLAKE_COMPANIES", "DD_SALESFORCE_USE_CASE", "COCO_ACCOUNT_COCO_USAGE"):
+        assert any(needle in q for q in data.queries), needle
+        assert not any(needle in q for q in owner.queries), needle
+    for needle in ("COCO_PSE_WORKSHOP_CACHE", "WORKSHOP_GENERATION_AUDIT"):
+        assert any(needle in q for q in owner.queries), needle
+        assert not any(needle in q for q in data.queries), needle
+    audit = [q for q in owner.queries if "INSERT INTO" in q and "WORKSHOP_GENERATION_AUDIT" in q]
+    assert "'listed'" in audit[0] and "'unlisted'" in audit[0]
+
+
+class _RaisingConn(FakeConn):
+    def query(self, sql, ttl=None):
+        raise PermissionError("Insufficient privileges on SECRET_TABLE")
+
+
+def test_generate_workshops_survives_failing_data_conn():
+    llm = fake_llm_factory()
+    baseline = generator.generate_workshops(FakeConn(), _rows(), "Deloitte", lambda c, m, p: llm(p))
+    diags = []
+    out = generator.generate_workshops(FakeConn(), _rows(), "Deloitte", lambda c, m, p: llm(p),
+                                       data_conn=_RaisingConn(), diagnostics=diags)
+    assert len(out) == len(baseline) == 2
+    assert [set(r) for r in out] == [set(r) for r in baseline]
+    assert diags and all(d.endswith("PermissionError") for d in diags)
+    assert not any("SECRET_TABLE" in d for d in diags)

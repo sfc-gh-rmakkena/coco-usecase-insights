@@ -125,16 +125,30 @@ def build_one(uc, partner, account_signals, private_context, llm, deny=()) -> di
             "brief": brief, "session1": session1, "session2": {"recipe": recipe, "plan": plan}}
 
 
-def generate_workshops(conn, rows: list, partner: str, complete_fn, call_log=None, log_wrap=None) -> list:
+def _safe_read(label, fn, default, diagnostics):
+    """Run a context read; on failure return `default` and record only the exception type."""
+    try:
+        return fn()
+    except Exception as e:
+        if diagnostics is not None:
+            diagnostics.append(f"{label}: {type(e).__name__}")
+        return default
+
+
+def generate_workshops(conn, rows: list, partner: str, complete_fn, call_log=None, log_wrap=None,
+                       data_conn=None, diagnostics=None) -> list:
     """rows: gap-table rows already filtered to not-deployed. complete_fn(conn, model, prompt) -> str.
-    log_wrap(call_log, label, use_case, fn, *args) is the page's _logged_rest_call (optional)."""
+    log_wrap(call_log, label, use_case, fn, *args) is the page's _logged_rest_call (optional).
+    data_conn (default conn) serves the account-context reads (caller's rights in DEV); conn (owner)
+    serves cache/audit and LLM calls. diagnostics, if given, collects non-sensitive read-failure notes."""
     if not rows:
         return []
+    data_conn = data_conn or conn
     cache.ensure_tables(conn)
-    listed = load_listed_names(conn)
+    listed = _safe_read("listed", lambda: load_listed_names(data_conn), frozenset(), diagnostics)
     listed_accounts = [r["account"] for r in rows if is_listed(r["account"], listed)]
-    a360 = fetch_a360_context(conn, listed_accounts)
-    sfdc = fetch_uc_context(conn, [r["uc_id"] for r in rows])
+    a360 = _safe_read("a360", lambda: fetch_a360_context(data_conn, listed_accounts), {}, diagnostics)
+    sfdc = _safe_read("context", lambda: fetch_uc_context(data_conn, [r["uc_id"] for r in rows]), {}, diagnostics)
     version = assets.asset_version()
 
     jobs = []

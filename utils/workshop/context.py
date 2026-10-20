@@ -61,7 +61,7 @@ def fetch_uc_context(conn, uc_ids: list) -> dict:
     safe = [i for i in uc_ids if i and _ID_RE.match(i)]
     if not safe:
         return {}
-    df = conn.query(UC_CONTEXT_SQL.format(ids=", ".join(f"'{i}'" for i in safe)), ttl=3600)
+    df = conn.query(UC_CONTEXT_SQL.format(ids=", ".join(f"'{i}'" for i in safe)), ttl=0)
     out = {}
     for _, r in df.iterrows():
         d, raw_deny = {}, []

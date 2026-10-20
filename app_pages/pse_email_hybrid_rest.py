@@ -1875,11 +1875,18 @@ else:
             # Same background-thread + polling pattern as _run_gap_rows above,
             # so the live call log keeps updating during workshop generation.
             _ws_result = {}
+            # Account-context reads run as the viewer (caller's rights); cache,
+            # audit and LLM calls stay on the owner connection.
+            _ws_data_conn = st.session_state.get("caller_conn") or conn
+            _ws_diagnostics = []
+            if st.session_state.get("caller_conn") is None and st.session_state.get("caller_conn_error"):
+                st.caption("Caller's-rights connection unavailable; account context is read with the app's role.")
             def _run_workshops():
                 try:
                     _ws_result["workshops"] = generate_workshops(
                         conn, ws_rows, selected_partner, cortex_complete,
                         call_log=call_log, log_wrap=_logged_rest_call,
+                        data_conn=_ws_data_conn, diagnostics=_ws_diagnostics,
                     )
                 except Exception as e:
                     _ws_result["error"] = e
@@ -1897,6 +1904,9 @@ else:
                 workshops = []
             else:
                 workshops = _ws_result["workshops"]
+            if _ws_diagnostics:
+                st.caption("Some account context was unavailable for your role; "
+                           "workshop plans used the use-case summary.")
 
         report_html = _build_report_html(
             selected_partner, q_start, q_end, target, coco_count, total_ucs, coco_pct,
