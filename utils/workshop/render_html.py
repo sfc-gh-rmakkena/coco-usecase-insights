@@ -2,6 +2,7 @@ import datetime
 import functools
 import html
 import re
+_NUM_PREFIX = re.compile(r"^\d+\.\s*")
 
 from . import assets, diagram
 from .css_scope import prefix_css
@@ -167,8 +168,9 @@ def report_html(w, slug, partner="", date=None) -> str:
            f'<div style="margin:12px 0 8px;font-size:0.95em;letter-spacing:2px;text-transform:uppercase;'
            f'color:#FFFFFF;font-weight:600;">Recommended Implementation Plan</div>'
            f'<div class="meta">{meta}</div></div>')
+    toc_title = {a: _h(_NUM_PREFIX.sub("", title[a])) for a in order}
     out += ('<div class="toc"><h3>Table of Contents</h3><ol>' + "".join(
-        f'<li><a href="#{hid(a)}">{_h(re.sub(r"^\d+\.\s*", "", title[a]))}</a></li>' for a in order) + "</ol></div>")
+        f'<li><a href="#{hid(a)}">{toc_title[a]}</a></li>' for a in order) + "</ol></div>")
     # 1. Context & Background
     out += h1("context") + "<h2>Customer Overview</h2>" + \
         f"<p>{_h(w.get('account'))} is planning {_h(w.get('name'))} on Snowflake.</p>"
