@@ -30,6 +30,12 @@ _PATTERNS = [
 # Category per _PATTERNS index (same order), used for non-sensitive degradation reasons.
 _CATEGORIES = ["money"] * 5 + ["credits"] * 2 + ["money"] * 2 + ["list_terms"] * 3 \
     + ["stage"] * 2 + ["score"]
+# SQL positional column refs ($1:col, $1, $2 AS x, f($1)) are not currency. In SQL text
+# a bare trailing ref ("SELECT a, $1") also counts (sql=True); in prose "$5" at line end is money.
+_SQL_POS = re.compile(r"\$\d+(?=:|,(?!\d)|\)|\s+(?:AS|FROM)\b)", re.I)
+_SQL_POS_EOT = re.compile(r"\$\d+(?=:|,(?!\d)|\)|\s+(?:AS|FROM)\b|[ \t]*;|[ \t]*$)", re.I | re.M)
+# Numeric money/credit patterns (indexes into _PATTERNS) replaced by redact_amounts.
+_AMOUNT_IDX = range(7)
 _URL = re.compile(r"https?://[^\s)\"'<>`\]]+")
 _TRAIL = ".,;:!?*"
 _SENT_SPLIT = re.compile(r"(?<=[.!?])\s+")
@@ -58,16 +64,29 @@ def _deny_patterns(deny):
     return [re.compile(r"(?<!\w)" + re.escape(t) + r"(?!\w)", re.I) for t in terms]
 
 
-def find_violations(text: str, deny=()) -> list:
+def _strip_sql_pos(text, sql=False):
+    return (_SQL_POS_EOT if sql else _SQL_POS).sub("", text or "")
+
+
+def redact_amounts(text: str) -> str:
+    """Replace currency amounts and credit counts with "[amount]"."""
+    text = text or ""
+    for i in _AMOUNT_IDX:
+        text = _PATTERNS[i].sub("[amount]", text)
+    return text
+
+
+def find_violations(text: str, deny=(), sql=False) -> list:
+    text = _strip_sql_pos(text, sql)
     hits = []
     for p in _PATTERNS + _deny_patterns(deny):
-        hits.extend(m.group(0) for m in p.finditer(text or ""))
+        hits.extend(m.group(0) for m in p.finditer(text))
     return hits
 
 
 def classify_violations(text: str, deny=(), allowed_links=None) -> list:
     """Category names of the checks that fire (never the matched text), in check order."""
-    text = text or ""
+    text = _strip_sql_pos(text)
     cats = []
     for p, c in zip(_PATTERNS, _CATEGORIES):
         if c not in cats and p.search(text):

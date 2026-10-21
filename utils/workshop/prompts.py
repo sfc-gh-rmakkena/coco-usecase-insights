@@ -42,6 +42,8 @@ def session2_prompt(uc, partner, private_context, recipe):
             f"=== REPORT TEMPLATE (section structure reference) ===\n"
             f"{assets.skill_text('pse-uc-implementation-plan/templates/report_template.html')[:12000]}\n\n"
             f"=== TASK ===\nProduce the implementation plan content for a co-build workshop Session 2.\n"
+            f"Do not state any monetary amounts, budgets, or credit quantities; describe cost controls "
+            f"qualitatively. Do not name competitors or compare against other vendors.\n"
             f"HEADER:\n{_header(uc, partner)}\nPRIVATE_CONTEXT (understand only, never quote):\n"
             f"{json.dumps(private_context or {})}{rec}\n"
             f"ALLOWED_LINKS:\n{json.dumps(sorted(assets.link_allowlist()))}\nReturn JSON: {S2_SCHEMA}")

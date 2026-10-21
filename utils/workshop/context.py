@@ -1,13 +1,18 @@
 """Private implementation-plan context (spec §2a). Read by the LLM, never rendered."""
 import re
 
+from .compliance import redact_amounts
+
 _ID_RE = re.compile(r"^[A-Za-z0-9]{15,18}$")
 PEOPLE = {"TECHNICAL_CHAMPION", "POC_LED_BY", "IMPLEMENTER"}
 NEVER_SENT = {"FUTURE_STATE_DIAGRAM", "EACV", "USE_CASE_NUMBER"}
 # Raw values of these fields are never echoed in output (people are also masked in the LLM context).
-DENY_FIELDS = PEOPLE | {"COMPETITORS", "INCUMBENT_VENDOR"}
-_DENY_SPLIT = re.compile(r"[;,/|\n]")
-_GENERIC = {"none", "n/a", "other", "snowflake", "tbd"}
+# POC_LED_BY / IMPLEMENTER are picklists ("Partner Only", "Joint", ...), not names: masked, not denied.
+DENY_FIELDS = {"TECHNICAL_CHAMPION", "COMPETITORS", "INCUMBENT_VENDOR"}
+# Deny-only: never sent to the model.
+DENY_ONLY = {"COMPETITORS"}
+_DENY_SPLIT = re.compile(r"[;,/|\n:()]")
+_GENERIC = {"none", "n/a", "other", "snowflake", "tbd", "partner", "customer", "internal", "unknown"}
 
 UC_CONTEXT_SQL = """
 SELECT u.SALESFORCE_USE_CASE_ID AS USE_CASE_ID,
@@ -48,7 +53,7 @@ WHERE u.SALESFORCE_USE_CASE_ID IN ({ids})
 def _deny_terms(values) -> list:
     out, seen = [], set()
     for v in values:
-        for t in _DENY_SPLIT.split(v):
+        for t in [v, *_DENY_SPLIT.split(v)]:
             t = t.strip()
             if len(t) >= 3 and t.lower() not in _GENERIC and t.lower() not in seen:
                 seen.add(t.lower())
@@ -70,6 +75,8 @@ def fetch_uc_context(conn, uc_ids: list) -> dict:
                 continue
             if k in DENY_FIELDS:
                 raw_deny.append(str(v))
-            d[k] = "named champion identified" if k in PEOPLE else str(v)
+            if k in DENY_ONLY:
+                continue
+            d[k] = "named champion identified" if k in PEOPLE else redact_amounts(str(v))
         out[r["USE_CASE_ID"]] = {"llm": d, "deny": _deny_terms(raw_deny)}
     return out

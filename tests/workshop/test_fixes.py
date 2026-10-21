@@ -45,8 +45,9 @@ def test_context_new_shape_and_deny_terms():
                        "COMPETITORS": ["Databricks;Other;BigQuery/None"], "INCUMBENT_VENDOR": ["Teradata"]})
     ctx = fetch_uc_context(FakeConn({"DD_SALESFORCE_USE_CASE": df}), [uid])[uid]
     assert ctx["llm"]["TECHNICAL_CHAMPION"] == "named champion identified"
-    assert ctx["llm"]["COMPETITORS"].startswith("Databricks")
-    assert sorted(ctx["deny"]) == ["BigQuery", "Databricks", "Jane Doe", "Teradata"]
+    assert "COMPETITORS" not in ctx["llm"]
+    assert sorted(ctx["deny"]) == ["BigQuery", "Databricks",
+                                   "Databricks;Other;BigQuery/None", "Jane Doe", "Jane Doe; Bo", "Teradata"]
 
 
 def test_generator_deny_applied_and_llm_ctx_only():
@@ -65,7 +66,7 @@ def test_generator_deny_applied_and_llm_ctx_only():
     assert "Databricks" not in json.dumps(out)
     assert out["brief"] == "Real goal."
     assert out["_degraded"] is False
-    assert sum("pse-uc-implementation-plan" in x for x in seen) == 2  # leak forced one regeneration
+    assert sum("pse-uc-implementation-plan" in x for x in seen) == 1  # leak scrubbed, not regenerated
 
 
 def test_sql_quote_backslash():

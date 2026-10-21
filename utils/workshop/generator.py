@@ -41,7 +41,7 @@ def _clean_sql(sql, deny=()):
     # SQL is not sentence-scrubbed (would mangle it), but is blanked if it leaks.
     if not isinstance(sql, str):
         return ""
-    return "" if find_violations(sql, deny) else sql
+    return "" if find_violations(sql, deny, sql=True) else sql
 
 
 def _clean(value, allow, deny=()):
@@ -66,10 +66,15 @@ def _add(reasons, code):
         reasons.append(code)
 
 
-def _call_json(llm, prompt, validate, deny=(), tag=""):
-    """One call + one regeneration if the result fails validation or still leaks.
-    Returns (data_or_None, reasons): short machine codes only, never LLM text or matches."""
-    reasons = []
+# Scrub-only categories: cleaned out of the text but never a reason to regenerate.
+_SCRUB_ONLY = {"credits"}
+
+
+def _call_json(llm, prompt, validate, deny=(), tag="", strict=False):
+    """One call + one regeneration on parse/shape failure (and, if strict, on violations
+    outside _SCRUB_ONLY). Returns (data_or_None, reasons, candidate): candidate is the last
+    shape-valid response, for scrub-and-accept. Reasons are short codes, never LLM text."""
+    reasons, candidate = [], None
     pre = f"{tag}:" if tag else ""
     for _ in range(2):
         try:
@@ -85,13 +90,27 @@ def _call_json(llm, prompt, validate, deny=(), tag=""):
         if not validate(data):
             _add(reasons, f"{pre}invalid_shape")
             continue
-        cats = classify_violations(json.dumps(data), deny)
-        if cats:
-            for c in cats:
-                _add(reasons, f"{pre}violation:{c}")
-            continue
-        return data, reasons
-    return None, reasons
+        candidate = data
+        if strict:
+            cats = [c for c in classify_violations(json.dumps(data), deny) if c not in _SCRUB_ONLY]
+            if cats:
+                for c in cats:
+                    _add(reasons, f"{pre}violation:{c}")
+                continue
+        return data, reasons, candidate
+    return None, reasons, candidate
+
+
+def _note_scrubbed(reasons, data, deny, tag):
+    """Informational: categories that the scrubber removed (codes only, no text)."""
+    for c in classify_violations(json.dumps(data), deny):
+        _add(reasons, f"{tag}:scrubbed:{c}")
+
+
+def _exempt(deny, uc):
+    """Deny terms already disclosed in the use case's public header are not denied for it."""
+    header = f"{uc.get('name') or ''} {uc.get('sanitized_desc') or ''}"
+    return [t for t in (deny or ()) if not re.search(r"(?<!\w)" + re.escape(t.strip()) + r"(?!\w)", header, re.I)]
 
 
 def _fallback_session1(uc):
@@ -115,32 +134,42 @@ def _valid_s1(d):
 def build_one(uc, partner, account_signals, private_context, llm, deny=()) -> dict:
     """Result carries "_degraded": True when Session 1 fell back or the Session 2 plan failed."""
     allow = assets.link_allowlist()
-    s1, reasons = _call_json(llm, prompts.session1_prompt(uc, partner, account_signals), _valid_s1, deny, "s1")
-    session1 = _clean(s1["prompts"], allow, deny) if s1 else None
-    if not session1 or len(session1) != 3:
-        if s1:
+    deny = _exempt(deny, uc)
+    s1, reasons, cand = _call_json(llm, prompts.session1_prompt(uc, partner, account_signals),
+                                   _valid_s1, deny, "s1", strict=True)
+    src = s1 or cand
+    session1 = _clean(src["prompts"], allow, deny) if src else None
+    if src:
+        _note_scrubbed(reasons, src, deny, "s1")
+    if not (session1 and len(session1) == 3
+            and all(isinstance(x, dict) and str(x.get("prompt", "")).strip() for x in session1)):
+        if src:
             _add(reasons, "s1:clean_emptied")
         session1 = None
     degraded = session1 is None
     if session1 is None:
         session1 = _fallback_session1(uc)
 
-    rm, why = _call_json(llm, prompts.recipe_match_prompt(uc),
-                         lambda d: assets.recipe_meta(d.get("recipe_id", "")) != {}, deny, "recipe")
+    rm, why, _ = _call_json(llm, prompts.recipe_match_prompt(uc),
+                            lambda d: assets.recipe_meta(d.get("recipe_id", "")) != {}, deny, "recipe")
     reasons += [r for r in why if r not in reasons]
     recipe = dict(RECIPE_DEFAULT)
     if rm:
+        _note_scrubbed(reasons, rm, deny, "recipe")
         conf = _to_conf(rm.get("confidence", 0))
         band = recipe_band(conf)
         if band != "none":
             meta = assets.recipe_meta(rm["recipe_id"])
             recipe = {"band": band, "id": meta["id"], "title": meta["title"], "confidence": conf,
-                      "rationale": scrub(rm.get("rationale", ""), allow, deny),
+                      "rationale": scrub(str(rm.get("rationale", "")), allow, deny),
                       "body": assets.recipe_body(meta["id"]) if band == "full" else ""}
 
     plan_recipe = {k: recipe[k] for k in ("id", "title")} if recipe["id"] else None
-    s2, why = _call_json(llm, prompts.session2_prompt(uc, partner, private_context, plan_recipe),
+    s2, why, _ = _call_json(llm, prompts.session2_prompt(uc, partner, private_context, plan_recipe),
                          lambda d: isinstance(d.get("steps"), list) and bool(d["steps"]), deny, "s2")
+    reasons += [r for r in why if r not in reasons]
+    if s2:
+        _note_scrubbed(why, s2, deny, "s2")
     reasons += [r for r in why if r not in reasons]
     cleaned = _clean(s2, allow, deny) if s2 else {}
     plan = {**PLAN_DEFAULT, **{k: v for k, v in cleaned.items() if k in PLAN_DEFAULT}}
