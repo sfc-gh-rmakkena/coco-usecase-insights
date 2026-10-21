@@ -3,7 +3,7 @@ import json
 import pandas as pd
 
 from tests.workshop.conftest import FakeConn
-from tests.workshop.test_generator import UC, fake_llm_factory
+from tests.workshop.test_generator import UC, fake_llm_factory, s2_payload
 from utils.workshop import cache, generator, prompts
 from utils.workshop.compliance import find_violations, scrub, sql_quote
 from utils.workshop.context import fetch_uc_context
@@ -60,8 +60,7 @@ def test_generator_deny_applied_and_llm_ctx_only():
         if "starter-prompts" in p:
             return json.dumps({"prompts": [{"title": "t", "purpose": "p", "prompt": "do x"}] * 3})
         leak = "Unlike Databricks, fast. " if sum("pse-uc-implementation-plan" in x for x in seen) == 1 else ""
-        return json.dumps({"problem_statement": leak + "Real goal.",
-                           "steps": [{"title": "s", "detail": "d", "sql": ""}]})
+        return json.dumps(s2_payload(leak + "Real goal."))
     out = generator.build_one(UC, "D", None, {"DESCRIPTION": "x"}, llm, deny=["Databricks"])
     assert "Databricks" not in json.dumps(out)
     assert out["brief"] == "Real goal."
@@ -108,8 +107,9 @@ def test_s1_validator_requires_prompt():
 def test_stable_shapes():
     a = generator.build_one(UC, "D", None, {}, fake_llm_factory())
     b = generator.build_one(UC, "D", None, {}, _boom)
-    assert set(a["session2"]["plan"]) == set(b["session2"]["plan"]) == {
-        "problem_statement", "architecture", "steps", "coco_prompts", "considerations", "docs"}
+    assert set(a["session2"]["plan"]) == set(b["session2"]["plan"]) == set(generator.PLAN_DEFAULT)
+    assert set(a["session2"]["plan"]["resources"]) == {"quickstarts", "docs", "github"}
+    assert set(a["session2"]["plan"]["sections"][0]) == set(generator._ROWS["sections"])
     keys = {"band", "id", "title", "confidence", "rationale", "body"}
     assert set(a["session2"]["recipe"]) == set(b["session2"]["recipe"]) == keys
     assert a["_degraded"] is False and b["_degraded"] is True
@@ -120,4 +120,4 @@ def test_lookup_dedupes_and_workers_and_schema():
     cache.lookup(conn, ["h1"])
     assert "QUALIFY ROW_NUMBER() OVER (PARTITION BY CACHE_KEY_HASH ORDER BY CREATED_AT DESC) = 1" in conn.queries[-1]
     assert generator.MAX_WORKERS == 16
-    assert "at most 8 steps" in prompts.S2_SCHEMA
+    assert "at most 8" in prompts.S2_SCHEMA

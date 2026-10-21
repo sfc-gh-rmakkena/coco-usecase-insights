@@ -20,6 +20,8 @@ ACTIVATION = Path(os.environ.get("ACTIVATION_SKILL_DIR",
                   "/Users/plakhanpal/Documents/git/cortexcode/coco-customer-activation-planner"))
 IMPL_GLOB = os.path.expanduser(
     "~/.snowflake/cortex/stage_cache/*/skills/pse-uc-implementation-plan")
+# Hand-curated assets (not regenerated from sources): preserved across the rebuild.
+CURATED = ("grounding.json", "vendor_terms.json", "locations.json", "first_names.json")
 URL_RE = re.compile(r"https://(?:docs|quickstarts|www|developers)\.snowflake\.com[^\s)\"'<>`\]*]*")
 
 
@@ -40,6 +42,9 @@ def main():
         raise SystemExit("pse-uc-implementation-plan not found in stage cache")
     impl = Path(impl_dirs[-1])
 
+    curated = {n: (OUT / n).read_bytes() for n in CURATED if (OUT / n).exists()}
+    if "grounding.json" not in curated:
+        raise SystemExit("grounding.json missing from assets; refusing to rebuild without it")
     if OUT.exists():
         shutil.rmtree(OUT)
     (OUT / "recipes").mkdir(parents=True)
@@ -73,10 +78,18 @@ def main():
         versions[f"skill:{name}"] = sha(src)
         links.update(u.rstrip(".,;:") for u in URL_RE.findall(src.read_text()))
 
+    for name, data in curated.items():
+        (OUT / name).write_bytes(data)
+    grounding = json.loads(curated["grounding.json"])
+    for v in grounding.values():
+        for kind in ("docs", "quickstarts", "github"):
+            links.update(d["url"] for d in v.get(kind, []))
+        links.update(s["source_url"] for s in v.get("sql_snippets", []))
+
     (OUT / "recipes_index.json").write_text(json.dumps(index, indent=1))
     (OUT / "link_allowlist.json").write_text(json.dumps(sorted(links), indent=1))
     (OUT / "skills" / "VERSIONS.json").write_text(json.dumps(versions, indent=1, sort_keys=True))
-    print(f"recipes={len(index)} links={len(links)} skills=3")
+    print(f"recipes={len(index)} links={len(links)} skills=3 curated={sorted(curated)}")
 
 
 if __name__ == "__main__":

@@ -4,7 +4,7 @@ import pandas as pd
 import pytest
 
 from tests.workshop.conftest import FakeConn
-from tests.workshop.test_generator import UC
+from tests.workshop.test_generator import UC, s2_payload
 from utils.workshop import generator, prompts
 from utils.workshop.compliance import classify_violations, find_violations, redact_amounts
 from utils.workshop.context import fetch_uc_context
@@ -79,45 +79,64 @@ def test_deny_excludes_picklists_and_splits():
     assert not {"Other", "Customer"} & d
 
 
-def test_deny_exempt_when_in_public_header():
-    uc = dict(UC, sanitized_desc="Unify SAP and finance data.")
-    s2 = json.dumps({"problem_statement": "Land SAP data. Unlike Databricks, it scales.",
-                     "steps": [{"title": "Ingest SAP tables", "detail": "d", "sql": ""}]})
-    out = generator.build_one(uc, "D", None, {}, _llm(s2=s2), deny=["SAP", "Databricks"])
+def test_deny_exempt_only_when_in_use_case_name():
+    # The judge summary (sanitized_desc) is not a public header: it can carry confidential detail.
+    uc = dict(UC, name="SAP Finance Migration", sanitized_desc="Unify Oracle EPM and finance data.")
+    s2 = json.dumps(s2_payload("Land SAP data. Replace Oracle EPM reports. Unlike Databricks, it scales."))
+    out = generator.build_one(uc, "D", None, {}, _llm(s2=s2), deny=["SAP", "Oracle EPM", "Databricks"])
     assert out["brief"] == "Land SAP data."
-    assert out["session2"]["plan"]["steps"][0]["title"] == "Ingest SAP tables"
-    assert "Databricks" not in json.dumps(out)
+    assert "Oracle" not in json.dumps(out) and "Databricks" not in json.dumps(out)
     assert out["_degraded"] is False
+
+
+def test_brief_fallback_scrubbed_or_neutral():
+    uc = dict(UC, sanitized_desc="Forecast weekly demand. Uses Oracle EPM.")
+    s2 = json.dumps(s2_payload(""))
+    out = generator.build_one(uc, "D", None, {}, _llm(s2=s2), deny=["Oracle EPM"])
+    assert out["brief"] == "Forecast weekly demand."
+    out = generator.build_one(dict(uc, sanitized_desc="Oracle EPM only."), "D", None, {}, _llm(s2=s2),
+                              deny=["Oracle EPM"])
+    assert out["brief"] == "Demand Forecasting for Roche"
 
 
 # F4
 def test_s2_scrubs_not_rejects():
     log = []
-    s2 = json.dumps({"problem_statement": "Budget is $1.3M. Real goal.",
-                     "steps": [{"title": "s", "detail": "Uses 500 credits. Build it.",
-                                "sql": "SELECT $1:a FROM @s"},
-                               {"title": "t", "detail": "d", "sql": "-- costs $90K\nSELECT 1"}]})
-    out = generator.build_one(UC, "D", None, {}, _llm(s2=s2, log=log))
+    payload = s2_payload("Budget is $1.3M. Real goal.", sql="SELECT $1:a FROM @s", n=4)
+    payload["sections"][0]["explanation"] = "Uses 500 credits. Build it."
+    payload["sections"][3]["sql"] = "-- costs $90K\nSELECT 1"
+    out = generator.build_one(UC, "D", None, {}, _llm(s2=json.dumps(payload), log=log))
     plan = out["session2"]["plan"]
     assert out["_degraded"] is False
     assert sum("pse-uc-implementation-plan" in p for p in log) == 1
     assert out["brief"] == "Real goal."
-    assert plan["steps"][0]["detail"] == "Build it."
-    assert plan["steps"][0]["sql"] == "SELECT $1:a FROM @s"
-    assert plan["steps"][1]["sql"] == ""
+    assert plan["sections"][0]["explanation"] == "Build it."
+    assert plan["sections"][0]["sql"] == "SELECT $1:a FROM @s"
+    assert plan["sections"][3]["sql"] == ""
     assert "s2:scrubbed:money" in out["_degraded_reasons"]
     assert "s2:scrubbed:credits" in out["_degraded_reasons"]
     assert find_violations(json.dumps(out)) == []
 
 
 def test_s2_clean_emptied_degrades():
-    s2 = json.dumps({"steps": [{"title": "Spend $2M.", "detail": "", "sql": ""}]})
-    out = generator.build_one(UC, "D", None, {}, _llm(s2=s2))
-    # a step dict survives even if its text is scrubbed; empty steps list degrades
-    s2b = json.dumps({"steps": ["Spend $2M."]})
-    out2 = generator.build_one(UC, "D", None, {}, _llm(s2=s2b))
-    assert out["_degraded"] is False
-    assert out2["_degraded"] is True and "s2:clean_emptied" in out2["_degraded_reasons"]
+    # SQL that leaks is blanked; fewer than 3 grounded SQL sections degrades.
+    bad = s2_payload(sql="-- spend $2M\nSELECT 1")
+    bad["sections"][0]["sql"] = "SELECT 1"
+    out = generator.build_one(UC, "D", None, {}, _llm(s2=json.dumps(bad)))
+    assert out["_degraded"] is True and "s2:clean_emptied" in out["_degraded_reasons"]
+    assert out["session2"]["plan"]["sections"][0]["sql"] == "SELECT 1"
+
+
+def test_s2_sql_needs_allowed_source_and_no_invented_constructs():
+    p = s2_payload(n=5)
+    p["sections"][0]["source_url"] = "https://evil.example/x"
+    p["sections"][1]["sql"] = "CREATE AGENT a COMPUTE_POOL = p MODEL = 'm'"
+    p["sections"][2]["sql"] = "SELECT * FROM SNOWFLAKE.ACCOUNT_USAGE.CORTEX_AGENT_USAGE_HISTORY"
+    out = generator.build_one(UC, "D", None, {}, _llm(s2=json.dumps(p)))
+    secs = out["session2"]["plan"]["sections"]
+    assert [bool(s["sql"]) for s in secs] == [False, False, False, True, True]
+    assert secs[0]["source_url"] == ""
+    assert out["_degraded"] is True
 
 
 def test_s1_credits_do_not_reject():

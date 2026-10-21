@@ -7,6 +7,13 @@ from utils.workshop import generator
 
 UC = {"uc_id": "a0X3n00000ABCDEFGH", "name": "Demand Forecasting", "account": "Roche",
       "skills": ["machine-learning"], "sanitized_desc": "Forecast weekly demand.", "stage_label": "POC"}
+SRC = "https://docs.snowflake.com/en/user-guide/dynamic-tables/overview"
+
+
+def s2_payload(stmt="Weekly demand forecasting.", sql="SELECT 1", n=3, url=SRC, **extra):
+    return {"problem_statement": stmt,
+            "sections": [{"title": f"S{i}", "challenge": "c", "explanation": "e", "coco_prompt": "p",
+                          "sql": sql, "source_url": url, "notes": []} for i in range(n)], **extra}
 
 
 def fake_llm_factory(recipe_conf=90, leak=False):
@@ -17,8 +24,7 @@ def fake_llm_factory(recipe_conf=90, leak=False):
         if "starter-prompts" in prompt:
             return json.dumps({"prompts": [{"title": f"T{i}", "purpose": "p", "prompt": "do x"} for i in range(3)]})
         stmt = "Spend is $2M." if leak else "Weekly demand forecasting."
-        return json.dumps({"problem_statement": stmt, "architecture": ["a"], "steps": [{"title": "s", "detail": "d", "sql": ""}],
-                           "coco_prompts": ["p"], "considerations": [], "docs": []})
+        return json.dumps(s2_payload(stmt))
     return llm
 
 

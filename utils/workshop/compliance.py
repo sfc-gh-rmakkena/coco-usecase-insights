@@ -17,6 +17,8 @@ _PATTERNS = [
     re.compile(r"\b(?:spend|cost|costs|revenue|budget|bookings?|contract)\b[^.]{0,40}?\b\d[\d,.]*\s?[kmb]\b", re.I),
     re.compile(r"\b\d[\d,.]*\s?[kmb]?\s*(?:\w+\s+){0,2}credits?\b", re.I),
     re.compile(r"\bcredits?\b\s*[:=]?\s*\d", re.I),
+    re.compile(r"\bCREDIT_QUOTA\s*=\s*\d", re.I),
+    re.compile(r"\bcredits?\s*(?:quota|limit)\s*[:=]?\s*\d", re.I),
     re.compile(r"\b(?:EACV|TCV|ACV|ARR)\b"),
     re.compile(r"\brun[- ]rate\b", re.I),
     re.compile(r"\b(?:red|green)[ -]?(?:light|list)(?:ed|s|ing)?\b", re.I),
@@ -28,14 +30,14 @@ _PATTERNS = [
     re.compile(r"\b(?:health|churn|meddpicc)\s*score\b", re.I),
 ]
 # Category per _PATTERNS index (same order), used for non-sensitive degradation reasons.
-_CATEGORIES = ["money"] * 5 + ["credits"] * 2 + ["money"] * 2 + ["list_terms"] * 3 \
+_CATEGORIES = ["money"] * 5 + ["credits"] * 4 + ["money"] * 2 + ["list_terms"] * 3 \
     + ["stage"] * 2 + ["score"]
 # SQL positional column refs ($1:col, $1, $2 AS x, f($1)) are not currency. In SQL text
 # a bare trailing ref ("SELECT a, $1") also counts (sql=True); in prose "$5" at line end is money.
 _SQL_POS = re.compile(r"\$\d+(?=:|,(?!\d)|\)|\s+(?:AS|FROM)\b)", re.I)
 _SQL_POS_EOT = re.compile(r"\$\d+(?=:|,(?!\d)|\)|\s+(?:AS|FROM)\b|[ \t]*;|[ \t]*$)", re.I | re.M)
 # Numeric money/credit patterns (indexes into _PATTERNS) replaced by redact_amounts.
-_AMOUNT_IDX = range(7)
+_AMOUNT_IDX = range(9)
 _URL = re.compile(r"https?://[^\s)\"'<>`\]]+")
 _TRAIL = ".,;:!?*"
 _SENT_SPLIT = re.compile(r"(?<=[.!?])\s+")
@@ -61,7 +63,9 @@ def sql_quote(s) -> str:
 
 def _deny_patterns(deny):
     terms = sorted({t.strip() for t in (deny or ()) if t and t.strip()}, key=len, reverse=True)
-    return [re.compile(r"(?<!\w)" + re.escape(t) + r"(?!\w)", re.I) for t in terms]
+    # Short all-caps terms ("US", "EY") match case-sensitively so ordinary words ("us") survive.
+    return [re.compile(r"(?<!\w)" + re.escape(t) + r"(?!\w)", 0 if (t.isupper() and len(t) <= 5) else re.I)
+            for t in terms]
 
 
 def _strip_sql_pos(text, sql=False):

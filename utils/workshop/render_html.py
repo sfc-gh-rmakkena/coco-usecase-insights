@@ -59,6 +59,68 @@ def _session1(items):
     return out
 
 
+_TH = 'style="text-align:left;padding:5px 8px;background:#f1f5f9;border-bottom:1px solid #e5e7eb;"'
+_TD = 'style="padding:5px 8px;border-bottom:1px solid #f1f5f9;vertical-align:top;"'
+S2_HEADINGS = ("Problem Statement", "Executive Summary", "Decision Criteria Alignment", "Solution Architecture",
+               "Detailed Technical Approach", "CoCo Skills Acceleration", "Before vs After", "Decision Matrix",
+               "Recommended Next Steps", "Resources")
+
+
+def _h4(t):
+    return f'<h4 style="margin:16px 0 6px;color:#0f172a;">{_h(t)}</h4>'
+
+
+def _url_link(url, label=None):
+    url = str(url or "")
+    if url.startswith("https://"):
+        return (f'<a href="{_h(url)}" target="_blank" rel="noopener noreferrer">'
+                f'{_h(label or url.replace("https://", ""))}</a>')
+    return _h(label or "")
+
+
+def _table(headers, rows):
+    """rows: lists of pre-escaped cell HTML."""
+    if not rows:
+        return ""
+    head = "".join(f"<th {_TH}>{_h(x)}</th>" for x in headers)
+    body = "".join("<tr>" + "".join(f"<td {_TD}>{c}</td>" for c in r) + "</tr>" for r in rows)
+    return f'<table style="border-collapse:collapse;width:100%;font-size:12px;margin:4px 0 10px;">' \
+           f'<tr>{head}</tr>{body}</table>'
+
+
+def _ul(items, tag="ul"):
+    items = [x for x in _list(items) if str(x).strip()]
+    return f"<{tag}>" + "".join(f"<li>{_h(x)}</li>" for x in items) + f"</{tag}>" if items else ""
+
+
+def _section(i, s):
+    s = _dict(s)
+    out = f'<div style="margin:10px 0 14px;"><b>{i}. {_h(s.get("title"))}</b>'
+    if s.get("challenge"):
+        out += f'<div style="font-size:12px;"><i>Challenge:</i> {_h(s["challenge"])}</div>'
+    if s.get("explanation"):
+        out += f'<div style="font-size:12.5px;margin:4px 0;">{_h(s["explanation"])}</div>'
+    if s.get("coco_prompt"):
+        out += (f'<div style="border-left:3px solid #29b5e8;background:#f0f9ff;padding:6px 10px;font-size:12px;'
+                f'margin:6px 0;"><b>CoCo Prompt:</b> {_h(s["coco_prompt"])}</div>')
+    if s.get("sql"):
+        out += _md_block(s["sql"])
+        if s.get("source_url"):
+            out += f'<p style="font-size:11px;color:#706e6b;font-style:italic;margin:2px 0;">Source: {_url_link(s["source_url"])}</p>'
+    out += _ul(s.get("notes"))
+    return out + "</div>"
+
+
+def _resources(res):
+    res = _dict(res)
+    out = ""
+    for key, label in (("quickstarts", "Quickstarts"), ("docs", "Documentation"), ("github", "GitHub")):
+        links = [d for d in _list(res.get(key)) if str(_dict(d).get("url") or "").startswith("https://")]
+        if links:
+            out += f"<b>{label}</b><ul>" + "".join(f"<li>{_doc_link(d)}</li>" for d in links) + "</ul>"
+    return out
+
+
 def _session2(s2):
     s2 = _dict(s2)
     rec, plan = _dict(s2.get("recipe")), _dict(s2.get("plan"))
@@ -72,22 +134,39 @@ def _session2(s2):
     elif rec.get("band") == "reference":
         out += (f'<p style="font-size:12px;color:#6b7280;">Closest recipe: {_h(rec.get("title"))} · '
                 f'{_conf(rec.get("confidence"))}% — reference</p>')
-    out += '<h4 style="margin:14px 0 6px;">Implementation plan</h4>'
     if plan.get("problem_statement"):
-        out += f'<p style="font-size:12.5px;">{_h(plan["problem_statement"])}</p>'
-    if _list(plan.get("architecture")):
-        out += "<b>Architecture</b><ul>" + "".join(f"<li>{_h(a)}</li>" for a in plan["architecture"]) + "</ul>"
-    for i, s in enumerate(_list(plan.get("steps")), 1):
-        s = _dict(s)
-        out += (f'<div style="margin:8px 0;"><b>Step {i}: {_h(s.get("title"))}</b>'
-                f'<div style="font-size:12px;">{_h(s.get("detail"))}</div>')
-        out += (_md_block(s["sql"]) if s.get("sql") else "") + "</div>"
-    if _list(plan.get("coco_prompts")):
-        out += "<b>CoCo prompts</b>" + "".join(_md_block(p) for p in plan["coco_prompts"])
-    if _list(plan.get("considerations")):
-        out += "<b>Considerations</b><ul>" + "".join(f"<li>{_h(c)}</li>" for c in plan["considerations"]) + "</ul>"
-    if _list(plan.get("docs")):
-        out += "<b>Resources</b><ul>" + "".join(f"<li>{_doc_link(d)}</li>" for d in plan["docs"]) + "</ul>"
+        out += _h4("Problem Statement") + f'<p style="font-size:12.5px;">{_h(plan["problem_statement"])}</p>'
+    out += (_h4("Executive Summary") + _table(("Topic", "Previous State", "Snowflake Solution", "Status"), [
+        [_h(_dict(r).get(k)) for k in ("topic", "previous_state", "solution", "status")]
+        for r in _list(plan.get("executive_summary"))])) if _list(plan.get("executive_summary")) else ""
+    if _list(plan.get("decision_criteria_alignment")):
+        out += _h4("Decision Criteria Alignment") + _ul(plan["decision_criteria_alignment"])
+    if _list(plan.get("architecture_layers")) or plan.get("architecture_flow") or _list(plan.get("component_status")):
+        out += _h4("Solution Architecture") + _ul(plan.get("architecture_layers"))
+        if plan.get("architecture_flow"):
+            out += _md_block(plan["architecture_flow"])
+        out += _table(("Component", "Status", "Details", "Source"), [
+            [_h(_dict(r).get("component")), _h(_dict(r).get("status")), _h(_dict(r).get("details")),
+             _url_link(_dict(r).get("source_url"), "docs") if _dict(r).get("source_url") else ""]
+            for r in _list(plan.get("component_status"))])
+    if _list(plan.get("sections")):
+        out += _h4("Detailed Technical Approach") + "".join(
+            _section(i, s) for i, s in enumerate(plan["sections"], 1))
+    if _list(plan.get("coco_skills")):
+        out += _h4("CoCo Skills Acceleration") + _table(("CoCo Skill", "What It Does for This Use Case", "Steps"), [
+            [_h(_dict(r).get(k)) for k in ("skill", "what_it_does", "steps")] for r in plan["coco_skills"]])
+    if _list(plan.get("before_after")):
+        out += _h4("Before vs After") + _table(("Task", "Without CoCo", "With CoCo"), [
+            [_h(_dict(r).get(k)) for k in ("task", "without", "with")] for r in plan["before_after"]])
+    if _list(plan.get("decision_matrix")):
+        out += _h4("Decision Matrix") + _table(("Topic", "Verdict", "Production Ready?", "Action Required"), [
+            [_h(_dict(r).get(k)) for k in ("topic", "verdict", "production_ready", "action")]
+            for r in plan["decision_matrix"]])
+    if _list(plan.get("next_steps")):
+        out += _h4("Recommended Next Steps") + _ul(plan["next_steps"], "ol")
+    res = _resources(plan.get("resources"))
+    if res:
+        out += _h4("Resources") + res
     return out
 
 

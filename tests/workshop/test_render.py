@@ -35,11 +35,11 @@ def test_scope_note_wording():
 
 def test_html_doc_links_https_only_and_conf_int():
     ws = [dict(WS[0], session2={"recipe": dict(WS[0]["session2"]["recipe"], confidence=87.0),
-                                "plan": {"docs": [{"title": "Good", "url": "https://docs.snowflake.com/x"},
-                                                  {"title": "Bad", "url": "javascript:alert(1)"}]}})]
+                                "plan": {"resources": {"docs": [{"title": "Good", "url": "https://docs.snowflake.com/x"},
+                                                                {"title": "Bad", "url": "javascript:alert(1)"}]}}})]
     h = render_workshop_html(ws)
     assert 'href="https://docs.snowflake.com/x"' in h
-    assert "javascript:" not in h and "Bad" in h
+    assert "javascript:" not in h
     assert "87% match" in h
 
 

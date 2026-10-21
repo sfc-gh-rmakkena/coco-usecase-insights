@@ -1,0 +1,880 @@
+{
+ "openflow": {
+  "status_note": "Openflow Connector for SQL Server (CDC): Generally Available, supported wherever Openflow is available (Snowflake Deployments in AWS, Azure, and GCP commercial regions). Other connectors: check each connector page.",
+  "docs": [
+   {
+    "title": "About Openflow",
+    "url": "https://docs.snowflake.com/en/user-guide/data-integration/openflow/about"
+   },
+   {
+    "title": "Set up the Openflow Connector for SQL Server (CDC)",
+    "url": "https://docs.snowflake.com/en/user-guide/data-integration/openflow/connectors/sql-server-cdc/setup"
+   },
+   {
+    "title": "Configure a connector with the setup wizard",
+    "url": "https://docs.snowflake.com/en/user-guide/data-integration/openflow/gen2/setup-connector-wizard"
+   }
+  ],
+  "quickstarts": [
+   {
+    "title": "Getting Started with Openflow Snowflake Deployments",
+    "url": "https://www.snowflake.com/en/developers/guides/getting-started-with-openflow-spcs/"
+   },
+   {
+    "title": "Getting Started with Openflow for CDC from SQL Server",
+    "url": "https://www.snowflake.com/en/developers/guides/getting-started-with-openflow-for-cdc-on-sql-server/"
+   },
+   {
+    "title": "Getting Started with PostgreSQL CDC (Openflow)",
+    "url": "https://www.snowflake.com/en/developers/guides/getting-started-with-openflow-postgresql-cdc/"
+   }
+  ],
+  "sql_snippets": [
+   {
+    "title": "Destination database and grants for the runtime execute-as role",
+    "sql": "CREATE DATABASE IF NOT EXISTS <destination_database>;\n\nGRANT USAGE ON DATABASE <destination_database> TO ROLE OPENFLOW_<RUNTIME_NAME>_EXECUTE_AS_RL;\nGRANT CREATE SCHEMA ON DATABASE <destination_database> TO ROLE OPENFLOW_<RUNTIME_NAME>_EXECUTE_AS_RL;",
+    "source_url": "https://docs.snowflake.com/en/user-guide/data-integration/openflow/connectors/sql-server-cdc/setup"
+   },
+   {
+    "title": "Ingest warehouse for the connector",
+    "sql": "CREATE WAREHOUSE <ingest_warehouse>\n  WITH\n    WAREHOUSE_SIZE = 'XSMALL'\n    AUTO_SUSPEND = 300\n    AUTO_RESUME = TRUE;\n\nGRANT USAGE, OPERATE ON WAREHOUSE <ingest_warehouse> TO ROLE OPENFLOW_<RUNTIME_NAME>_EXECUTE_AS_RL;",
+    "source_url": "https://docs.snowflake.com/en/user-guide/data-integration/openflow/connectors/sql-server-cdc/setup"
+   }
+  ],
+  "github": [
+   {
+    "title": "Snowflake-Labs/sfguide-getting-started-with-openflow-spcs",
+    "url": "https://github.com/Snowflake-Labs/sfguide-getting-started-with-openflow-spcs"
+   }
+  ]
+ },
+ "snowpipe": {
+  "status_note": "Documented in Snowflake docs; confirm availability for your edition and region with your Snowflake SE.",
+  "docs": [
+   {
+    "title": "Snowpipe",
+    "url": "https://docs.snowflake.com/en/user-guide/data-load-snowpipe-intro"
+   },
+   {
+    "title": "Automate Snowpipe for Amazon S3",
+    "url": "https://docs.snowflake.com/en/user-guide/data-load-snowpipe-auto-s3"
+   },
+   {
+    "title": "Automate Snowpipe for Microsoft Azure Blob Storage",
+    "url": "https://docs.snowflake.com/en/user-guide/data-load-snowpipe-auto-azure"
+   }
+  ],
+  "quickstarts": [
+   {
+    "title": "Getting Started with Snowpipe",
+    "url": "https://www.snowflake.com/en/developers/guides/getting-started-with-snowpipe/"
+   }
+  ],
+  "sql_snippets": [
+   {
+    "title": "Auto-ingest pipe",
+    "sql": "CREATE PIPE mydb.myschema.orders_pipe\n  AUTO_INGEST = TRUE\n  AS\n  COPY INTO mydb.myschema.orders\n    FROM @mydb.myschema.orders_stage\n    FILE_FORMAT = (TYPE = 'JSON')\n    MATCH_BY_COLUMN_NAME = CASE_INSENSITIVE;",
+    "source_url": "https://docs.snowflake.com/en/user-guide/data-load-snowpipe-intro"
+   },
+   {
+    "title": "External stage over cloud storage",
+    "sql": "CREATE STAGE mydb.myschema.orders_stage\n  URL = 's3://mybucket/orders/'\n  STORAGE_INTEGRATION = my_s3_int;",
+    "source_url": "https://docs.snowflake.com/en/user-guide/data-load-snowpipe-auto-s3"
+   },
+   {
+    "title": "Check pipe status",
+    "sql": "SELECT SYSTEM$PIPE_STATUS('mydb.myschema.orders_pipe');",
+    "source_url": "https://docs.snowflake.com/en/user-guide/data-load-snowpipe-auto-s3"
+   }
+  ],
+  "github": []
+ },
+ "snowpipe_streaming": {
+  "status_note": "Snowpipe Streaming high-performance architecture: Generally Available (release note, Sep 23, 2025).",
+  "docs": [
+   {
+    "title": "Snowpipe Streaming high-performance architecture with Apache Iceberg tables",
+    "url": "https://docs.snowflake.com/en/user-guide/snowpipe-streaming/snowpipe-streaming-high-performance-iceberg"
+   },
+   {
+    "title": "Best practices for Snowpipe Streaming with high-performance architecture",
+    "url": "https://docs.snowflake.com/en/user-guide/snowpipe-streaming/snowpipe-streaming-high-performance-best-practices"
+   },
+   {
+    "title": "Snowpipe Streaming high-performance architecture (GA release note)",
+    "url": "https://docs.snowflake.com/en/release-notes/2025/other/2025-09-23-snowpipe-streaming-high-performance-architecture"
+   }
+  ],
+  "quickstarts": [
+   {
+    "title": "Getting Started with Snowpipe Streaming and Amazon MSK",
+    "url": "https://www.snowflake.com/en/developers/guides/getting-started-with-snowpipe-streaming-aws-msk/"
+   }
+  ],
+  "sql_snippets": [
+   {
+    "title": "Custom pipe for streaming ingestion",
+    "sql": "-- Option 1: Use the default pipe.\n-- The default pipe is automatically created when you open a channel\n-- against the table using the SDK. The default pipe name follows the\n-- convention: <TABLE_NAME>-STREAMING (for example, MY_ICEBERG_TABLE-STREAMING).\n\n-- Option 2: Create a custom pipe with explicit column mapping.\nCREATE OR REPLACE PIPE my_iceberg_pipe AS\n    COPY INTO my_iceberg_table (event_id, event_type, event_data, event_timestamp)\n    FROM (SELECT $1:event_id, $1:event_type, $1:event_data, $1:event_timestamp);",
+    "source_url": "https://docs.snowflake.com/en/user-guide/snowpipe-streaming/snowpipe-streaming-high-performance-iceberg"
+   }
+  ],
+  "github": []
+ },
+ "copy_into": {
+  "status_note": "Documented in Snowflake docs; confirm availability for your edition and region with your Snowflake SE.",
+  "docs": [
+   {
+    "title": "COPY INTO <table>",
+    "url": "https://docs.snowflake.com/en/sql-reference/sql/copy-into-table"
+   },
+   {
+    "title": "Overview of data loading",
+    "url": "https://docs.snowflake.com/en/user-guide/data-load-overview"
+   }
+  ],
+  "quickstarts": [],
+  "sql_snippets": [
+   {
+    "title": "Load files matching a pattern",
+    "sql": "COPY INTO mytable\n  FILE_FORMAT = (FORMAT_NAME = myformat)\n  PATTERN='.*sales.*[.]csv';",
+    "source_url": "https://docs.snowflake.com/en/sql-reference/sql/copy-into-table"
+   },
+   {
+    "title": "Validate files before loading",
+    "sql": "COPY INTO mytable VALIDATION_MODE = 'RETURN_ERRORS';",
+    "source_url": "https://docs.snowflake.com/en/sql-reference/sql/copy-into-table"
+   }
+  ],
+  "github": []
+ },
+ "dynamic_tables": {
+  "status_note": "Documented in Snowflake docs; confirm availability for your edition and region with your Snowflake SE.",
+  "docs": [
+   {
+    "title": "Dynamic tables",
+    "url": "https://docs.snowflake.com/en/user-guide/dynamic-tables/overview"
+   },
+   {
+    "title": "Dynamic table design patterns",
+    "url": "https://docs.snowflake.com/en/user-guide/dynamic-tables/design-patterns"
+   },
+   {
+    "title": "Understanding target lag",
+    "url": "https://docs.snowflake.com/en/user-guide/dynamic-tables/target-lag"
+   },
+   {
+    "title": "CREATE DYNAMIC TABLE",
+    "url": "https://docs.snowflake.com/en/sql-reference/sql/create-dynamic-table"
+   }
+  ],
+  "quickstarts": [
+   {
+    "title": "Create Declarative Data Pipelines with Dynamic Tables",
+    "url": "https://www.snowflake.com/en/developers/guides/create-declarative-data-pipelines-with-dynamic-tables/"
+   },
+   {
+    "title": "Comprehensive Guide to Snowflake Dynamic Tables",
+    "url": "https://www.snowflake.com/en/developers/guides/comprehensive-guide-to-dynamic-tables/"
+   }
+  ],
+  "sql_snippets": [
+   {
+    "title": "Intermediate layer with TARGET_LAG = DOWNSTREAM",
+    "sql": "CREATE OR REPLACE DYNAMIC TABLE dt_orders_enriched\n    TARGET_LAG = DOWNSTREAM\n    WAREHOUSE = transform_wh\n    REFRESH_MODE = INCREMENTAL\nAS\n    SELECT\n        o.order_id,\n        o.order_date,\n        o.quantity,\n        o.unit_price,\n        o.quantity * o.unit_price AS line_total,\n        c.region,\n        c.segment,\n        ...\n    FROM raw_orders o\n    JOIN dim_customers c ON o.customer_id = c.customer_id;\n\nCREATE OR REPLACE DYNAMIC TABLE dt_orders_daily\n    TARGET_LAG = '30 minutes'\n    WAREHOUSE = transform_wh\n    REFRESH_MODE = INCREMENTAL\nAS\n    SELECT\n        DATE_TRUNC('day', order_date) AS order_day,\n        region,\n        segment,\n        COUNT(*) AS order_count,\n        SUM(line_total) AS daily_revenue\n    FROM dt_orders_enriched\n    GROUP BY ALL;",
+    "source_url": "https://docs.snowflake.com/en/user-guide/dynamic-tables/design-patterns"
+   },
+   {
+    "title": "Latest row per key (SCD Type 1)",
+    "sql": "CREATE OR REPLACE DYNAMIC TABLE dt_customers_current\n    TARGET_LAG = '10 minutes'\n    WAREHOUSE = transform_wh\n    REFRESH_MODE = INCREMENTAL\nAS\n    SELECT * EXCLUDE (raw_metadata_col)\n    FROM raw_customers_cdc\n    QUALIFY ROW_NUMBER() OVER (\n        PARTITION BY customer_id\n        ORDER BY updated_at DESC\n    ) = 1;",
+    "source_url": "https://docs.snowflake.com/en/user-guide/dynamic-tables/design-patterns"
+   },
+   {
+    "title": "Time-based target lag with incremental refresh",
+    "sql": "CREATE OR ALTER DYNAMIC TABLE dt_orders\n    TARGET_LAG = '10 minutes'\n    WAREHOUSE = transform_wh\n    REFRESH_MODE = INCREMENTAL\nAS\n    SELECT\n        order_id,\n        customer_id,\n        order_date,\n        TRIM(UPPER(product_name)) AS product_name,\n        quantity,\n        unit_price,\n        quantity * unit_price AS line_total,\n        order_status\n    FROM raw_orders\n    WHERE order_status != 'returned';",
+    "source_url": "https://docs.snowflake.com/en/user-guide/dynamic-tables/overview"
+   }
+  ],
+  "github": []
+ },
+ "tasks": {
+  "status_note": "Documented in Snowflake docs; confirm availability for your edition and region with your Snowflake SE.",
+  "docs": [
+   {
+    "title": "Introduction to tasks",
+    "url": "https://docs.snowflake.com/en/user-guide/tasks-intro"
+   },
+   {
+    "title": "CREATE TASK",
+    "url": "https://docs.snowflake.com/en/sql-reference/sql/create-task"
+   }
+  ],
+  "quickstarts": [],
+  "sql_snippets": [
+   {
+    "title": "Scheduled task on a warehouse",
+    "sql": "CREATE TASK SCHEDULED_T1\n  WAREHOUSE='COMPUTE_WH'\n  SCHEDULE='60 MINUTES'\n  AS SELECT 1;",
+    "source_url": "https://docs.snowflake.com/en/user-guide/tasks-intro"
+   },
+   {
+    "title": "Serverless scheduled task",
+    "sql": "CREATE TASK SCHEDULED_T2\n  SCHEDULE='30 SECONDS'\n  SERVERLESS_TASK_MIN_STATEMENT_SIZE='SMALL'\n  SERVERLESS_TASK_MAX_STATEMENT_SIZE='LARGE'\n  AS SELECT 1;",
+    "source_url": "https://docs.snowflake.com/en/user-guide/tasks-intro"
+   }
+  ],
+  "github": []
+ },
+ "snowpark": {
+  "status_note": "Documented in Snowflake docs; confirm availability for your edition and region with your Snowflake SE.",
+  "docs": [
+   {
+    "title": "Snowpark Developer Guide for Python",
+    "url": "https://docs.snowflake.com/en/developer-guide/snowpark/python/index"
+   },
+   {
+    "title": "Creating user-defined functions for DataFrames in Python",
+    "url": "https://docs.snowflake.com/en/developer-guide/snowpark/python/creating-udfs"
+   }
+  ],
+  "quickstarts": [
+   {
+    "title": "Getting Started with Snowpark Python",
+    "url": "https://www.snowflake.com/en/developers/guides/getting-started-with-snowpark-python/"
+   },
+   {
+    "title": "Data Engineering Pipelines with Snowpark Python",
+    "url": "https://www.snowflake.com/en/developers/guides/data-engineering-pipelines-with-snowpark-python/"
+   }
+  ],
+  "sql_snippets": [
+   {
+    "title": "Snowpark Python handler (Python)",
+    "sql": "import snowflake.snowpark as snowpark\nfrom snowflake.snowpark.functions import col\n\ndef main(session: snowpark.Session):\n  df_table = session.table(\"sample_product_data\")",
+    "source_url": "https://docs.snowflake.com/en/developer-guide/snowpark/python/creating-udfs"
+   }
+  ],
+  "github": [
+   {
+    "title": "Snowflake-Labs/sfguide-data-engineering-with-snowpark-python",
+    "url": "https://github.com/Snowflake-Labs/sfguide-data-engineering-with-snowpark-python"
+   }
+  ]
+ },
+ "dbt": {
+  "status_note": "Documented in Snowflake docs; confirm availability for your edition and region with your Snowflake SE.",
+  "docs": [
+   {
+    "title": "dbt Projects on Snowflake",
+    "url": "https://docs.snowflake.com/en/user-guide/data-engineering/dbt-projects-on-snowflake"
+   },
+   {
+    "title": "CREATE DBT PROJECT",
+    "url": "https://docs.snowflake.com/en/sql-reference/sql/create-dbt-project"
+   },
+   {
+    "title": "EXECUTE DBT PROJECT",
+    "url": "https://docs.snowflake.com/en/sql-reference/sql/execute-dbt-project"
+   }
+  ],
+  "quickstarts": [
+   {
+    "title": "Exploring dbt Projects on Snowflake",
+    "url": "https://www.snowflake.com/en/developers/guides/dbt-projects-on-snowflake/"
+   }
+  ],
+  "sql_snippets": [
+   {
+    "title": "Create a dbt project object from a Git stage",
+    "sql": "CREATE DBT PROJECT sales_db.dbt_projects_schema.sales_model\n  FROM '@sales_db.integrations_schema.sales_dbt_git_stage/branches/main'\n  DEFAULT_TARGET = 'prod'\n  EXTERNAL_ACCESS_INTEGRATIONS = 'my_external_access_integration'\n  COMMENT = 'Generates sales data models.';",
+    "source_url": "https://docs.snowflake.com/en/sql-reference/sql/create-dbt-project"
+   },
+   {
+    "title": "Run selected models",
+    "sql": "EXECUTE DBT PROJECT my_database.my_schema.my_dbt_project\n  ARGS = '--select simple_customers combined_bookings prepped_data --target dev';",
+    "source_url": "https://docs.snowflake.com/en/sql-reference/sql/execute-dbt-project"
+   },
+   {
+    "title": "Schedule a dbt project with a task",
+    "sql": "CREATE OR ALTER TASK my_database.my_schema.run_dbt_project\n  WAREHOUSE = my_warehouse\n  SCHEDULE = '6 hours'\nAS\n  EXECUTE DBT PROJECT my_database.my_schema.my_dbt_project args='run --target prod';",
+    "source_url": "https://docs.snowflake.com/en/sql-reference/sql/execute-dbt-project"
+   }
+  ],
+  "github": []
+ },
+ "iceberg": {
+  "status_note": "Documented in Snowflake docs; confirm availability for your edition and region with your Snowflake SE.",
+  "docs": [
+   {
+    "title": "Apache Iceberg tables",
+    "url": "https://docs.snowflake.com/en/user-guide/tables-iceberg"
+   },
+   {
+    "title": "Create an Apache Iceberg table",
+    "url": "https://docs.snowflake.com/en/user-guide/tables-iceberg-create"
+   }
+  ],
+  "quickstarts": [
+   {
+    "title": "Getting Started with Iceberg Tables",
+    "url": "https://www.snowflake.com/en/developers/guides/getting-started-iceberg-tables/"
+   }
+  ],
+  "sql_snippets": [
+   {
+    "title": "Snowflake-managed Iceberg table",
+    "sql": "CREATE ICEBERG TABLE my_iceberg_table (col1 int)\n  CATALOG = 'SNOWFLAKE'\n  EXTERNAL_VOLUME = 'SNOWFLAKE_MANAGED';",
+    "source_url": "https://docs.snowflake.com/en/user-guide/tables-iceberg-create"
+   }
+  ],
+  "github": []
+ },
+ "semantic_views": {
+  "status_note": "Documented in Snowflake docs; confirm availability for your edition and region with your Snowflake SE.",
+  "docs": [
+   {
+    "title": "Overview of semantic views",
+    "url": "https://docs.snowflake.com/en/user-guide/views-semantic/overview"
+   },
+   {
+    "title": "CREATE SEMANTIC VIEW",
+    "url": "https://docs.snowflake.com/en/sql-reference/sql/create-semantic-view"
+   },
+   {
+    "title": "Semantic view YAML specification",
+    "url": "https://docs.snowflake.com/en/user-guide/views-semantic/semantic-view-yaml-spec"
+   },
+   {
+    "title": "Best practices for developing semantic views",
+    "url": "https://docs.snowflake.com/en/user-guide/views-semantic/best-practices-dev"
+   }
+  ],
+  "quickstarts": [
+   {
+    "title": "Build Agentic Analytics with Semantic Views",
+    "url": "https://www.snowflake.com/en/developers/guides/snowflake-semantic-view-agentic-analytics/"
+   }
+  ],
+  "sql_snippets": [
+   {
+    "title": "Semantic view with tables, relationships, facts, dimensions, and metrics",
+    "sql": "CREATE SEMANTIC VIEW tpch_rev_analysis\n\n  TABLES (\n    orders AS SNOWFLAKE_SAMPLE_DATA.TPCH_SF1.ORDERS\n      PRIMARY KEY (o_orderkey)\n      WITH SYNONYMS ('sales orders')\n      COMMENT = 'All orders table for the sales domain',\n    customers AS SNOWFLAKE_SAMPLE_DATA.TPCH_SF1.CUSTOMER\n      PRIMARY KEY (c_custkey)\n      COMMENT = 'Main table for customer data',\n    line_items AS SNOWFLAKE_SAMPLE_DATA.TPCH_SF1.LINEITEM\n      PRIMARY KEY (l_orderkey, l_linenumber)\n      COMMENT = 'Line items in orders'\n  )\n\n  RELATIONSHIPS (\n    orders_to_customers AS\n      orders (o_custkey) REFERENCES customers,\n    line_item_to_orders AS\n      line_items (l_orderkey) REFERENCES orders\n  )\n\n  FACTS (\n    line_items.line_item_id AS CONCAT(l_orderkey, '-', l_linenumber),\n    orders.count_line_items AS COUNT(line_items.line_item_id),\n    line_items.discounted_price AS l_extendedprice * (1 - l_discount)\n      COMMENT = 'Extended price after discount'\n  )\n\n  DIMENSIONS (\n    customers.customer_name AS customers.c_name\n      WITH SYNONYMS = ('customer name')\n      COMMENT = 'Name of the customer',\n    orders.order_date AS o_orderdate\n      COMMENT = 'Date when the order was placed',\n    orders.order_year AS YEAR(o_orderdate)\n      COMMENT = 'Year when the order was placed'\n  )\n\n  METRICS (\n    customers.customer_count AS COUNT(c_custkey)\n      COMMENT = 'Count of number of customers',\n    orders.order_average_value AS AVG(orders.o_totalprice)\n      COMMENT = 'Average order value across all orders',\n    orders.average_line_items_per_order AS AVG(orders.count_line_items)\n      COMMENT = 'Average number of line items per order'\n  )\n\n  COMMENT = 'Semantic view for revenue analysis';",
+    "source_url": "https://docs.snowflake.com/en/sql-reference/sql/create-semantic-view"
+   },
+   {
+    "title": "Query a semantic view",
+    "sql": "SELECT * FROM SEMANTIC VIEW(\n  sv\n  METRICS (\n    table_1.metric_2\n  )\n  DIMENSIONS (\n    table_1.dimension_1,\n    table_1.dimension_2,\n    table_1.dimension_3\n  )\n);",
+    "source_url": "https://docs.snowflake.com/en/sql-reference/sql/create-semantic-view"
+   }
+  ],
+  "github": []
+ },
+ "cortex_agents": {
+  "status_note": "Documented in Snowflake docs; confirm availability for your edition and region with your Snowflake SE.",
+  "docs": [
+   {
+    "title": "Cortex Agents",
+    "url": "https://docs.snowflake.com/en/user-guide/snowflake-cortex/cortex-agents"
+   },
+   {
+    "title": "CREATE AGENT",
+    "url": "https://docs.snowflake.com/en/sql-reference/sql/create-agent"
+   }
+  ],
+  "quickstarts": [
+   {
+    "title": "Getting Started with Cortex Agents",
+    "url": "https://www.snowflake.com/en/developers/guides/getting-started-with-cortex-agents/"
+   }
+  ],
+  "sql_snippets": [
+   {
+    "title": "Agent with a Cortex Analyst tool over a semantic view",
+    "sql": "CREATE OR REPLACE SECURE AGENT my_sales_agent\n  COMMENT = 'Production sales analyst.'\n  FROM SPECIFICATION\n  $$\n  models:\n    orchestration: claude-sonnet-4-6\n  tools:\n    - tool_spec:\n        type: \"cortex_analyst_text_to_sql\"\n        name: \"RevenueAnalyst\"\n  tool_resources:\n    RevenueAnalyst:\n      semantic_view: \"sales_db.public.revenue_model\"\n  $$;",
+    "source_url": "https://docs.snowflake.com/en/sql-reference/sql/create-agent"
+   },
+   {
+    "title": "Grant usage on an agent and keep grants on replace",
+    "sql": "-- Create the original agent\nCREATE OR REPLACE AGENT my_analytics_agent\n  FROM SPECIFICATION\n  $$\n  models:\n    orchestration: auto\n  $$;\n\n-- Grant USAGE on the original agent\nGRANT USAGE ON AGENT my_analytics_agent TO ROLE analyst_role;\n\n-- Check existing grants before replacing\nSHOW GRANTS ON AGENT my_analytics_agent;\n\n-- Replace the agent and copy all existing grants to the replacement\nCREATE OR REPLACE AGENT my_analytics_agent COPY GRANTS\n  FROM SPECIFICATION\n  $$\n  models:\n    orchestration: auto\n  $$;\n\n-- Confirm grants were copied\nSHOW GRANTS ON AGENT my_analytics_agent;",
+    "source_url": "https://docs.snowflake.com/en/sql-reference/sql/create-agent"
+   }
+  ],
+  "github": [
+   {
+    "title": "Snowflake-Labs/sfguide-getting-started-with-cortex-agents",
+    "url": "https://github.com/Snowflake-Labs/sfguide-getting-started-with-cortex-agents"
+   }
+  ]
+ },
+ "cortex_analyst": {
+  "status_note": "Documented in Snowflake docs; confirm availability for your edition and region with your Snowflake SE.",
+  "docs": [
+   {
+    "title": "Cortex Analyst",
+    "url": "https://docs.snowflake.com/en/user-guide/snowflake-cortex/cortex-analyst"
+   }
+  ],
+  "quickstarts": [
+   {
+    "title": "Getting Started with Cortex Analyst",
+    "url": "https://www.snowflake.com/en/developers/guides/getting-started-with-cortex-analyst/"
+   }
+  ],
+  "sql_snippets": [
+   {
+    "title": "Grant Cortex Analyst access to a role",
+    "sql": "GRANT DATABASE ROLE SNOWFLAKE.CORTEX_ANALYST_USER TO ROLE analyst;",
+    "source_url": "https://docs.snowflake.com/en/user-guide/snowflake-cortex/cortex-analyst"
+   }
+  ],
+  "github": []
+ },
+ "cortex_search": {
+  "status_note": "Documented in Snowflake docs; confirm availability for your edition and region with your Snowflake SE.",
+  "docs": [
+   {
+    "title": "Cortex Search overview",
+    "url": "https://docs.snowflake.com/en/user-guide/snowflake-cortex/cortex-search/cortex-search-overview"
+   },
+   {
+    "title": "CREATE CORTEX SEARCH SERVICE",
+    "url": "https://docs.snowflake.com/en/sql-reference/sql/create-cortex-search"
+   }
+  ],
+  "quickstarts": [],
+  "sql_snippets": [
+   {
+    "title": "Cortex Search service",
+    "sql": "CREATE OR REPLACE CORTEX SEARCH SERVICE transcript_search_service\n  ON transcript_text\n  ATTRIBUTES region\n  WAREHOUSE = cortex_search_wh\n  TARGET_LAG = '1 day'\n  EMBEDDING_MODEL = 'snowflake-arctic-embed-l-v2.0'\n  AS (\n    SELECT\n        transcript_text,\n        region,\n        agent_id\n    FROM support_transcripts\n);",
+    "source_url": "https://docs.snowflake.com/en/user-guide/snowflake-cortex/cortex-search/cortex-search-overview"
+   }
+  ],
+  "github": []
+ },
+ "interactive": {
+  "status_note": "Documented in Snowflake docs; confirm availability for your edition and region with your Snowflake SE.",
+  "docs": [
+   {
+    "title": "Interactive tables and interactive warehouses",
+    "url": "https://docs.snowflake.com/en/user-guide/interactive"
+   }
+  ],
+  "quickstarts": [
+   {
+    "title": "Getting Started with Snowflake Interactive Analytics",
+    "url": "https://www.snowflake.com/en/developers/guides/getting-started-with-interactive-tables/"
+   }
+  ],
+  "sql_snippets": [
+   {
+    "title": "Interactive warehouse",
+    "sql": "CREATE INTERACTIVE WAREHOUSE interactive_demo\n  WAREHOUSE_SIZE = 'XSMALL'\n  AUTO_SUSPEND = 86400\n  AUTO_RESUME = TRUE;",
+    "source_url": "https://docs.snowflake.com/en/user-guide/interactive"
+   },
+   {
+    "title": "Attach tables to an interactive warehouse",
+    "sql": "ALTER WAREHOUSE interactive_demo ADD TABLES (orders);",
+    "source_url": "https://docs.snowflake.com/en/user-guide/interactive"
+   }
+  ],
+  "github": []
+ },
+ "migrations": {
+  "status_note": "Documented in Snowflake docs; confirm availability for your edition and region with your Snowflake SE.",
+  "docs": [
+   {
+    "title": "SnowConvert AI documentation",
+    "url": "https://docs.snowflake.com/en/migrations/snowconvert-docs/overview"
+   },
+   {
+    "title": "SnowConvert AI - Getting Started",
+    "url": "https://docs.snowflake.com/en/migrations/snowconvert-docs/general/getting-started/README"
+   }
+  ],
+  "quickstarts": [
+   {
+    "title": "How To Accelerate Data Warehouse Migrations With SnowConvert AI",
+    "url": "https://www.snowflake.com/en/developers/guides/how-to-accelerate-data-warehouse-migrations-with-snowconvert-ai/"
+   },
+   {
+    "title": "End-to-End Migration to Snowflake: SQL Code Conversion and Data Migration",
+    "url": "https://www.snowflake.com/en/developers/guides/e2emigration-sql-and-data/"
+   }
+  ],
+  "sql_snippets": [
+   {
+    "title": "Allow a role to create migration projects",
+    "sql": "GRANT CREATE MIGRATION ON ACCOUNT TO ROLE <your_role>;",
+    "source_url": "https://www.snowflake.com/en/developers/guides/how-to-accelerate-data-warehouse-migrations-with-snowconvert-ai/"
+   }
+  ],
+  "github": []
+ },
+ "notebooks": {
+  "status_note": "Documented in Snowflake docs; confirm availability for your edition and region with your Snowflake SE.",
+  "docs": [
+   {
+    "title": "Snowflake Notebooks",
+    "url": "https://docs.snowflake.com/en/user-guide/ui-snowsight/notebooks"
+   },
+   {
+    "title": "CREATE NOTEBOOK",
+    "url": "https://docs.snowflake.com/en/sql-reference/sql/create-notebook"
+   }
+  ],
+  "quickstarts": [
+   {
+    "title": "A Getting Started Guide With Snowflake Notebooks",
+    "url": "https://www.snowflake.com/en/developers/guides/getting-started-with-snowflake-notebooks/"
+   }
+  ],
+  "sql_snippets": [
+   {
+    "title": "Notebook from a stage",
+    "sql": "CREATE NOTEBOOK mynotebook\n FROM '@my_db.my_schema.my_stage'\n MAIN_FILE = 'my_notebook_file.ipynb'\n QUERY_WAREHOUSE = my_warehouse;",
+    "source_url": "https://docs.snowflake.com/en/sql-reference/sql/create-notebook"
+   }
+  ],
+  "github": [
+   {
+    "title": "Snowflake-Labs/snowflake-demo-notebooks",
+    "url": "https://github.com/Snowflake-Labs/snowflake-demo-notebooks"
+   }
+  ]
+ },
+ "ml": {
+  "status_note": "Documented in Snowflake docs; confirm availability for your edition and region with your Snowflake SE.",
+  "docs": [
+   {
+    "title": "Snowflake Model Registry",
+    "url": "https://docs.snowflake.com/en/developer-guide/snowflake-ml/model-registry/overview"
+   },
+   {
+    "title": "Snowflake Feature Store",
+    "url": "https://docs.snowflake.com/en/developer-guide/snowflake-ml/feature-store/overview"
+   }
+  ],
+  "quickstarts": [
+   {
+    "title": "Getting Started with ML Development in Snowflake",
+    "url": "https://www.snowflake.com/en/developers/guides/intro-to-machine-learning-with-snowpark-ml-for-python/"
+   }
+  ],
+  "sql_snippets": [
+   {
+    "title": "Open the model registry (Python)",
+    "sql": "from snowflake.ml.registry import Registry\n\nreg = Registry(session=session, database_name=\"ML\", schema_name=\"REGISTRY\")",
+    "source_url": "https://docs.snowflake.com/en/developer-guide/snowflake-ml/model-registry/overview"
+   },
+   {
+    "title": "Log a model version (Python)",
+    "sql": "from snowflake.ml.model import task, type_hints\nmv = reg.log_model(clf,\n                   model_name=\"my_model\",\n                   version_name=\"v1\",\n                   conda_dependencies=[\"scikit-learn\"],\n                   comment=\"My awesome ML model\",\n                   metrics={\"score\": 96},\n                   sample_input_data=train_features,\n                   task=task.Task.TABULAR_BINARY_CLASSIFICATION)",
+    "source_url": "https://docs.snowflake.com/en/developer-guide/snowflake-ml/model-registry/overview"
+   }
+  ],
+  "github": []
+ },
+ "ai_functions": {
+  "status_note": "Documented in Snowflake docs; confirm availability for your edition and region with your Snowflake SE.",
+  "docs": [
+   {
+    "title": "Cortex AI Functions",
+    "url": "https://docs.snowflake.com/en/user-guide/snowflake-cortex/aisql"
+   },
+   {
+    "title": "AI_COMPLETE",
+    "url": "https://docs.snowflake.com/en/sql-reference/functions/ai_complete"
+   },
+   {
+    "title": "AI_CLASSIFY",
+    "url": "https://docs.snowflake.com/en/sql-reference/functions/ai_classify"
+   }
+  ],
+  "quickstarts": [
+   {
+    "title": "Getting Started with Cortex AI Functions",
+    "url": "https://www.snowflake.com/en/developers/guides/getting-started-with-cortex-aisql/"
+   }
+  ],
+  "sql_snippets": [
+   {
+    "title": "Classify text",
+    "sql": "SELECT AI_CLASSIFY('One day I will see the world', ['travel', 'cooking']);",
+    "source_url": "https://docs.snowflake.com/en/sql-reference/functions/ai_classify"
+   },
+   {
+    "title": "Classify staged documents",
+    "sql": "WITH staged_docs AS (\n  SELECT TO_FILE(file_url) AS doc FROM DIRECTORY(@my_doc_stage)\n)\nSELECT doc, AI_CLASSIFY(doc, ['invoice', 'contract', 'lab_report']):labels AS classification\nFROM staged_docs;",
+    "source_url": "https://docs.snowflake.com/en/sql-reference/functions/ai_classify"
+   }
+  ],
+  "github": []
+ },
+ "document_ai": {
+  "status_note": "Documented in Snowflake docs; confirm availability for your edition and region with your Snowflake SE.",
+  "docs": [
+   {
+    "title": "Parsing documents with AI_PARSE_DOCUMENT",
+    "url": "https://docs.snowflake.com/en/user-guide/snowflake-cortex/parse-document"
+   },
+   {
+    "title": "AI_EXTRACT",
+    "url": "https://docs.snowflake.com/en/sql-reference/functions/ai_extract"
+   },
+   {
+    "title": "Cortex AI Functions: Documents",
+    "url": "https://docs.snowflake.com/en/user-guide/snowflake-cortex/ai-documents"
+   }
+  ],
+  "quickstarts": [],
+  "sql_snippets": [
+   {
+    "title": "Parse a staged document with layout",
+    "sql": "SELECT AI_PARSE_DOCUMENT (\n    TO_FILE('@docs.doc_stage','research-paper-example.pdf'),\n    {'mode': 'LAYOUT' , 'page_split': true}) AS research_paper_example;",
+    "source_url": "https://docs.snowflake.com/en/user-guide/snowflake-cortex/parse-document"
+   },
+   {
+    "title": "OCR mode",
+    "sql": "SELECT AI_PARSE_DOCUMENT(\n  TO_FILE( '@docs.doc_stage', 'document_1.pdf' ),\n  { 'mode': 'OCR' } ) AS OCR;",
+    "source_url": "https://docs.snowflake.com/en/user-guide/snowflake-cortex/parse-document"
+   }
+  ],
+  "github": []
+ },
+ "apps": {
+  "status_note": "Snowflake Native App Framework: Generally Available. Streamlit in Snowflake: Documented in Snowflake docs; confirm availability for your edition and region with your Snowflake SE.",
+  "docs": [
+   {
+    "title": "About Streamlit in Snowflake",
+    "url": "https://docs.snowflake.com/en/developer-guide/streamlit/about-streamlit"
+   },
+   {
+    "title": "CREATE STREAMLIT",
+    "url": "https://docs.snowflake.com/en/sql-reference/sql/create-streamlit"
+   },
+   {
+    "title": "About the Snowflake Native App Framework",
+    "url": "https://docs.snowflake.com/en/developer-guide/native-apps/native-apps-about"
+   }
+  ],
+  "quickstarts": [
+   {
+    "title": "Getting Started with Snowflake Native Apps",
+    "url": "https://www.snowflake.com/en/developers/guides/getting-started-with-native-apps/"
+   }
+  ],
+  "sql_snippets": [
+   {
+    "title": "Streamlit app from a stage",
+    "sql": "CREATE STREAMLIT hello_streamlit\n  FROM @streamlit_db.streamlit_schema.streamlit_stage\n  MAIN_FILE = 'streamlit_main.py'\n  QUERY_WAREHOUSE = my_warehouse;",
+    "source_url": "https://docs.snowflake.com/en/sql-reference/sql/create-streamlit"
+   }
+  ],
+  "github": []
+ },
+ "collaboration": {
+  "status_note": "Organizational listings (Internal Marketplace): Generally Available (release note, Nov 12, 2024). Data Clean Rooms collaboration experience: Generally Available. Secure Data Sharing: Documented in Snowflake docs; confirm availability for your edition and region with your Snowflake SE.",
+  "docs": [
+   {
+    "title": "About organizational listings",
+    "url": "https://docs.snowflake.com/en/user-guide/collaboration/listings/organizational/org-listing-about"
+   },
+   {
+    "title": "Organizational listings GA release note",
+    "url": "https://docs.snowflake.com/en/release-notes/2024/other/2024-11-12-organizational-listings"
+   },
+   {
+    "title": "Introduction to Secure Data Sharing",
+    "url": "https://docs.snowflake.com/en/user-guide/data-sharing-intro"
+   },
+   {
+    "title": "About Snowflake Data Clean Rooms",
+    "url": "https://docs.snowflake.com/en/user-guide/cleanrooms/about"
+   }
+  ],
+  "quickstarts": [
+   {
+    "title": "Sharing Data and AI on the Snowflake Internal Marketplace",
+    "url": "https://www.snowflake.com/en/developers/guides/sharing-data-and-ai-on-snowflake-internal-marketplace/"
+   }
+  ],
+  "sql_snippets": [
+   {
+    "title": "Create a share",
+    "sql": "CREATE SHARE sales_s;",
+    "source_url": "https://docs.snowflake.com/en/user-guide/data-sharing-provider"
+   },
+   {
+    "title": "Grant objects to a share",
+    "sql": "GRANT USAGE ON DATABASE sales_db TO SHARE sales_s;\n\nGRANT USAGE ON SCHEMA sales_db.aggregates_eula TO SHARE sales_s;\n\nGRANT SELECT ON TABLE sales_db.aggregates_eula.aggregate_1 TO SHARE sales_s;",
+    "source_url": "https://docs.snowflake.com/en/user-guide/data-sharing-provider"
+   }
+  ],
+  "github": []
+ },
+ "governance": {
+  "status_note": "Row access policies and dynamic data masking: Requires Enterprise Edition (or higher) per Snowflake docs. Object tagging: Documented in Snowflake docs; confirm availability for your edition and region with your Snowflake SE.",
+  "docs": [
+   {
+    "title": "Understanding row access policies",
+    "url": "https://docs.snowflake.com/en/user-guide/security-row-intro"
+   },
+   {
+    "title": "Using row access policies",
+    "url": "https://docs.snowflake.com/en/user-guide/security-row-using"
+   },
+   {
+    "title": "Using Dynamic Data Masking",
+    "url": "https://docs.snowflake.com/en/user-guide/security-column-ddm-use"
+   },
+   {
+    "title": "Introduction to object tagging",
+    "url": "https://docs.snowflake.com/en/user-guide/object-tagging/introduction"
+   },
+   {
+    "title": "Introduction to data classification",
+    "url": "https://docs.snowflake.com/en/user-guide/classify-intro"
+   }
+  ],
+  "quickstarts": [
+   {
+    "title": "Getting Started with Horizon for Data Governance in Snowflake",
+    "url": "https://www.snowflake.com/en/developers/guides/getting-started-with-horizon-for-data-governance-in-snowflake/"
+   }
+  ],
+  "sql_snippets": [
+   {
+    "title": "Row access policy using a mapping table",
+    "sql": "USE ROLE schema_owner_role;\n\nCREATE OR REPLACE ROW ACCESS POLICY security.sales_policy\nAS (sales_region varchar) RETURNS BOOLEAN ->\n  'sales_executive_role' = CURRENT_ROLE()\n OR EXISTS (\n   SELECT 1 FROM salesmanagerregions\n     WHERE sales_manager = CURRENT_ROLE()\n     AND region = sales_region\n )\n;",
+    "source_url": "https://docs.snowflake.com/en/user-guide/security-row-using"
+   },
+   {
+    "title": "Attach a row access policy",
+    "sql": "-- table\n\nALTER TABLE t1 ADD ROW ACCESS POLICY rap_t1 ON (empl_id);\n\n-- view\n\nALTER VIEW v1 ADD ROW ACCESS POLICY rap_v1 ON (empl_id);",
+    "source_url": "https://docs.snowflake.com/en/user-guide/security-row-intro"
+   },
+   {
+    "title": "Masking policy",
+    "sql": "CREATE OR REPLACE MASKING POLICY email_mask AS (val string) RETURNS string ->\n  CASE\n    WHEN CURRENT_ROLE() IN ('ANALYST') THEN val\n    ELSE '*********'\n  END;",
+    "source_url": "https://docs.snowflake.com/en/user-guide/security-column-ddm-use"
+   },
+   {
+    "title": "Memoizable function for policy lookups",
+    "sql": "CREATE FUNCTION is_role_authorized(arg1 VARCHAR)\nRETURNS BOOLEAN\nMEMOIZABLE\nAS\n$$\n  SELECT ARRAY_CONTAINS(\n arg1::VARIANT,\n (SELECT ARRAY_AGG(role) FROM auth_role WHERE is_authorized = TRUE)\n  )\n$$;",
+    "source_url": "https://docs.snowflake.com/en/user-guide/security-column-ddm-use"
+   },
+   {
+    "title": "Tag with allowed values",
+    "sql": "CREATE TAG cost_center\n  ALLOWED_VALUES 'finance', 'engineering';",
+    "source_url": "https://docs.snowflake.com/en/user-guide/object-tagging/work"
+   }
+  ],
+  "github": []
+ },
+ "cost": {
+  "status_note": "Documented in Snowflake docs; confirm availability for your edition and region with your Snowflake SE.",
+  "docs": [
+   {
+    "title": "Monitor credit usage with budgets",
+    "url": "https://docs.snowflake.com/en/user-guide/budgets"
+   },
+   {
+    "title": "Custom budgets",
+    "url": "https://docs.snowflake.com/en/user-guide/budgets/custom-budget"
+   },
+   {
+    "title": "Working with resource monitors",
+    "url": "https://docs.snowflake.com/en/user-guide/resource-monitors"
+   }
+  ],
+  "quickstarts": [
+   {
+    "title": "Resource Optimization: Setup & Configuration",
+    "url": "https://www.snowflake.com/en/developers/guides/resource-optimization-setup/"
+   }
+  ],
+  "sql_snippets": [
+   {
+    "title": "Custom budget",
+    "sql": "USE SCHEMA budgets_db.budgets_schema;\n\nCREATE SNOWFLAKE.CORE.BUDGET my_budget();",
+    "source_url": "https://docs.snowflake.com/en/user-guide/budgets/custom-budget"
+   },
+   {
+    "title": "Resource monitor that suspends a warehouse (quota is a placeholder)",
+    "sql": "USE ROLE ACCOUNTADMIN;\n\nCREATE OR REPLACE RESOURCE MONITOR limit1 WITH CREDIT_QUOTA = <credit_quota>\n  TRIGGERS ON 100 PERCENT DO SUSPEND;\n\nALTER WAREHOUSE wh1 SET RESOURCE_MONITOR = limit1;",
+    "source_url": "https://docs.snowflake.com/en/user-guide/resource-monitors"
+   }
+  ],
+  "github": []
+ },
+ "observability": {
+  "status_note": "Data Quality Monitoring (data metric functions): Requires Enterprise Edition (or higher) per Snowflake docs.",
+  "docs": [
+   {
+    "title": "Introduction to data quality checks",
+    "url": "https://docs.snowflake.com/en/user-guide/data-quality-intro"
+   },
+   {
+    "title": "Use SQL to set up data metric functions",
+    "url": "https://docs.snowflake.com/en/user-guide/data-quality-working"
+   },
+   {
+    "title": "Custom data metric functions",
+    "url": "https://docs.snowflake.com/en/user-guide/data-quality-custom-dmfs"
+   }
+  ],
+  "quickstarts": [
+   {
+    "title": "Getting Started with Data Quality Monitoring in Snowflake",
+    "url": "https://www.snowflake.com/en/developers/guides/getting-started-with-data-quality-in-snowflake/"
+   }
+  ],
+  "sql_snippets": [
+   {
+    "title": "Attach a system DMF",
+    "sql": "ALTER TABLE t\n  ADD DATA METRIC FUNCTION SNOWFLAKE.CORE.NULL_COUNT\n    ON (c1);",
+    "source_url": "https://docs.snowflake.com/en/user-guide/data-quality-working"
+   },
+   {
+    "title": "Custom referential-integrity DMF",
+    "sql": "CREATE OR REPLACE DATA METRIC FUNCTION governance.dmfs.referential_check(\n  arg_t1 TABLE (arg_c1 INT), arg_t2 TABLE (arg_c2 INT))\nRETURNS NUMBER AS\n 'SELECT COUNT(*) FROM arg_t1\n  WHERE arg_c1 NOT IN (SELECT arg_c2 FROM arg_t2)';",
+    "source_url": "https://docs.snowflake.com/en/user-guide/data-quality-custom-dmfs"
+   }
+  ],
+  "github": []
+ },
+ "search_optimization": {
+  "status_note": "Search optimization service: Requires Enterprise Edition (or higher) per Snowflake docs.",
+  "docs": [
+   {
+    "title": "Identifying queries that benefit from search optimization",
+    "url": "https://docs.snowflake.com/en/user-guide/search-optimization/queries-that-benefit"
+   },
+   {
+    "title": "Speeding up join queries with search optimization",
+    "url": "https://docs.snowflake.com/en/user-guide/search-optimization/join-queries"
+   },
+   {
+    "title": "Enabling and disabling search optimization",
+    "url": "https://docs.snowflake.com/en/user-guide/search-optimization/enabling"
+   }
+  ],
+  "quickstarts": [
+   {
+    "title": "Getting started with Search Optimization",
+    "url": "https://www.snowflake.com/en/developers/guides/getting-started-with-search-optimization/"
+   }
+  ],
+  "sql_snippets": [
+   {
+    "title": "Check column cardinality",
+    "sql": "SELECT APPROX_COUNT_DISTINCT(column1) FROM table1;",
+    "source_url": "https://docs.snowflake.com/en/user-guide/search-optimization/queries-that-benefit"
+   },
+   {
+    "title": "Enable equality search optimization on a column",
+    "sql": "ALTER TABLE mytable ADD SEARCH OPTIMIZATION ON EQUALITY(mycol);",
+    "source_url": "https://docs.snowflake.com/en/user-guide/search-optimization/join-queries"
+   }
+  ],
+  "github": []
+ }
+}

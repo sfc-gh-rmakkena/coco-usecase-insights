@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from . import assets, cache, prompts
 from .compliance import classify_violations, find_violations, scrub
 from .context import fetch_uc_context
+from .deny import private_deny_terms
 from .gate import fetch_a360_context, is_listed, load_listed_names
 
 MODEL = "claude-sonnet-4-5"
@@ -32,9 +33,56 @@ def _parse(raw: str) -> dict:
     return {}
 
 
-PLAN_DEFAULT = {"problem_statement": "", "architecture": [], "steps": [], "coco_prompts": [],
-                "considerations": [], "docs": []}
+_LINK = {"title": "", "url": ""}
+# Field -> default for one row of each list-of-objects field (stable shape on every path).
+_ROWS = {
+    "executive_summary": {"topic": "", "previous_state": "", "solution": "", "status": ""},
+    "component_status": {"component": "", "status": "", "details": "", "source_url": ""},
+    "sections": {"title": "", "challenge": "", "explanation": "", "coco_prompt": "", "sql": "",
+                 "source_url": "", "notes": []},
+    "coco_skills": {"skill": "", "what_it_does": "", "steps": ""},
+    "before_after": {"task": "", "without": "", "with": ""},
+    "decision_matrix": {"topic": "", "verdict": "", "production_ready": "", "action": ""},
+}
+PLAN_DEFAULT = {"problem_statement": "", "executive_summary": [], "decision_criteria_alignment": [],
+                "architecture_layers": [], "architecture_flow": "", "component_status": [], "sections": [],
+                "coco_skills": [], "before_after": [], "decision_matrix": [], "next_steps": [],
+                "resources": {"quickstarts": [], "docs": [], "github": []}}
 RECIPE_DEFAULT = {"band": "none", "id": "", "title": "", "confidence": 0, "rationale": "", "body": ""}
+MIN_SQL_SECTIONS = 3
+# Identifiers that do not exist in Snowflake but models invent; scrubbed from prose too.
+INVENTED_TERMS = ["CORTEX_AGENT_USAGE_HISTORY", "DATA_AGENT_RUN", "INVOKER_ROLE"]
+# Constructs the model has invented in the past; SQL containing them is dropped.
+_INVENTED = [re.compile(p, re.I | re.S) for p in (
+    r"\bDATA_AGENT_RUN\b", r"\bINVOKER_ROLE\b", r"\bCORTEX_AGENT_USAGE_HISTORY\b",
+    r"\bSCHEDULE\s*=\s*'(?!\s*USING\s+CRON)[^']*\*",  # cron expression without USING CRON
+    r"CREATE\s+(?:OR\s+REPLACE\s+)?(?:SECURE\s+)?AGENT\b(?:(?!\$\$).)*?\b(?:COMPUTE_POOL|MODEL|TOOLS)\s*=")]
+
+
+def _str(v):
+    return v if isinstance(v, str) else ""
+
+
+def _strs(v):
+    return [x for x in v if isinstance(x, str) and x.strip()] if isinstance(v, list) else []
+
+
+def _shape(plan) -> dict:
+    """Coerce a (cleaned) plan to PLAN_DEFAULT's shape: every key present, rows fully keyed."""
+    plan = plan if isinstance(plan, dict) else {}
+    out = {"problem_statement": _str(plan.get("problem_statement")),
+           "architecture_flow": _str(plan.get("architecture_flow"))}
+    for k in ("decision_criteria_alignment", "architecture_layers", "next_steps"):
+        out[k] = _strs(plan.get(k))
+    for k, row in _ROWS.items():
+        rows = [r for r in plan.get(k) or [] if isinstance(r, dict)] if isinstance(plan.get(k), list) else []
+        out[k] = [{f: (_strs(r.get(f)) if isinstance(d, list) else _str(r.get(f))) for f, d in row.items()}
+                  for r in rows]
+    res = plan.get("resources") if isinstance(plan.get("resources"), dict) else {}
+    out["resources"] = {k: [{"title": _str(d.get("title")), "url": _str(d.get("url"))}
+                            for d in (res.get(k) if isinstance(res.get(k), list) else []) if isinstance(d, dict)]
+                        for k in ("quickstarts", "docs", "github")}
+    return out
 
 
 def _clean_sql(sql, deny=()):
@@ -44,14 +92,50 @@ def _clean_sql(sql, deny=()):
     return "" if find_violations(sql, deny, sql=True) else sql
 
 
+def _clean_flow(text, deny=()):
+    """Diagrams keep their spacing; lines that leak are dropped."""
+    if not isinstance(text, str):
+        return ""
+    return "\n".join(l.rstrip() for l in text.split("\n") if not find_violations(l, deny)).strip("\n")
+
+
 def _clean(value, allow, deny=()):
     if isinstance(value, str):
         return scrub(value, allow, deny)
     if isinstance(value, list):
         return [v for v in (_clean(x, allow, deny) for x in value) if v not in ("", [], {})]
     if isinstance(value, dict):
-        return {k: _clean_sql(v, deny) if k == "sql" else _clean(v, allow, deny) for k, v in value.items()}
+        return {k: _clean_sql(v, deny) if k == "sql" else _clean_flow(v, deny) if k == "architecture_flow"
+                else _clean(v, allow, deny) for k, v in value.items()}
     return value
+
+
+def _ground_sections(plan, allow):
+    """SQL must cite an allowed source URL and use no known-invented construct."""
+    for s in plan["sections"]:
+        url = s["source_url"].rstrip("/")
+        if url not in {u.rstrip("/") for u in allow}:
+            s["source_url"] = ""
+        if s["sql"] and (not s["source_url"] or any(p.search(s["sql"]) for p in _INVENTED)):
+            s["sql"] = ""
+    for r in plan["component_status"]:
+        if r["source_url"].rstrip("/") not in {u.rstrip("/") for u in allow}:
+            r["source_url"] = ""
+    plan["resources"] = {k: [d for d in v if d["url"].startswith("https://")
+                             and d["url"].rstrip("/") in {u.rstrip("/") for u in allow}]
+                         for k, v in plan["resources"].items()}
+    return plan
+
+
+def _sql_sections(plan) -> int:
+    return sum(1 for s in plan.get("sections") or [] if isinstance(s, dict) and str(s.get("sql") or "").strip())
+
+
+def _valid_s2(d):
+    secs = d.get("sections")
+    return (isinstance(secs, list) and bool(secs)
+            and sum(1 for s in secs if isinstance(s, dict) and str(s.get("sql") or "").strip()
+                    and str(s.get("source_url") or "").startswith("https://")) >= MIN_SQL_SECTIONS)
 
 
 def _to_conf(v) -> int:
@@ -107,10 +191,23 @@ def _note_scrubbed(reasons, data, deny, tag):
         _add(reasons, f"{tag}:scrubbed:{c}")
 
 
-def _exempt(deny, uc):
-    """Deny terms already disclosed in the use case's public header are not denied for it."""
-    header = f"{uc.get('name') or ''} {uc.get('sanitized_desc') or ''}"
-    return [t for t in (deny or ()) if not re.search(r"(?<!\w)" + re.escape(t.strip()) + r"(?!\w)", header, re.I)]
+def _exempt(deny, uc, partner=""):
+    """Terms in the use case name are public for it; so are the account and partner names themselves.
+    (The judge summary is NOT a public header: it can carry confidential detail.)"""
+    name = uc.get("name") or ""
+    public = f"{uc.get('account') or ''} {partner or ''}".lower()
+    return [t for t in (deny or ()) if t.strip()
+            and not re.search(r"(?<!\w)" + re.escape(t.strip()) + r"(?!\w)", name, re.I)
+            and t.strip().lower() not in public]
+
+
+def _brief(plan, uc, allow, deny):
+    if plan.get("problem_statement"):
+        return plan["problem_statement"]
+    fb = scrub(uc.get("sanitized_desc", ""), allow, deny)
+    if not fb or find_violations(fb, deny):
+        return f"{uc['name']} for {uc['account']}"
+    return fb
 
 
 def _fallback_session1(uc):
@@ -134,8 +231,9 @@ def _valid_s1(d):
 def build_one(uc, partner, account_signals, private_context, llm, deny=()) -> dict:
     """Result carries "_degraded": True when Session 1 fell back or the Session 2 plan failed."""
     allow = assets.link_allowlist()
-    deny = _exempt(deny, uc)
-    s1, reasons, cand = _call_json(llm, prompts.session1_prompt(uc, partner, account_signals),
+    deny = _exempt(list(deny or ()) + private_deny_terms(private_context, uc.get("account", "")), uc, partner)
+    deny += [t for t in INVENTED_TERMS if t not in deny]
+    s1, reasons, cand = _call_json(llm, prompts.session1_prompt(uc, partner, account_signals, deny),
                                    _valid_s1, deny, "s1", strict=True)
     src = s1 or cand
     session1 = _clean(src["prompts"], allow, deny) if src else None
@@ -164,19 +262,18 @@ def build_one(uc, partner, account_signals, private_context, llm, deny=()) -> di
                       "rationale": scrub(str(rm.get("rationale", "")), allow, deny),
                       "body": assets.recipe_body(meta["id"]) if band == "full" else ""}
 
-    plan_recipe = {k: recipe[k] for k in ("id", "title")} if recipe["id"] else None
-    s2, why, _ = _call_json(llm, prompts.session2_prompt(uc, partner, private_context, plan_recipe),
-                         lambda d: isinstance(d.get("steps"), list) and bool(d["steps"]), deny, "s2")
-    reasons += [r for r in why if r not in reasons]
+    # Only a full-band recipe steers the plan; a reference match is shown as a one-liner only.
+    plan_recipe = {k: recipe[k] for k in ("id", "title")} if recipe["band"] == "full" else None
+    s2, why, _ = _call_json(llm, prompts.session2_prompt(uc, partner, private_context, plan_recipe, deny),
+                            _valid_s2, deny, "s2")
     if s2:
         _note_scrubbed(why, s2, deny, "s2")
     reasons += [r for r in why if r not in reasons]
-    cleaned = _clean(s2, allow, deny) if s2 else {}
-    plan = {**PLAN_DEFAULT, **{k: v for k, v in cleaned.items() if k in PLAN_DEFAULT}}
-    if s2 and not plan["steps"]:
+    plan = _ground_sections(_shape(_clean(s2, allow, deny) if s2 else {}), allow)
+    if s2 and _sql_sections(plan) < MIN_SQL_SECTIONS:
         _add(reasons, "s2:clean_emptied")
-    degraded = degraded or not plan["steps"]
-    brief = plan.get("problem_statement") or scrub(uc.get("sanitized_desc", ""), allow, deny)
+    degraded = degraded or _sql_sections(plan) < MIN_SQL_SECTIONS
+    brief = _brief(plan, uc, allow, deny)
     return {"_degraded": degraded, "_degraded_reasons": reasons, "uc_id": uc["uc_id"], "account": uc["account"], "name": uc["name"], "skills": uc["skills"],
             "brief": brief, "session1": session1, "session2": {"recipe": recipe, "plan": plan}}
 
