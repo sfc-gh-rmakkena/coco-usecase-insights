@@ -134,6 +134,9 @@ def _session2(s2):
     elif rec.get("band") == "reference":
         out += (f'<p style="font-size:12px;color:#6b7280;">Closest recipe: {_h(rec.get("title"))} · '
                 f'{_conf(rec.get("confidence"))}% — reference</p>')
+    if not _list(plan.get("sections")):
+        out += ('<p style="font-size:12.5px;color:#92400e;">The implementation plan for this use case is not '
+                'available in this report. Regenerate the report to retry.</p>')
     if plan.get("problem_statement"):
         out += _h4("Problem Statement") + f'<p style="font-size:12.5px;">{_h(plan["problem_statement"])}</p>'
     out += (_h4("Executive Summary") + _table(("Topic", "Previous State", "Snowflake Solution", "Status"), [

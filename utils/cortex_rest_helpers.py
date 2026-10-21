@@ -20,7 +20,7 @@ _MAX_429_RETRIES = 4
 _BACKOFF_BASE_S = 2.0
 
 
-def cortex_complete_rest(conn, model: str, prompt: str, max_tokens: int = 16384) -> str:
+def cortex_complete_rest(conn, model: str, prompt: str, max_tokens: int = 16384, timeout: int = 120) -> str:
     """Drop-in REST-API replacement for utils.cortex_helpers.cortex_complete --
     same (conn, model, prompt, max_tokens) signature, same plain-string return
     contract, same "raise on failure, let the caller's try/except handle it"
@@ -72,7 +72,7 @@ def cortex_complete_rest(conn, model: str, prompt: str, max_tokens: int = 16384)
             import _snowflake
             try:
                 resp = _snowflake.send_snow_api_request(
-                    "POST", "/api/v2/cortex/v1/messages", {}, {}, payload, None, 60000,
+                    "POST", "/api/v2/cortex/v1/messages", {}, {}, payload, None, timeout * 1000,
                 )
                 raw = resp.get("content", "") if isinstance(resp, dict) else str(resp)
                 return _extract_and_check(raw)
@@ -98,7 +98,7 @@ def cortex_complete_rest(conn, model: str, prompt: str, max_tokens: int = 16384)
             "anthropic-version": "2023-06-01",
         }
         warnings.filterwarnings("ignore", message="Unverified HTTPS request")
-        resp = requests.post(url, headers=headers, json=payload, verify=False, timeout=120)
+        resp = requests.post(url, headers=headers, json=payload, verify=False, timeout=timeout)
         if resp.status_code == 429:
             if attempt < _MAX_429_RETRIES:
                 attempt += 1

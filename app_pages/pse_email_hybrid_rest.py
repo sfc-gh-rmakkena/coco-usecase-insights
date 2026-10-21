@@ -1884,7 +1884,9 @@ else:
             def _run_workshops():
                 try:
                     _ws_result["workshops"] = generate_workshops(
-                        conn, ws_rows, selected_partner, cortex_complete,
+                        # Session 2 plans are long (full skill report); allow 10 min per call.
+                        conn, ws_rows, selected_partner,
+                        lambda c, m, p, max_tokens=16384: cortex_complete(c, m, p, max_tokens=max_tokens, timeout=600),
                         call_log=call_log, log_wrap=_logged_rest_call,
                         data_conn=_ws_data_conn, diagnostics=_ws_diagnostics,
                     )

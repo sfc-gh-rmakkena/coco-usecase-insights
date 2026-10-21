@@ -140,5 +140,8 @@ def workshop_pdf_flowables(workshops, styles) -> list:
         elif rec.get("band") == "reference":
             out.append(Paragraph(f"Closest recipe: {_e(rec.get('title'))} &middot; "
                                  f"{_conf(rec.get('confidence'))}% &mdash; reference", body))
+        if not _list(plan.get("sections")):
+            out.append(Paragraph("The implementation plan for this use case is not available in this "
+                                 "report. Regenerate the report to retry.", body))
         out += _plan_flowables(plan, styles)
     return out
