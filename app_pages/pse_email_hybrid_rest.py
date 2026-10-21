@@ -1904,9 +1904,14 @@ else:
                 workshops = []
             else:
                 workshops = _ws_result["workshops"]
-            if _ws_diagnostics:
+            _ws_degraded = [d for d in _ws_diagnostics if d.startswith("degraded: ")]
+            if any(d.split(":")[0] in ("listed", "a360", "context") for d in _ws_diagnostics):
                 st.caption("Some account context was unavailable for your role; "
                            "workshop plans used the use-case summary.")
+            if _ws_degraded:
+                _n, _m = _ws_degraded[-1][len("degraded: "):].split("/")
+                if int(_n):
+                    st.caption(f"Workshop plans: {_n} of {_m} used fallback content")
 
         report_html = _build_report_html(
             selected_partner, q_start, q_end, target, coco_count, total_ucs, coco_pct,

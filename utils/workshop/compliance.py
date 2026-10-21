@@ -27,6 +27,9 @@ _PATTERNS = [
     re.compile(r"\bstage\s*[1-7]\s*(?:opp|deal|use[- ]case)", re.I),
     re.compile(r"\b(?:health|churn|meddpicc)\s*score\b", re.I),
 ]
+# Category per _PATTERNS index (same order), used for non-sensitive degradation reasons.
+_CATEGORIES = ["money"] * 5 + ["credits"] * 2 + ["money"] * 2 + ["list_terms"] * 3 \
+    + ["stage"] * 2 + ["score"]
 _URL = re.compile(r"https?://[^\s)\"'<>`\]]+")
 _TRAIL = ".,;:!?*"
 _SENT_SPLIT = re.compile(r"(?<=[.!?])\s+")
@@ -60,6 +63,22 @@ def find_violations(text: str, deny=()) -> list:
     for p in _PATTERNS + _deny_patterns(deny):
         hits.extend(m.group(0) for m in p.finditer(text or ""))
     return hits
+
+
+def classify_violations(text: str, deny=(), allowed_links=None) -> list:
+    """Category names of the checks that fire (never the matched text), in check order."""
+    text = text or ""
+    cats = []
+    for p, c in zip(_PATTERNS, _CATEGORIES):
+        if c not in cats and p.search(text):
+            cats.append(c)
+    if any(p.search(text) for p in _deny_patterns(deny)):
+        cats.append("deny")
+    if allowed_links is not None:
+        allowed = {u.rstrip("/") for u in allowed_links}
+        if any(m.group(0).rstrip(_TRAIL).rstrip("/") not in allowed for m in _URL.finditer(text)):
+            cats.append("link")
+    return cats
 
 
 def scrub(text: str, allowed_links: set, deny=()) -> str:

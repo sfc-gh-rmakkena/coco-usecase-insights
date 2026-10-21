@@ -6,6 +6,12 @@ from .compliance import sql_quote
 from utils.config import get_schema
 
 
+def _exec(conn, sql):
+    # DML via raw cursor too: conn.query() fetches a DataFrame and raises on INSERT.
+    with conn.cursor() as cur:
+        cur.execute(sql)
+
+
 def _t(name):
     return f"{get_schema()}.{name}"
 
@@ -20,6 +26,8 @@ def ensure_tables(conn):
         cur.execute(f"""CREATE TABLE IF NOT EXISTS {_t('WORKSHOP_GENERATION_AUDIT')} (
             PARTNER_NAME STRING, USE_CASE_ID STRING, PATH STRING, CACHE_HIT BOOLEAN,
             GENERATED_AT TIMESTAMP_LTZ DEFAULT CURRENT_TIMESTAMP())""")
+        cur.execute(f"ALTER TABLE {_t('WORKSHOP_GENERATION_AUDIT')} "
+                    "ADD COLUMN IF NOT EXISTS DEGRADED_REASONS STRING")
 
 
 def compute_hash(inputs: dict, asset_version: str) -> str:
@@ -56,7 +64,7 @@ def insert(conn, rows: list, asset_version: str = ""):
 
     def _flush():
         if chunk:
-            conn.query(head + sep.join(chunk), ttl=0)
+            _exec(conn, head + sep.join(chunk))
 
     for h, p, u, pl in rows:
         sel = (f"SELECT '{_q(h)}', '{_q(asset_version)}', '{_q(p)}', '{_q(u)}', "
@@ -70,10 +78,11 @@ def insert(conn, rows: list, asset_version: str = ""):
 
 
 def audit(conn, rows: list):
-    """rows: (partner, uc_id, path, cache_hit)."""
+    """rows: (partner, uc_id, path, cache_hit, reasons_str)."""
     if not rows:
         return
-    sel = " UNION ALL ".join(f"SELECT '{_q(p)}', '{_q(u)}', '{_q(path)}', {str(bool(hit)).upper()}"
-                             for p, u, path, hit in rows)
-    conn.query(f"""INSERT INTO {_t('WORKSHOP_GENERATION_AUDIT')}
-        (PARTNER_NAME, USE_CASE_ID, PATH, CACHE_HIT) {sel}""", ttl=0)
+    sel = " UNION ALL ".join(
+        f"SELECT '{_q(p)}', '{_q(u)}', '{_q(path)}', {str(bool(hit)).upper()}, '{_q(why)}'"
+        for p, u, path, hit, why in rows)
+    _exec(conn, f"""INSERT INTO {_t('WORKSHOP_GENERATION_AUDIT')}
+        (PARTNER_NAME, USE_CASE_ID, PATH, CACHE_HIT, DEGRADED_REASONS) {sel}""")

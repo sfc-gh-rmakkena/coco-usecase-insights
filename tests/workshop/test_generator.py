@@ -32,7 +32,7 @@ def test_recipe_band_full_reference_none():
 def test_build_one_shape_identical_for_both_paths():
     a = generator.build_one(UC, "Deloitte", {"usage_tier": "Low"}, {}, fake_llm_factory())
     b = generator.build_one(UC, "Deloitte", None, {}, fake_llm_factory())
-    assert set(a) == set(b) == {"_degraded", "uc_id", "account", "name", "skills", "brief", "session1", "session2"}
+    assert set(a) == set(b) == {"_degraded", "_degraded_reasons", "uc_id", "account", "name", "skills", "brief", "session1", "session2"}
     assert len(a["session1"]) == 3
     assert a["session2"]["recipe"]["band"] == "full"
 
@@ -102,5 +102,6 @@ def test_generate_workshops_survives_failing_data_conn():
                                        data_conn=_RaisingConn(), diagnostics=diags)
     assert len(out) == len(baseline) == 2
     assert [set(r) for r in out] == [set(r) for r in baseline]
-    assert diags and all(d.endswith("PermissionError") for d in diags)
+    reads = [d for d in diags if not d.startswith("degraded:")]
+    assert reads and all(d.endswith("PermissionError") for d in reads)
     assert not any("SECRET_TABLE" in d for d in diags)
