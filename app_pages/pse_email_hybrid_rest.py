@@ -1870,6 +1870,7 @@ else:
         display_rows_by_region = gap_rows_by_region
         if get_env() == "dev":
             from utils.workshop import filter_not_deployed, generate_workshops
+            from utils.cortex_rest_helpers import cortex_complete_rest_stream
             display_rows_by_region = filter_not_deployed(gap_rows_by_region)
             ws_rows = [r for rows in display_rows_by_region.values() for r in rows]
             # Same background-thread + polling pattern as _run_gap_rows above,
@@ -1884,9 +1885,8 @@ else:
             def _run_workshops():
                 try:
                     _ws_result["workshops"] = generate_workshops(
-                        # Session 2 plans are long (full skill report); allow 10 min per call.
-                        conn, ws_rows, selected_partner,
-                        lambda c, m, p, max_tokens=16384: cortex_complete(c, m, p, max_tokens=max_tokens, timeout=600),
+                        # Session 2 plans are long (~12K tokens): stream with retries.
+                        conn, ws_rows, selected_partner, cortex_complete_rest_stream,
                         call_log=call_log, log_wrap=_logged_rest_call,
                         data_conn=_ws_data_conn, diagnostics=_ws_diagnostics,
                     )

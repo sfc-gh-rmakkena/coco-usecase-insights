@@ -149,3 +149,77 @@ def _extract_and_check(raw) -> str:
             b.get("text", "") for b in blocks if isinstance(b, dict) and b.get("type") == "text"
         ).strip()
     return ""
+
+
+# Long-generation variant for the DEV workshop plans. A Session 2 plan is ~12K
+# output tokens; measured throughput is ~88 tok/s per request (2026-10-21), so a
+# single non-streamed call needs ~135s+ before the first byte arrives and a fixed
+# 120s read timeout fails by construction. Streaming makes the timeout apply to
+# the gap between chunks instead of the whole generation.
+_STREAM_IDLE_TIMEOUT_S = 120
+_STREAM_MAX_RETRIES = 4
+
+
+def _is_retryable(exc: Exception) -> bool:
+    import requests
+    if isinstance(exc, (requests.exceptions.Timeout, requests.exceptions.ConnectionError,
+                        requests.exceptions.ChunkedEncodingError)):
+        return True
+    msg = str(exc)
+    return any(s in msg for s in ("HTTP 429", "HTTP 500", "HTTP 502", "HTTP 503", "HTTP 504",
+                                  "overloaded", "stream error"))
+
+
+def _stream_once(conn, payload) -> str:
+    import requests
+    conn_raw = conn._instance
+    url = f"https://{conn_raw.host}/api/v2/cortex/v1/messages"
+    headers = {
+        "Authorization": f'Snowflake Token="{conn_raw.rest.token}"',
+        "Content-Type": "application/json",
+        "Accept": "text/event-stream",
+        "anthropic-version": "2023-06-01",
+    }
+    warnings.filterwarnings("ignore", message="Unverified HTTPS request")
+    with requests.post(url, headers=headers, json={**payload, "stream": True}, verify=False,
+                       stream=True, timeout=(30, _STREAM_IDLE_TIMEOUT_S)) as resp:
+        if resp.status_code != 200:
+            raise RuntimeError(f"Cortex REST API HTTP {resp.status_code}: {resp.text[:300]}")
+        parts = []
+        for line in resp.iter_lines(decode_unicode=True):
+            if not line or not line.startswith("data:"):
+                continue
+            body = line[5:].strip()
+            if not body or body == "[DONE]":
+                continue
+            try:
+                ev = json.loads(body)
+            except ValueError:
+                continue
+            if str(ev.get("code", "")) == "390112":
+                raise RuntimeError("Cortex REST API: expired session token (code 390112)")
+            t = ev.get("type")
+            if t == "error":
+                raise RuntimeError(f"Cortex REST API stream error: {str(ev.get('error'))[:300]}")
+            if t == "content_block_delta":
+                parts.append((ev.get("delta") or {}).get("text", ""))
+            elif t == "message_stop":
+                break
+        return "".join(parts).strip()
+
+
+def cortex_complete_rest_stream(conn, model: str, prompt: str, max_tokens: int = 16384) -> str:
+    """Streaming twin of cortex_complete_rest for long outputs: idle-timeout per chunk,
+    retries with backoff on timeouts, connection drops, 429 and 5xx."""
+    payload = {"model": model, "max_tokens": max_tokens,
+               "messages": [{"role": "user", "content": prompt}]}
+    attempt = 0
+    while True:
+        try:
+            return _stream_once(conn, payload)
+        except Exception as exc:  # noqa: BLE001
+            if attempt < _STREAM_MAX_RETRIES and _is_retryable(exc):
+                attempt += 1
+                time.sleep(_backoff_delay(attempt))
+                continue
+            raise
