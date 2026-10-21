@@ -3,11 +3,12 @@ import json
 import re
 from concurrent.futures import ThreadPoolExecutor
 
-from . import assets, cache, prompts
+from . import assets, cache, capabilities, diagram, prompts
 from .compliance import classify_violations, find_violations, scrub
 from .context import fetch_uc_context
 from .deny import private_deny_terms
 from .gate import fetch_a360_context, is_listed, load_listed_names
+from .verify import verify_plan
 
 MODEL = "claude-sonnet-4-5"
 MAX_WORKERS = 16
@@ -44,10 +45,17 @@ _ROWS = {
     "before_after": {"task": "", "without": "", "with": ""},
     "decision_matrix": {"topic": "", "verdict": "", "production_ready": "", "action": ""},
 }
+# architecture_flow is legacy (old cached payloads); new plans carry the structured `architecture`
+# and architecture_layers is derived from it.
 PLAN_DEFAULT = {"problem_statement": "", "executive_summary": [], "decision_criteria_alignment": [],
+                "architecture": {"sources": [], "layers": [], "consumers": []},
                 "architecture_layers": [], "architecture_flow": "", "component_status": [], "sections": [],
                 "coco_skills": [], "before_after": [], "decision_matrix": [], "next_steps": [],
-                "resources": {"quickstarts": [], "docs": [], "github": []}}
+                "resources": {"quickstarts": [], "docs": [], "github": []},
+                "hands_on": {"intro": "", "sql": "", "source_url": ""}}
+_RES_FIELDS = {"quickstarts": ("title", "url"), "docs": ("title", "url", "status"),
+               "github": ("title", "url", "description")}
+_LAYER_NAMES = ("Ingestion", "Bronze", "Silver", "Gold", "Semantic", "Consumption", "Sharing", "Governance")
 RECIPE_DEFAULT = {"band": "none", "id": "", "title": "", "confidence": 0, "rationale": "", "body": ""}
 MIN_SQL_SECTIONS = 3
 # Identifiers that do not exist in Snowflake but models invent; scrubbed from prose too.
@@ -67,6 +75,20 @@ def _strs(v):
     return [x for x in v if isinstance(x, str) and x.strip()] if isinstance(v, list) else []
 
 
+def _layer_name(name):
+    n = _str(name).strip()
+    return next((c for c in _LAYER_NAMES if c.lower() in n.lower()), n)
+
+
+def _shape_arch(arch):
+    arch = arch if isinstance(arch, dict) else {}
+    layers = [{"name": _layer_name(l.get("name")), "capability": _str(l.get("capability")),
+               "detail": _str(l.get("detail"))}
+              for l in (arch.get("layers") if isinstance(arch.get("layers"), list) else []) if isinstance(l, dict)]
+    return {"sources": _strs(arch.get("sources")), "layers": [l for l in layers if l["name"] or l["capability"]],
+            "consumers": _strs(arch.get("consumers"))}
+
+
 def _shape(plan) -> dict:
     """Coerce a (cleaned) plan to PLAN_DEFAULT's shape: every key present, rows fully keyed."""
     plan = plan if isinstance(plan, dict) else {}
@@ -79,9 +101,14 @@ def _shape(plan) -> dict:
         out[k] = [{f: (_strs(r.get(f)) if isinstance(d, list) else _str(r.get(f))) for f, d in row.items()}
                   for r in rows]
     res = plan.get("resources") if isinstance(plan.get("resources"), dict) else {}
-    out["resources"] = {k: [{"title": _str(d.get("title")), "url": _str(d.get("url"))}
+    out["resources"] = {k: [{f: _str(d.get(f)) for f in fields}
                             for d in (res.get(k) if isinstance(res.get(k), list) else []) if isinstance(d, dict)]
-                        for k in ("quickstarts", "docs", "github")}
+                        for k, fields in _RES_FIELDS.items()}
+    out["architecture"] = _shape_arch(plan.get("architecture"))
+    if out["architecture"]["layers"]:
+        out["architecture_layers"] = diagram.layer_bullets(out["architecture"])
+    ho = plan.get("hands_on") if isinstance(plan.get("hands_on"), dict) else {}
+    out["hands_on"] = {k: _str(ho.get(k)) for k in ("intro", "sql", "source_url")}
     return out
 
 
@@ -118,13 +145,62 @@ def _ground_sections(plan, allow):
             s["source_url"] = ""
         if s["sql"] and (not s["source_url"] or any(p.search(s["sql"]) for p in _INVENTED)):
             s["sql"] = ""
+    ok = {u.rstrip("/") for u in allow}
     for r in plan["component_status"]:
-        if r["source_url"].rstrip("/") not in {u.rstrip("/") for u in allow}:
+        if r["source_url"].rstrip("/") not in ok:
             r["source_url"] = ""
-    plan["resources"] = {k: [d for d in v if d["url"].startswith("https://")
-                             and d["url"].rstrip("/") in {u.rstrip("/") for u in allow}]
+    ho = plan["hands_on"]
+    if ho["source_url"].rstrip("/") not in ok:
+        ho["source_url"] = ""
+    if ho["sql"] and (not ho["source_url"] or any(p.search(ho["sql"]) for p in _INVENTED)):
+        ho["sql"] = ""
+    plan["resources"] = {k: [d for d in v if d["url"].startswith("https://") and d["url"].rstrip("/") in ok]
                          for k, v in plan["resources"].items()}
+    for d in plan["resources"]["docs"]:
+        d["status"] = d["status"] or _doc_status(d["url"])
+    for d in plan["resources"]["github"]:
+        d["description"] = d["description"] or "Companion repository"
     return plan
+
+
+def _doc_status(url):
+    u = url.rstrip("/")
+    for v in capabilities.grounding().values():
+        if any(d["url"].rstrip("/") == u for d in v.get("docs", [])):
+            return capabilities.status_from_note(v.get("status_note"))
+    return "See page"
+
+
+def _fill_architecture(plan, required) -> bool:
+    """Inject a layer / component row for each required capability the model left out (deterministic,
+    from capabilities.CAPS + grounding). Returns True if anything was added."""
+    g, arch, added = capabilities.grounding(), plan["architecture"], False
+    if not arch["layers"] and plan["architecture_flow"]:
+        return False  # legacy free-text diagram: leave as-is
+    for k in required:
+        note = g.get(k, {}).get("status_note", "")
+        if not any(capabilities.cap_matches(k, l["capability"]) for l in arch["layers"]):
+            arch["layers"].append({"name": capabilities.cap_layer(k), "capability": capabilities.cap_label(k),
+                                   "detail": ""})
+            added = True
+        if not any(capabilities.cap_matches(k, r["component"]) for r in plan["component_status"]):
+            docs = g.get(k, {}).get("docs") or [{}]
+            plan["component_status"].append({"component": capabilities.cap_label(k),
+                                             "status": capabilities.status_from_note(note),
+                                             "details": note, "source_url": docs[0].get("url", "")})
+            added = True
+    if added:
+        arch["layers"].sort(key=lambda l: _LAYER_NAMES.index(l["name"]) if l["name"] in _LAYER_NAMES else 4.5)
+    if arch["layers"]:
+        plan["architecture_layers"] = diagram.layer_bullets(arch)
+    return added
+
+
+def _finish_plan(s2, allow, deny, required):
+    """Clean, shape, ground and fill one raw response. Returns (plan, arch_filled)."""
+    plan = _ground_sections(_shape(_clean(s2, allow, deny) if s2 else {}), allow)
+    filled = _fill_architecture(plan, required) if s2 else False
+    return plan, filled
 
 
 def _sql_sections(plan) -> int:
@@ -264,12 +340,29 @@ def build_one(uc, partner, account_signals, private_context, llm, deny=()) -> di
 
     # Only a full-band recipe steers the plan; a reference match is shown as a one-liner only.
     plan_recipe = {k: recipe[k] for k in ("id", "title")} if recipe["band"] == "full" else None
-    s2, why, _ = _call_json(llm, prompts.session2_prompt(uc, partner, private_context, plan_recipe, deny),
-                            _valid_s2, deny, "s2")
+    base = prompts.session2_prompt(uc, partner, private_context, plan_recipe, deny)
+    s2, why, _ = _call_json(llm, base, _valid_s2, deny, "s2")
     if s2:
         _note_scrubbed(why, s2, deny, "s2")
     reasons += [r for r in why if r not in reasons]
-    plan = _ground_sections(_shape(_clean(s2, allow, deny) if s2 else {}), allow)
+    required = prompts.primary_capabilities(uc, private_context)
+    plan, filled = _finish_plan(s2, allow, deny, required)
+    if s2:
+        fails = verify_plan(plan, required, allow, deny)
+        if fails:
+            # One repair pass: failure codes only (no confidential text) + the already-cleaned plan.
+            s2b, why, _ = _call_json(llm, prompts.session2_repair_prompt(base, fails, plan), _valid_s2, deny, "s2r")
+            reasons += [r for r in why if r not in reasons]
+            if s2b:
+                plan_b, filled_b = _finish_plan(s2b, allow, deny, required)
+                fails_b = verify_plan(plan_b, required, allow, deny)
+                if len(fails_b) < len(fails):
+                    plan, filled, fails = plan_b, filled_b, fails_b
+                    _note_scrubbed(reasons, s2b, deny, "s2r")
+        if filled:
+            _add(reasons, "s2:arch_filled")
+        for f in fails:
+            _add(reasons, f"s2:verify:{f}")
     if s2 and _sql_sections(plan) < MIN_SQL_SECTIONS:
         _add(reasons, "s2:clean_emptied")
     degraded = degraded or _sql_sections(plan) < MIN_SQL_SECTIONS

@@ -1136,7 +1136,7 @@ def _build_report_html(partner, q_start, q_end, target, coco_count, total_ucs, c
     ws_scope_html, ws_section_html = "", ""
     if workshops is not None:
         from utils.workshop import scope_note_html, render_workshop_html
-        ws_scope_html, ws_section_html = scope_note_html(), render_workshop_html(workshops)
+        ws_scope_html, ws_section_html = scope_note_html(), render_workshop_html(workshops, partner)
 
     tiles = f"""
 <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-bottom:6px;">
@@ -1657,7 +1657,7 @@ def _build_report_pdf_bytes(partner, q_start, q_end, target, coco_count, total_u
 
     if workshops:
         from utils.workshop import workshop_pdf_flowables
-        story.extend(workshop_pdf_flowables(workshops, styles))
+        story.extend(workshop_pdf_flowables(workshops, styles, partner))
 
     doc.build(story, onFirstPage=_pdf_footer, onLaterPages=_pdf_footer)
     buffer.seek(0)

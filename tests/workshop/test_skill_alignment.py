@@ -160,11 +160,12 @@ WS = [{"uc_id": "u", "account": "Roche", "name": "N <x>", "skills": ["dynamic-ta
 
 def test_html_session2_follows_skill_order():
     h = render_workshop_html(WS)
-    pos = [h.find(f">{t}<") for t in S2_HEADINGS]
+    import html as _html
+    pos = [h.find(f">{_html.escape(t)}<") for t in S2_HEADINGS]
     assert all(p > 0 for p in pos) and pos == sorted(pos)
     assert "CoCo Prompt:" in h and "Source: <a" in h and "<ol><li>first</li>" in h
     assert "<script" not in h.lower() and "javascript:" not in h
-    assert h.find("Closest recipe") < h.find(">Problem Statement<")
+    assert h.find("Closest recipe") < h.find(">Problem Statement<") > 0
     assert not re.search(r"\son[a-z]+\s*=", h.lower())
 
 

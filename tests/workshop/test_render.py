@@ -19,7 +19,8 @@ def test_html_has_sidebar_tabs_and_no_script():
 
 
 def test_html_no_internal_terms():
-    h = render_workshop_html(WS).lower()
+    import re
+    h = re.sub(r"<style>.*?</style>", "", render_workshop_html(WS), flags=re.S).lower()
     for t in ("green", "red light", "restricted", "listed", "stage 7", "deployed"):
         assert t not in h
 
@@ -35,7 +36,7 @@ def test_scope_note_wording():
 
 def test_html_doc_links_https_only_and_conf_int():
     ws = [dict(WS[0], session2={"recipe": dict(WS[0]["session2"]["recipe"], confidence=87.0),
-                                "plan": {"resources": {"docs": [{"title": "Good", "url": "https://docs.snowflake.com/x"},
+                                "plan": {"sections": [{"title": "s", "sql": "SELECT 1"}], "resources": {"docs": [{"title": "Good", "url": "https://docs.snowflake.com/x"},
                                                                 {"title": "Bad", "url": "javascript:alert(1)"}]}}})]
     h = render_workshop_html(ws)
     assert 'href="https://docs.snowflake.com/x"' in h

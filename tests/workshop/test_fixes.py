@@ -65,7 +65,8 @@ def test_generator_deny_applied_and_llm_ctx_only():
     assert "Databricks" not in json.dumps(out)
     assert out["brief"] == "Real goal."
     assert out["_degraded"] is False
-    assert sum("pse-uc-implementation-plan" in x for x in seen) == 1  # leak scrubbed, not regenerated
+    # leak scrubbed, not regenerated (a verify repair pass may follow; it is not a regeneration for the leak)
+    assert sum("pse-uc-implementation-plan" in x and "=== REPAIR ===" not in x for x in seen) == 1
 
 
 def test_sql_quote_backslash():

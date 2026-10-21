@@ -6,8 +6,10 @@ S1_SCHEMA = ('{"prompts": [{"title": str, "purpose": str, "prompt": str}] '
              '(exactly 3: 1 discovery of relevant data/objects, 2 build with the proposed CoCo skill, 3 extend)}')
 S2_SCHEMA = ('{"problem_statement": str, '
              '"executive_summary": [{"topic": str, "previous_state": str, "solution": str, "status": str}], '
-             '"decision_criteria_alignment": [str], "architecture_layers": [str], '
-             '"architecture_flow": str (multi-line ASCII flow diagram: sources -> layers -> consumers), '
+             '"decision_criteria_alignment": [str], '
+             '"architecture": {"sources": [str] (generic, e.g. "Source systems (ERP, ticketing)"; no vendor names), '
+             '"layers": [{"name": one of Ingestion|Bronze|Silver|Gold|Semantic|Consumption|Sharing|Governance, '
+             '"capability": str (the Snowflake feature), "detail": str}], "consumers": [str] (generic)}, '
              '"component_status": [{"component": str, "status": str, "details": str, "source_url": str}], '
              '"sections": [{"title": str, "challenge": str, "explanation": str, "coco_prompt": str, "sql": str, '
              '"source_url": str, "notes": [str]}] (one per capability area, at most 8), '
@@ -15,8 +17,10 @@ S2_SCHEMA = ('{"problem_statement": str, '
              '"before_after": [{"task": str, "without": str, "with": str}], '
              '"decision_matrix": [{"topic": str, "verdict": str, "production_ready": str, "action": str}], '
              '"next_steps": [str], '
-             '"resources": {"quickstarts": [{"title": str, "url": str}], "docs": [{"title": str, "url": str}], '
-             '"github": [{"title": str, "url": str}]}}')
+             '"resources": {"quickstarts": [{"title": str, "url": str}], '
+             '"docs": [{"title": str, "url": str, "status": str}], '
+             '"github": [{"title": str, "url": str, "description": str}]}, '
+             '"hands_on": {"intro": str, "sql": str, "source_url": str} (optional; leave fields empty if none)}')
 
 S2_RULES = """RULES (mandatory, in addition to the APP OVERRIDE):
 Structure
@@ -28,7 +32,10 @@ Structure
   reporting on large tables -> search_optimization; row-level security, RBAC or access-control problems ->
   governance (row access policies); data quality or monitoring -> observability; cost control -> cost.
   At most 8 sections in total.
-- architecture_flow is a plain-text diagram like: "Sources\\n   |  Openflow CDC\\n   v\\nBRONZE ...".
+- architecture.layers: one entry per layer (at least 4), each naming the Snowflake capability used; include the
+  primary capability of every REQUIRED_CAPABILITY_AREA. Do not draw a diagram; it is generated from the layers.
+- component_status: one row per primary capability (status from status_note). executive_summary, decision_matrix
+  and next_steps: at least 3 rows each; coco_skills: at least 2; resources: at least 1 quickstart and 3 docs.
 Grounding
 - SQL must follow the syntax of the GROUNDING sql_snippets: copy a snippet and adapt only identifiers to
   <placeholder> or neutral names. Never invent statements, clauses, parameters, functions or views that are not in a
@@ -84,6 +91,22 @@ def capability_areas(uc, private_context) -> list:
         else:
             areas.append({"area": r[0], "capabilities": list(r[3]), "coco_skills": list(r[2])})
     return areas
+
+
+def primary_capabilities(uc, private_context) -> list:
+    """First (primary) capability of each required area; these must appear in the diagram and status table."""
+    out = []
+    for a in capability_areas(uc, private_context):
+        if a["capabilities"] and a["capabilities"][0] not in out:
+            out.append(a["capabilities"][0])
+    return out
+
+
+def session2_repair_prompt(base_prompt, failure_codes, previous_plan):
+    """Second pass: same task, plus the gate codes that failed and the previous (already cleaned) JSON."""
+    return (f"{base_prompt}\n\n=== REPAIR ===\nYour previous JSON failed these verification checks: "
+            f"{json.dumps(list(failure_codes))}.\nReturn the complete JSON again, fixing ONLY these gaps and keeping "
+            f"everything else unchanged. All rules above still apply.\nPREVIOUS_JSON:\n{json.dumps(previous_plan)}")
 RECIPE_SCHEMA = '{"recipe_id": str, "confidence": int 0-100, "rationale": str}'
 
 

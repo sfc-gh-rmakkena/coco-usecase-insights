@@ -1,0 +1,711 @@
+{
+ "uc_id": "aPaVI00000iDZP60AO",
+ "account": "Disney Experiences (DX)",
+ "name": "DX - Financial Transformation (Phase 3, Asia Parks + Cruises)",
+ "skills": [
+  "dynamic-tables"
+ ],
+ "brief": "The customer needs a unified, governed data layer that standardizes source data, keeps reporting consistent across business units, performs well for BI at scale, and is ready for AI-assisted analysis.",
+ "session1": [
+  {
+   "title": "t",
+   "purpose": "p",
+   "prompt": "do x"
+  },
+  {
+   "title": "t",
+   "purpose": "p",
+   "prompt": "do x"
+  },
+  {
+   "title": "t",
+   "purpose": "p",
+   "prompt": "do x"
+  }
+ ],
+ "session2": {
+  "recipe": {
+   "band": "none"
+  },
+  "plan": {
+   "problem_statement": "The customer needs a unified, governed data layer that standardizes source data, keeps reporting consistent across business units, performs well for BI at scale, and is ready for AI-assisted analysis.",
+   "architecture_flow": "",
+   "decision_criteria_alignment": [
+    "Unified architecture: Snowflake provides a single platform for ingestion, transformation, governance, and analytics, eliminating the need to manage multiple disparate tools",
+    "Native data sharing: Secure sharing between accounts and business units without data movement or duplication, enabling seamless cross-functional collaboration",
+    "Performance at scale: Dynamic Tables, Search Optimization, and intelligent caching deliver sub-second query response times even as data volumes grow"
+   ],
+   "architecture_layers": [
+    "Ingestion: Openflow \u2014 CDC connectors, incremental replication",
+    "Bronze: Iceberg Tables \u2014 raw landing tables, one schema per source",
+    "Silver: Dynamic Tables \u2014 conformed, deduplicated entities",
+    "Gold: Dynamic Tables \u2014 finance marts and aggregates",
+    "Semantic: Semantic Views \u2014 consistent business metrics",
+    "Consumption: Cortex Agents \u2014 natural-language Q&A",
+    "Sharing: Internal Marketplace \u2014 other business units",
+    "Governance: Row Access Policies \u2014 row-level security on gold"
+   ],
+   "next_steps": [
+    "Deploy Openflow CDC connectors for priority source systems; configure Snowpipe for cloud storage ingestion",
+    "Build Bronze layer (raw Iceberg Tables); create initial Dynamic Tables for Silver layer (deduplication, conformance)",
+    "Develop Gold layer aggregations with Dynamic Tables; deploy dbt Projects for version-controlled transformations",
+    "Define Semantic Views for key subject areas (revenue, operational metrics); deploy Cortex Agents for natural language query",
+    "Implement row access policies and masking policies for governance; enable Search Optimization on high-cardinality columns",
+    "Create secure shares for cross-unit collaboration; publish data products to Internal Marketplace",
+    "Set up custom budgets and resource monitors for cost governance; establish monitoring and alerting for data quality and pipeline health",
+    "Train team on CoCo skills for each capability area; establish prompt library and best practices documentation"
+   ],
+   "executive_summary": [
+    {
+     "topic": "Data Ingestion",
+     "previous_state": "Manual file transfers and disconnected source systems creating fragmented data flows",
+     "solution": "Openflow CDC for real-time replication, Snowpipe for continuous file ingestion, streaming ingestion for high-volume event data",
+     "status": "Implementation Ready"
+    },
+    {
+     "topic": "Data Transformation",
+     "previous_state": "Complex ETL scripts requiring manual maintenance and slow refresh cycles",
+     "solution": "Dynamic Tables for declarative pipelines, Tasks for orchestration, dbt Projects for version-controlled transformations",
+     "status": "Implementation Ready"
+    },
+    {
+     "topic": "Analytics & Reporting",
+     "previous_state": "Slow queries on large tables, manual metric definitions, limited self-service capabilities",
+     "solution": "Semantic Views for standardized metrics, Cortex Agents for natural language query, optimized data structures",
+     "status": "Implementation Ready"
+    },
+    {
+     "topic": "Data Governance",
+     "previous_state": "Inconsistent access controls preventing efficient query performance",
+     "solution": "Row access policies with partition-aware design, dynamic data masking, object tagging for classification",
+     "status": "Implementation Ready"
+    },
+    {
+     "topic": "Lakehouse Architecture",
+     "previous_state": "Siloed data across multiple platforms limiting cross-functional analysis",
+     "solution": "Iceberg Tables for open lakehouse, Notebooks for interactive exploration, unified catalog integration",
+     "status": "Implementation Ready"
+    },
+    {
+     "topic": "Cross-Unit Collaboration",
+     "previous_state": "Data duplication and manual sharing processes across business units",
+     "solution": "Secure Data Sharing for live access, Internal Marketplace for data products, governance-enabled collaboration",
+     "status": "Implementation Ready"
+    },
+    {
+     "topic": "Query Performance",
+     "previous_state": "Report timeouts and slow dashboards on high-cardinality dimensions",
+     "solution": "Search Optimization Service for point lookups and joins, materialized aggregations, partition pruning strategies",
+     "status": "Implementation Ready"
+    },
+    {
+     "topic": "Cost Management",
+     "previous_state": "Unpredictable resource consumption as data volumes grow",
+     "solution": "Custom Budgets for proactive alerts, Resource Monitors for automatic controls, warehouse right-sizing",
+     "status": "Implementation Ready"
+    }
+   ],
+   "component_status": [
+    {
+     "component": "Openflow Connector (SQL Server CDC)",
+     "status": "Generally Available",
+     "details": "Supported in AWS, Azure, GCP commercial regions; other connectors vary by source",
+     "source_url": "https://docs.snowflake.com/en/user-guide/data-integration/openflow/about"
+    },
+    {
+     "component": "Snowpipe (auto-ingest)",
+     "status": "Generally Available",
+     "details": "Cloud storage auto-ingest with SQS/Event Grid notifications",
+     "source_url": "https://docs.snowflake.com/en/user-guide/data-load-snowpipe-intro"
+    },
+    {
+     "component": "Snowpipe Streaming (high-performance)",
+     "status": "Generally Available",
+     "details": "supports Iceberg Tables for low-latency ingestion",
+     "source_url": "https://docs.snowflake.com/en/release-notes/2025/other/2025-09-23-snowpipe-streaming-high-performance-architecture"
+    },
+    {
+     "component": "Dynamic Tables",
+     "status": "Generally Available",
+     "details": "Declarative data pipelines with incremental refresh and TARGET_LAG controls",
+     "source_url": "https://docs.snowflake.com/en/user-guide/dynamic-tables/overview"
+    },
+    {
+     "component": "dbt Projects on Snowflake",
+     "status": "Generally Available",
+     "details": "Native dbt orchestration via Git integration",
+     "source_url": "https://docs.snowflake.com/en/user-guide/data-engineering/dbt-projects-on-snowflake"
+    },
+    {
+     "component": "Semantic Views",
+     "status": "Generally Available",
+     "details": "YAML-defined semantic layer for consistent metric definitions",
+     "source_url": "https://docs.snowflake.com/en/user-guide/views-semantic/overview"
+    },
+    {
+     "component": "Cortex Agents",
+     "status": "Generally Available",
+     "details": "Natural language to SQL via Cortex Analyst tool",
+     "source_url": "https://docs.snowflake.com/en/user-guide/snowflake-cortex/cortex-agents"
+    },
+    {
+     "component": "Iceberg Tables",
+     "status": "Generally Available",
+     "details": "Open lakehouse format with native catalog integration",
+     "source_url": "https://docs.snowflake.com/en/user-guide/tables-iceberg"
+    },
+    {
+     "component": "Snowflake Notebooks",
+     "status": "Generally Available",
+     "details": "Python/SQL interactive notebooks with Snowpark integration",
+     "source_url": "https://docs.snowflake.com/en/user-guide/ui-snowsight/notebooks"
+    },
+    {
+     "component": "Internal Marketplace (Organizational Listings)",
+     "status": "Generally Available",
+     "details": "share data products across accounts within the same organization",
+     "source_url": "https://docs.snowflake.com/en/release-notes/2024/other/2024-11-12-organizational-listings"
+    },
+    {
+     "component": "Search Optimization Service",
+     "status": "Generally Available (Enterprise+)",
+     "details": "Accelerates point lookups and joins on high-cardinality columns",
+     "source_url": "https://docs.snowflake.com/en/user-guide/search-optimization/queries-that-benefit"
+    },
+    {
+     "component": "Row Access Policies",
+     "status": "Generally Available (Enterprise+)",
+     "details": "Table and view-level row filtering with partition-aware performance",
+     "source_url": "https://docs.snowflake.com/en/user-guide/security-row-intro"
+    },
+    {
+     "component": "Custom Budgets",
+     "status": "Generally Available",
+     "details": "Proactive cost monitoring with configurable thresholds and notifications",
+     "source_url": "https://docs.snowflake.com/en/user-guide/budgets/custom-budget"
+    }
+   ],
+   "sections": [
+    {
+     "title": "Data Ingestion: Real-Time CDC and Continuous Loading",
+     "challenge": "Multiple source systems (transactional databases, cloud storage, event streams) require automated, low-latency ingestion to support near-real-time reporting.",
+     "explanation": "Openflow provides change data capture (CDC) for databases, Snowpipe automates file ingestion from cloud storage, and Snowpipe Streaming handles high-throughput event data. Together, these capabilities eliminate manual data transfers and ensure fresh data availability.",
+     "coco_prompt": "Use the `openflow` skill to set up a CDC connector for your source database, the `snowpipe` skill to configure auto-ingest from cloud storage, and the `snowpipe-streaming` skill for real-time event ingestion.",
+     "sql": "-- Openflow: Create destination database and grant permissions\nCREATE DATABASE IF NOT EXISTS finance_raw;\n\nGRANT USAGE ON DATABASE finance_raw TO ROLE OPENFLOW_FINANCE_CDC_EXECUTE_AS_RL;\nGRANT CREATE SCHEMA ON DATABASE finance_raw TO ROLE OPENFLOW_FINANCE_CDC_EXECUTE_AS_RL;\n\n-- Create ingest warehouse for the connector\nCREATE WAREHOUSE openflow_ingest_wh\n  WITH\n    WAREHOUSE_SIZE = 'XSMALL'\n    AUTO_SUSPEND = 300\n    AUTO_RESUME = TRUE;\n\nGRANT USAGE, OPERATE ON WAREHOUSE openflow_ingest_wh TO ROLE OPENFLOW_FINANCE_CDC_EXECUTE_AS_RL;\n\n-- Snowpipe: Create external stage over cloud storage\nCREATE STAGE finance_raw.public.orders_stage\n  URL = 's3://finance-data-bucket/orders/'\n  STORAGE_INTEGRATION = finance_s3_int;\n\n-- Create auto-ingest pipe\nCREATE PIPE finance_raw.public.orders_pipe\n  AUTO_INGEST = TRUE\n  AS\n  COPY INTO finance_raw.public.raw_orders\n    FROM @finance_raw.public.orders_stage\n    FILE_FORMAT = (TYPE = 'JSON')\n    MATCH_BY_COLUMN_NAME = CASE_INSENSITIVE;\n\n-- Snowpipe Streaming: Custom pipe for high-performance ingestion\nCREATE OR REPLACE PIPE finance_raw.public.events_streaming_pipe AS\n    COPY INTO finance_raw.public.raw_events (event_id, event_type, event_data, event_timestamp)\n    FROM (SELECT $1:event_id, $1:event_type, $1:event_data, $1:event_timestamp);",
+     "source_url": "https://docs.snowflake.com/en/user-guide/data-integration/openflow/connectors/sql-server-cdc/setup",
+     "notes": [
+      "Openflow requires a runtime with execute-as role; follow the setup wizard for connector-specific configuration",
+      "Snowpipe auto-ingest requires cloud event notifications (SQS for S3, Event Grid for Azure)",
+      "Snowpipe Streaming high-performance architecture requires Iceberg Tables",
+      "Monitor pipe status: SELECT SYSTEM$PIPE_STATUS('finance_raw.public.orders_pipe');"
+     ]
+    },
+    {
+     "title": "Data Transformation: Declarative Pipelines and Orchestration",
+     "challenge": "Traditional ETL scripts require manual dependency management, frequent rewrites, and long refresh cycles, slowing time-to-insight.",
+     "explanation": "Dynamic Tables provide declarative, SQL-based transformations with automatic dependency resolution and incremental refresh. Tasks orchestrate non-SQL workloads (Snowpark, stored procedures). dbt Projects enable version-controlled, Git-based transformation workflows with CI/CD integration.",
+     "coco_prompt": "Use the `dynamic-tables` skill to create incremental transformation pipelines, the `snowflake-tasks` skill for orchestration, and the `dbt-projects-on-snowflake` skill to deploy Git-managed dbt models.",
+     "sql": "-- Dynamic Tables: Bronze to Silver (latest row per key, SCD Type 1)\nCREATE OR REPLACE DYNAMIC TABLE finance_silver.customers_current\n    TARGET_LAG = '10 minutes'\n    WAREHOUSE = transform_wh\n    REFRESH_MODE = INCREMENTAL\nAS\n    SELECT * EXCLUDE (raw_metadata_col)\n    FROM finance_raw.customers_cdc\n    QUALIFY ROW_NUMBER() OVER (\n        PARTITION BY customer_id\n        ORDER BY updated_at DESC\n    ) = 1;\n\n-- Dynamic Tables: Silver to Gold (aggregations with downstream lag)\nCREATE OR REPLACE DYNAMIC TABLE finance_silver.orders_enriched\n    TARGET_LAG = DOWNSTREAM\n    WAREHOUSE = transform_wh\n    REFRESH_MODE = INCREMENTAL\nAS\n    SELECT\n        o.order_id,\n        o.order_date,\n        o.quantity,\n        o.unit_price,\n        o.quantity * o.unit_price AS line_total,\n        c.region,\n        c.segment\n    FROM finance_raw.orders o\n    JOIN finance_silver.customers_current c ON o.customer_id = c.customer_id;\n\nCREATE OR REPLACE DYNAMIC TABLE finance_gold.orders_daily\n    TARGET_LAG = '30 minutes'\n    WAREHOUSE = transform_wh\n    REFRESH_MODE = INCREMENTAL\nAS\n    SELECT\n        DATE_TRUNC('day', order_date) AS order_day,\n        region,\n        segment,\n        COUNT(*) AS order_count,\n        SUM(line_total) AS daily_revenue\n    FROM finance_silver.orders_enriched\n    GROUP BY ALL;\n\n-- dbt Projects: Deploy Git-managed transformations\nCREATE DBT PROJECT finance_db.dbt_schema.finance_models\n  FROM '@finance_db.integrations.dbt_git_stage/branches/main'\n  DEFAULT_TARGET = 'prod'\n  EXTERNAL_ACCESS_INTEGRATIONS = 'dbt_external_access'\n  COMMENT = 'Finance data models.';\n\n-- Schedule dbt project with a task\nCREATE OR ALTER TASK finance_db.dbt_schema.run_finance_models\n  WAREHOUSE = transform_wh\n  SCHEDULE = '6 hours'\nAS\n  EXECUTE DBT PROJECT finance_db.dbt_schema.finance_models args='run --target prod';",
+     "source_url": "https://docs.snowflake.com/en/user-guide/dynamic-tables/design-patterns",
+     "notes": [
+      "TARGET_LAG = DOWNSTREAM for intermediate layers allows Snowflake to optimize refresh automatically",
+      "REFRESH_MODE = INCREMENTAL requires base tables to support change tracking (native tables, Iceberg, Streams)",
+      "dbt Projects require a Git stage and external access integration for repository access",
+      "CoCo can generate both Dynamic Tables and dbt models from natural language descriptions"
+     ]
+    },
+    {
+     "title": "Analytics & Reporting: Semantic Layer and Conversational AI",
+     "challenge": "Inconsistent metric definitions across teams, slow ad-hoc queries, and limited self-service capabilities hinder business agility.",
+     "explanation": "Semantic Views define a single source of truth for metrics, dimensions, and relationships in YAML. Cortex Agents enable business users to query data using natural language, translating questions into optimized SQL via the Cortex Analyst tool. This combination accelerates insight generation and reduces reliance on data teams.",
+     "coco_prompt": "Use the `agent-studio` skill to create a Semantic View with tables, relationships, metrics, and dimensions, then deploy a Cortex Agent with a Cortex Analyst tool to enable natural language query.",
+     "sql": "-- Semantic View: Define business metrics and relationships\nCREATE SEMANTIC VIEW finance_gold.revenue_analysis\n\n  TABLES (\n    orders AS finance_gold.orders_daily\n      PRIMARY KEY (order_day, region, segment)\n      COMMENT = 'Daily aggregated order data',\n    customers AS finance_silver.customers_current\n      PRIMARY KEY (customer_id)\n      COMMENT = 'Current customer snapshot'\n  )\n\n  RELATIONSHIPS (\n    orders_to_customers AS\n      orders (segment) REFERENCES customers\n  )\n\n  FACTS (\n    orders.order_count,\n    orders.daily_revenue\n  )\n\n  DIMENSIONS (\n    orders.order_day\n      COMMENT = 'Date of the orders',\n    orders.region\n      COMMENT = 'Geographic region',\n    orders.segment\n      COMMENT = 'Customer segment'\n  )\n\n  METRICS (\n    orders.total_revenue AS SUM(orders.daily_revenue)\n      COMMENT = 'Total revenue across all orders',\n    orders.average_order_value AS AVG(orders.daily_revenue / orders.order_count)\n      COMMENT = 'Average revenue per order'\n  )\n\n  COMMENT = 'Semantic view for revenue analysis';\n\n-- Cortex Agent: Deploy conversational analytics agent\nCREATE OR REPLACE SECURE AGENT finance_analytics_agent\n  COMMENT = 'Natural language query agent for finance reporting.'\n  FROM SPECIFICATION\n  $$\n  models:\n    orchestration: claude-sonnet-4-6\n  tools:\n    - tool_spec:\n        type: \"cortex_analyst_text_to_sql\"\n        name: \"RevenueAnalyst\"\n  tool_resources:\n    RevenueAnalyst:\n      semantic_view: \"finance_gold.revenue_analysis\"\n  $$;\n\n-- Grant access and preserve grants on replace\nGRANT USAGE ON AGENT finance_analytics_agent TO ROLE finance_analyst_role;\n\nCREATE OR REPLACE AGENT finance_analytics_agent COPY GRANTS\n  FROM SPECIFICATION\n  $$\n  models:\n    orchestration: claude-sonnet-4-6\n  tools:\n    - tool_spec:\n        type: \"cortex_analyst_text_to_sql\"\n        name: \"RevenueAnalyst\"\n  tool_resources:\n    RevenueAnalyst:\n      semantic_view: \"finance_gold.revenue_analysis\"\n  $$;",
+     "source_url": "https://docs.snowflake.com/en/sql-reference/sql/create-semantic-view",
+     "notes": [
+      "Semantic Views support synonyms, custom instructions, and verified query repositories for improved agent accuracy",
+      "Cortex Agents can use multiple tools; extend with custom MCP servers for external data sources or APIs",
+      "Grant USAGE on the agent to roles; use COPY GRANTS when replacing to preserve existing permissions"
+     ]
+    },
+    {
+     "title": "Lakehouse Architecture: Open Formats and Interoperability",
+     "challenge": "Data silos across platforms prevent unified analytics and limit flexibility for data science workflows.",
+     "explanation": "Iceberg Tables enable an open lakehouse architecture with cross-platform compatibility. Snowflake Notebooks provide interactive Python/SQL environments for exploratory analysis and ML workflows. This combination supports diverse analytical workloads on a single copy of data.",
+     "coco_prompt": "Use the `iceberg` skill to create Iceberg Tables for open lakehouse storage and the `snowflake-notebooks` skill to build interactive Python/SQL workflows.",
+     "sql": "-- Iceberg Table: Snowflake-managed with external volume\nCREATE ICEBERG TABLE finance_raw.events_iceberg (\n  event_id STRING,\n  event_type STRING,\n  event_data VARIANT,\n  event_timestamp TIMESTAMP\n)\n  CATALOG = 'SNOWFLAKE'\n  EXTERNAL_VOLUME = 'SNOWFLAKE_MANAGED';\n\n-- Notebook: Create from a stage\nCREATE NOTEBOOK finance_analysis.notebooks.revenue_exploration\n FROM '@finance_db.public.notebook_stage'\n MAIN_FILE = 'revenue_analysis.ipynb'\n QUERY_WAREHOUSE = analytics_wh;",
+     "source_url": "https://docs.snowflake.com/en/user-guide/tables-iceberg-create",
+     "notes": [
+      "Snowpipe Streaming high-performance architecture works with Iceberg Tables for low-latency ingestion",
+      "Notebooks support Snowpark Python for distributed compute and external package installation",
+      "Iceberg Tables can be queried from external engines (Spark, Trino) via catalog integrations"
+     ]
+    },
+    {
+     "title": "Cross-Unit Collaboration: Secure Sharing and Internal Marketplace",
+     "challenge": "Data duplication and manual sharing processes create latency, inconsistency, and governance risks across business units.",
+     "explanation": "Secure Data Sharing enables live, governed access to data without copying or moving it. Organizational Listings (Internal Marketplace) provide a self-service catalog for discovering and requesting access to shared data products within the same organization.",
+     "coco_prompt": "Use the `data-sharing` skill to create secure shares for cross-account collaboration and the Internal Marketplace to publish data products for self-service discovery.",
+     "sql": "-- Create a share for cross-unit collaboration\nCREATE SHARE finance_share;\n\n-- Grant database and schema usage to the share\nGRANT USAGE ON DATABASE finance_gold TO SHARE finance_share;\nGRANT USAGE ON SCHEMA finance_gold.public TO SHARE finance_share;\n\n-- Grant select on specific tables\nGRANT SELECT ON TABLE finance_gold.public.orders_daily TO SHARE finance_share;\nGRANT SELECT ON TABLE finance_gold.public.revenue_summary TO SHARE finance_share;\n\n-- Add accounts to the share (within the same organization)\nALTER SHARE finance_share ADD ACCOUNTS = <ACCOUNT_LOCATOR_1>, <ACCOUNT_LOCATOR_2>;",
+     "source_url": "https://docs.snowflake.com/en/user-guide/data-sharing-provider",
+     "notes": [
+      "Organizational Listings enable self-service discovery of shared data products",
+      "Shares can include tables, secure views, secure functions, and Cortex Agents",
+      "Row access policies and masking policies apply to shared objects, ensuring governed access",
+      "Data Clean Rooms provide privacy-preserving collaboration for sensitive data (GA)"
+     ]
+    },
+    {
+     "title": "Query Performance: Search Optimization for High-Cardinality Dimensions",
+     "challenge": "Dashboards and ad-hoc queries on large tables with high-cardinality columns experience timeouts and slow response times.",
+     "explanation": "The Search Optimization Service accelerates point lookups, selective filters, and joins on high-cardinality columns by maintaining a search access path. This is especially effective for dimensions with millions of unique values (customer IDs, product SKUs, transaction IDs).",
+     "coco_prompt": "Use the `search_optimization` CoCo skill (if available) or manually enable search optimization on high-cardinality columns using ALTER TABLE.",
+     "sql": "-- Check column cardinality to identify candidates\nSELECT APPROX_COUNT_DISTINCT(customer_id) FROM finance_gold.orders_daily;\n\n-- Enable equality search optimization on high-cardinality column\nALTER TABLE finance_gold.orders_daily ADD SEARCH OPTIMIZATION ON EQUALITY(customer_id);",
+     "source_url": "https://docs.snowflake.com/en/user-guide/search-optimization/join-queries",
+     "notes": [
+      "Search Optimization Service requires Enterprise Edition or higher",
+      "Best for columns with cardinality > 100,000 used in equality filters or joins",
+      "Adds incremental storage and maintenance cost; monitor cost via ACCOUNT_USAGE.SEARCH_OPTIMIZATION_HISTORY",
+      "Combine with clustering keys for optimal performance on frequently filtered columns"
+     ]
+    },
+    {
+     "title": "Data Governance: Row Access Policies and Dynamic Masking",
+     "challenge": "Using views for row-level security prevents partition pruning and metadata optimization, causing performance degradation as data scales.",
+     "explanation": "Row access policies attach directly to tables and views, applying filtering logic at query time while preserving partition pruning and metadata operations. Dynamic data masking protects sensitive columns based on role. Memoizable functions optimize policy lookups by caching authorization checks.",
+     "coco_prompt": "Use the `data-governance` skill to create row access policies with mapping tables and attach them to tables/views. Use memoizable functions for policy logic that performs authorization lookups.",
+     "sql": "-- Create a mapping table for region-based access\nCREATE TABLE finance_security.region_access (\n  user_role STRING,\n  allowed_region STRING\n);\n\n-- Insert access rules\nINSERT INTO finance_security.region_access VALUES\n  ('FINANCE_ANALYST_APAC', 'Asia Pacific'),\n  ('FINANCE_ANALYST_EMEA', 'Europe');\n\n-- Memoizable function for efficient policy lookups\nCREATE FUNCTION finance_security.is_region_authorized(region VARCHAR)\nRETURNS BOOLEAN\nMEMOIZABLE\nAS\n$$\n  SELECT ARRAY_CONTAINS(\n    region::VARIANT,\n    (SELECT ARRAY_AGG(allowed_region) FROM finance_security.region_access WHERE user_role = CURRENT_ROLE())\n  )\n$$;\n\n-- Row access policy using the memoizable function\nCREATE OR REPLACE ROW ACCESS POLICY finance_security.region_policy\nAS (region_col VARCHAR) RETURNS BOOLEAN ->\n  'ACCOUNTADMIN' = CURRENT_ROLE()\n  OR finance_security.is_region_authorized(region_col);\n\n-- Attach policy to table\nALTER TABLE finance_gold.orders_daily ADD ROW ACCESS POLICY finance_security.region_policy ON (region);\n\n-- Masking policy for sensitive columns\nCREATE OR REPLACE MASKING POLICY finance_security.customer_email_mask AS (val STRING) RETURNS STRING ->\n  CASE\n    WHEN CURRENT_ROLE() IN ('FINANCE_ADMIN', 'COMPLIANCE_ANALYST') THEN val\n    ELSE '*********'\n  END;\n\n-- Attach masking policy to column\nALTER TABLE finance_silver.customers_current MODIFY COLUMN email\n  SET MASKING POLICY finance_security.customer_email_mask;",
+     "source_url": "https://docs.snowflake.com/en/user-guide/security-row-using",
+     "notes": [
+      "Row access policies and masking require Enterprise Edition or higher",
+      "Memoizable functions cache results within a query, reducing repeated policy evaluations",
+      "Policies apply to all queries, including shared data; consumers inherit producer governance rules",
+      "Use object tags to classify data and automate policy attachment (e.g., PII tag -> masking policy)"
+     ]
+    },
+    {
+     "title": "Cost Management: Budgets and Resource Monitors",
+     "challenge": "Unpredictable resource consumption as workloads scale, with limited visibility into cost drivers and no proactive controls.",
+     "explanation": "Custom Budgets provide configurable thresholds and notifications for credit usage across accounts, warehouses, or custom resource groups. Resource Monitors enforce hard limits by suspending warehouses when quotas are reached. Together, these tools enable proactive cost governance.",
+     "coco_prompt": "Use the `cost-intelligence` skill to create custom budgets with alerts and resource monitors with automatic suspension policies.",
+     "sql": "",
+     "source_url": "https://docs.snowflake.com/en/user-guide/budgets/custom-budget",
+     "notes": [
+      "Custom Budgets support account, warehouse, and user-level tracking",
+      "Resource Monitors can suspend, suspend immediately, or notify at configurable thresholds",
+      "Combine with per-user quotas for granular cost attribution",
+      "Monitor credit usage: SELECT * FROM SNOWFLAKE.ACCOUNT_USAGE.WAREHOUSE_METERING_HISTORY;"
+     ]
+    }
+   ],
+   "coco_skills": [
+    {
+     "skill": "openflow",
+     "what_it_does": "Automates setup of CDC connectors for real-time database replication, generating configuration SQL, IAM policies, and network rules",
+     "steps": "Provide source database type and connection details; CoCo generates connector setup commands, role grants, and monitoring queries"
+    },
+    {
+     "skill": "snowpipe",
+     "what_it_does": "Creates auto-ingest pipes for continuous file loading from cloud storage, including stage, pipe, and notification configuration",
+     "steps": "Specify cloud storage URL and file format; CoCo generates CREATE STAGE and CREATE PIPE statements with auto-ingest enabled"
+    },
+    {
+     "skill": "snowpipe-streaming",
+     "what_it_does": "Configures high-performance streaming ingestion pipelines for event data, optimized for Iceberg Tables",
+     "steps": "Describe event schema and throughput requirements; CoCo generates streaming pipe definitions and Iceberg table setup"
+    },
+    {
+     "skill": "dynamic-tables",
+     "what_it_does": "Generates declarative transformation pipelines with automatic dependency resolution and incremental refresh logic",
+     "steps": "Describe transformation logic in natural language; CoCo generates CREATE DYNAMIC TABLE statements with optimal TARGET_LAG and REFRESH_MODE"
+    },
+    {
+     "skill": "snowflake-tasks",
+     "what_it_does": "Creates scheduled or event-driven tasks for orchestrating non-SQL workloads (Snowpark, stored procedures, dbt)",
+     "steps": "Specify schedule (cron or interval) and task logic; CoCo generates CREATE TASK statements with warehouse or serverless configuration"
+    },
+    {
+     "skill": "dbt-projects-on-snowflake",
+     "what_it_does": "Deploys Git-managed dbt projects with native Snowflake orchestration, including CI/CD task scheduling",
+     "steps": "Provide Git repository URL and target environment; CoCo generates CREATE DBT PROJECT and EXECUTE DBT PROJECT commands"
+    },
+    {
+     "skill": "agent-studio",
+     "what_it_does": "Builds Semantic Views and Cortex Agents for natural language analytics, with metric definitions and conversational interfaces",
+     "steps": "Describe business metrics and relationships; CoCo generates Semantic View YAML and Cortex Agent specification with Cortex Analyst tool"
+    },
+    {
+     "skill": "iceberg",
+     "what_it_does": "Creates Iceberg Tables for open lakehouse architectures with cross-platform compatibility and catalog integration",
+     "steps": "Specify schema and catalog configuration; CoCo generates CREATE ICEBERG TABLE statements with external volume setup"
+    },
+    {
+     "skill": "snowflake-notebooks",
+     "what_it_does": "Generates interactive Python/SQL notebooks for exploratory analysis, ML workflows, and parameterized reporting",
+     "steps": "Describe analysis goal or ML pipeline; CoCo generates notebook code with Snowpark, pandas, and visualization libraries"
+    },
+    {
+     "skill": "data-sharing",
+     "what_it_does": "Configures secure shares for cross-account collaboration, including share creation, object grants, and consumer provisioning",
+     "steps": "Specify objects to share and target accounts; CoCo generates CREATE SHARE, GRANT, and ALTER SHARE commands"
+    },
+    {
+     "skill": "data-governance",
+     "what_it_does": "Creates row access policies, masking policies, and tag-based governance rules with partition-aware performance optimization",
+     "steps": "Describe access control requirements; CoCo generates policy definitions, memoizable functions, and ALTER TABLE commands to attach policies"
+    },
+    {
+     "skill": "cost-intelligence",
+     "what_it_does": "Sets up custom budgets, resource monitors, and per-user quotas for proactive cost management",
+     "steps": "Specify budget thresholds and alert targets; CoCo generates CREATE BUDGET and CREATE RESOURCE MONITOR statements"
+    }
+   ],
+   "before_after": [
+    {
+     "task": "Set up CDC from source database",
+     "without": "Manual connector installation, network configuration, IAM policy creation, and ongoing maintenance",
+     "with": "CoCo `openflow` skill generates complete setup in minutes; paste connector configuration and run"
+    },
+    {
+     "task": "Build incremental transformation pipeline",
+     "without": "Write custom ETL with dependency tracking, incremental logic, error handling, and scheduling",
+     "with": "Describe transformation in natural language; CoCo `dynamic-tables` skill generates production-ready Dynamic Table in seconds"
+    },
+    {
+     "task": "Define business metrics for BI tools",
+     "without": "Manually write SQL for each metric, document in spreadsheets, inconsistent definitions across teams (ongoing effort)",
+     "with": "CoCo `agent-studio` skill generates Semantic View with standardized metrics, relationships, and Cortex Agent for natural language query"
+    },
+    {
+     "task": "Implement row-level security",
+     "without": "Create views with hardcoded filters, degraded performance, manual policy maintenance (1+ week, ongoing issues)",
+     "with": "CoCo `data-governance` skill generates partition-aware row access policies with memoizable functions in minutes"
+    },
+    {
+     "task": "Share data with partner teams",
+     "without": "Export data to files, email or upload to shared drive, manual version control, security risks (hours per request)",
+     "with": "CoCo `data-sharing` skill generates secure share with live access, no data movement, governed by producer policies"
+    },
+    {
+     "task": "Optimize slow dashboard queries",
+     "without": "Manual query tuning, materialized views, pre-aggregation tables, ongoing maintenance (days per dashboard)",
+     "with": "Enable Search Optimization Service on high-cardinality columns; automatic acceleration with no code changes"
+    },
+    {
+     "task": "Control warehouse spend",
+     "without": "Reactive cost reviews, manual tracking in spreadsheets, surprise bills (ongoing firefighting)",
+     "with": "CoCo `cost-intelligence` skill creates proactive budgets and resource monitors with automatic suspension"
+    }
+   ],
+   "decision_matrix": [
+    {
+     "topic": "Real-Time CDC Ingestion (Openflow)",
+     "verdict": "Recommended for all transactional source systems",
+     "production_ready": "Yes (GA for SQL Server CDC; verify other connectors)",
+     "action": "Deploy Openflow connectors for each source database; configure monitoring and alerting"
+    },
+    {
+     "topic": "Continuous File Loading (Snowpipe)",
+     "verdict": "Recommended for all cloud storage integrations",
+     "production_ready": "Yes (GA)",
+     "action": "Enable auto-ingest pipes for S3/Azure/GCS stages; set up cloud event notifications"
+    },
+    {
+     "topic": "High-Volume Event Streaming (Snowpipe Streaming)",
+     "verdict": "Recommended for event-driven workloads requiring sub-minute latency",
+     "production_ready": "Yes",
+     "action": "Configure streaming pipes with Iceberg Tables for append-only event logs"
+    },
+    {
+     "topic": "Declarative Transformations (Dynamic Tables)",
+     "verdict": "Recommended for all transformation pipelines",
+     "production_ready": "Yes (GA)",
+     "action": "Migrate ETL scripts to Dynamic Tables; start with Bronze\u2192Silver\u2192Gold medallion architecture"
+    },
+    {
+     "topic": "Version-Controlled Pipelines (dbt Projects)",
+     "verdict": "Recommended for teams using Git-based workflows",
+     "production_ready": "Yes (GA)",
+     "action": "Deploy dbt Projects from Git repositories; schedule with native Tasks"
+    },
+    {
+     "topic": "Semantic Layer (Semantic Views + Cortex Agents)",
+     "verdict": "Recommended for all BI and self-service analytics use cases",
+     "production_ready": "Yes (GA)",
+     "action": "Define Semantic Views for key subject areas; deploy Cortex Agents for conversational analytics"
+    },
+    {
+     "topic": "Open Lakehouse (Iceberg Tables)",
+     "verdict": "Recommended for cross-platform interoperability and data science workflows",
+     "production_ready": "Yes (GA)",
+     "action": "Use Iceberg Tables for raw/bronze layers; enable external catalog integration if needed"
+    },
+    {
+     "topic": "Secure Data Sharing (Internal Marketplace)",
+     "verdict": "Recommended for all cross-unit collaboration",
+     "production_ready": "Yes",
+     "action": "Create shares for each shared data product; publish to Internal Marketplace for self-service discovery"
+    },
+    {
+     "topic": "Search Optimization (High-Cardinality Dimensions)",
+     "verdict": "Recommended for tables with columns >100K cardinality used in filters/joins",
+     "production_ready": "Yes (GA, Enterprise+)",
+     "action": "Enable search optimization on customer_id, product_id, and other high-cardinality columns"
+    },
+    {
+     "topic": "Row Access Policies (Partition-Aware Governance)",
+     "verdict": "Recommended replacement for view-based row-level security",
+     "production_ready": "Yes (GA, Enterprise+)",
+     "action": "Create row access policies with memoizable functions; attach to tables and views"
+    },
+    {
+     "topic": "Cost Governance (Budgets + Resource Monitors)",
+     "verdict": "Recommended for all production environments",
+     "production_ready": "Yes (GA)",
+     "action": "Create custom budgets for each major workload; configure resource monitors with suspension thresholds"
+    }
+   ],
+   "resources": {
+    "quickstarts": [
+     {
+      "title": "Getting Started with Openflow Snowflake Deployments",
+      "url": "https://www.snowflake.com/en/developers/guides/getting-started-with-openflow-spcs/"
+     },
+     {
+      "title": "Getting Started with Openflow for CDC from SQL Server",
+      "url": "https://www.snowflake.com/en/developers/guides/getting-started-with-openflow-for-cdc-on-sql-server/"
+     },
+     {
+      "title": "Getting Started with Snowpipe",
+      "url": "https://www.snowflake.com/en/developers/guides/getting-started-with-snowpipe/"
+     },
+     {
+      "title": "Getting Started with Snowpipe Streaming and Amazon MSK",
+      "url": "https://www.snowflake.com/en/developers/guides/getting-started-with-snowpipe-streaming-aws-msk/"
+     },
+     {
+      "title": "Create Declarative Data Pipelines with Dynamic Tables",
+      "url": "https://www.snowflake.com/en/developers/guides/create-declarative-data-pipelines-with-dynamic-tables/"
+     },
+     {
+      "title": "Comprehensive Guide to Snowflake Dynamic Tables",
+      "url": "https://www.snowflake.com/en/developers/guides/comprehensive-guide-to-dynamic-tables/"
+     },
+     {
+      "title": "Exploring dbt Projects on Snowflake",
+      "url": "https://www.snowflake.com/en/developers/guides/dbt-projects-on-snowflake/"
+     },
+     {
+      "title": "Build Agentic Analytics with Semantic Views",
+      "url": "https://www.snowflake.com/en/developers/guides/snowflake-semantic-view-agentic-analytics/"
+     },
+     {
+      "title": "Getting Started with Cortex Agents",
+      "url": "https://www.snowflake.com/en/developers/guides/getting-started-with-cortex-agents/"
+     },
+     {
+      "title": "Getting Started with Cortex Analyst",
+      "url": "https://www.snowflake.com/en/developers/guides/getting-started-with-cortex-analyst/"
+     },
+     {
+      "title": "Getting Started with Iceberg Tables",
+      "url": "https://www.snowflake.com/en/developers/guides/getting-started-iceberg-tables/"
+     },
+     {
+      "title": "A Getting Started Guide With Snowflake Notebooks",
+      "url": "https://www.snowflake.com/en/developers/guides/getting-started-with-snowflake-notebooks/"
+     },
+     {
+      "title": "Sharing Data and AI on the Snowflake Internal Marketplace",
+      "url": "https://www.snowflake.com/en/developers/guides/sharing-data-and-ai-on-snowflake-internal-marketplace/"
+     },
+     {
+      "title": "Getting Started with Search Optimization",
+      "url": "https://www.snowflake.com/en/developers/guides/getting-started-with-search-optimization/"
+     },
+     {
+      "title": "Getting Started with Horizon for Data Governance in Snowflake",
+      "url": "https://www.snowflake.com/en/developers/guides/getting-started-with-horizon-for-data-governance-in-snowflake/"
+     },
+     {
+      "title": "Resource Optimization: Setup & Configuration",
+      "url": "https://www.snowflake.com/en/developers/guides/resource-optimization-setup/"
+     }
+    ],
+    "docs": [
+     {
+      "title": "About Openflow",
+      "url": "https://docs.snowflake.com/en/user-guide/data-integration/openflow/about",
+      "status": "Generally Available"
+     },
+     {
+      "title": "Set up the Openflow Connector for SQL Server (CDC)",
+      "url": "https://docs.snowflake.com/en/user-guide/data-integration/openflow/connectors/sql-server-cdc/setup",
+      "status": "Generally Available"
+     },
+     {
+      "title": "Snowpipe",
+      "url": "https://docs.snowflake.com/en/user-guide/data-load-snowpipe-intro",
+      "status": "See documentation"
+     },
+     {
+      "title": "Snowpipe Streaming high-performance architecture with Apache Iceberg tables",
+      "url": "https://docs.snowflake.com/en/user-guide/snowpipe-streaming/snowpipe-streaming-high-performance-iceberg",
+      "status": "Generally Available"
+     },
+     {
+      "title": "Dynamic tables",
+      "url": "https://docs.snowflake.com/en/user-guide/dynamic-tables/overview",
+      "status": "See documentation"
+     },
+     {
+      "title": "Dynamic table design patterns",
+      "url": "https://docs.snowflake.com/en/user-guide/dynamic-tables/design-patterns",
+      "status": "See documentation"
+     },
+     {
+      "title": "dbt Projects on Snowflake",
+      "url": "https://docs.snowflake.com/en/user-guide/data-engineering/dbt-projects-on-snowflake",
+      "status": "See documentation"
+     },
+     {
+      "title": "Overview of semantic views",
+      "url": "https://docs.snowflake.com/en/user-guide/views-semantic/overview",
+      "status": "See documentation"
+     },
+     {
+      "title": "Cortex Agents",
+      "url": "https://docs.snowflake.com/en/user-guide/snowflake-cortex/cortex-agents",
+      "status": "See documentation"
+     },
+     {
+      "title": "Cortex Analyst",
+      "url": "https://docs.snowflake.com/en/user-guide/snowflake-cortex/cortex-analyst",
+      "status": "See documentation"
+     },
+     {
+      "title": "Apache Iceberg tables",
+      "url": "https://docs.snowflake.com/en/user-guide/tables-iceberg",
+      "status": "See documentation"
+     },
+     {
+      "title": "Snowflake Notebooks",
+      "url": "https://docs.snowflake.com/en/user-guide/ui-snowsight/notebooks",
+      "status": "See documentation"
+     },
+     {
+      "title": "Introduction to Secure Data Sharing",
+      "url": "https://docs.snowflake.com/en/user-guide/data-sharing-intro",
+      "status": "Generally Available"
+     },
+     {
+      "title": "About organizational listings",
+      "url": "https://docs.snowflake.com/en/user-guide/collaboration/listings/organizational/org-listing-about",
+      "status": "Generally Available"
+     },
+     {
+      "title": "Identifying queries that benefit from search optimization",
+      "url": "https://docs.snowflake.com/en/user-guide/search-optimization/queries-that-benefit",
+      "status": "See documentation"
+     },
+     {
+      "title": "Understanding row access policies",
+      "url": "https://docs.snowflake.com/en/user-guide/security-row-intro",
+      "status": "See documentation"
+     },
+     {
+      "title": "Using Dynamic Data Masking",
+      "url": "https://docs.snowflake.com/en/user-guide/security-column-ddm-use",
+      "status": "See documentation"
+     },
+     {
+      "title": "Monitor credit usage with budgets",
+      "url": "https://docs.snowflake.com/en/user-guide/budgets",
+      "status": "See documentation"
+     },
+     {
+      "title": "Working with resource monitors",
+      "url": "https://docs.snowflake.com/en/user-guide/resource-monitors",
+      "status": "See documentation"
+     }
+    ],
+    "github": [
+     {
+      "title": "Snowflake-Labs/sfguide-getting-started-with-openflow-spcs",
+      "url": "https://github.com/Snowflake-Labs/sfguide-getting-started-with-openflow-spcs",
+      "description": "Companion repository"
+     },
+     {
+      "title": "Snowflake-Labs/sfguide-data-engineering-with-snowpark-python",
+      "url": "https://github.com/Snowflake-Labs/sfguide-data-engineering-with-snowpark-python",
+      "description": "Companion repository"
+     },
+     {
+      "title": "Snowflake-Labs/sfguide-getting-started-with-cortex-agents",
+      "url": "https://github.com/Snowflake-Labs/sfguide-getting-started-with-cortex-agents",
+      "description": "Companion repository"
+     },
+     {
+      "title": "Snowflake-Labs/snowflake-demo-notebooks",
+      "url": "https://github.com/Snowflake-Labs/snowflake-demo-notebooks",
+      "description": "Companion repository"
+     }
+    ]
+   },
+   "architecture": {
+    "sources": [
+     "Source systems (ERP, ticketing, labor, finance)"
+    ],
+    "layers": [
+     {
+      "name": "Ingestion",
+      "capability": "Openflow",
+      "detail": "CDC connectors, incremental replication"
+     },
+     {
+      "name": "Bronze",
+      "capability": "Iceberg Tables",
+      "detail": "raw landing tables, one schema per source"
+     },
+     {
+      "name": "Silver",
+      "capability": "Dynamic Tables",
+      "detail": "conformed, deduplicated entities"
+     },
+     {
+      "name": "Gold",
+      "capability": "Dynamic Tables",
+      "detail": "finance marts and aggregates"
+     },
+     {
+      "name": "Semantic",
+      "capability": "Semantic Views",
+      "detail": "consistent business metrics"
+     },
+     {
+      "name": "Consumption",
+      "capability": "Cortex Agents",
+      "detail": "natural-language Q&A"
+     },
+     {
+      "name": "Sharing",
+      "capability": "Internal Marketplace",
+      "detail": "other business units"
+     },
+     {
+      "name": "Governance",
+      "capability": "Row Access Policies",
+      "detail": "row-level security on gold"
+     }
+    ],
+    "consumers": [
+     "Existing BI tools"
+    ]
+   },
+   "hands_on": {
+    "intro": "",
+    "sql": "",
+    "source_url": ""
+   }
+  }
+ }
+}

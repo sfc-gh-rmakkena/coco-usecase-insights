@@ -4,7 +4,8 @@ from reportlab.lib.colors import HexColor
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.platypus import PageBreak, Paragraph, Preformatted, Spacer, Table, TableStyle
 
-from .render_html import SCOPE_NOTE, _conf, _dict, _list
+from . import diagram
+from .render_html import HANDS_ON, SCOPE_NOTE, _conf, _dict, _list, template_sections
 
 
 def _e(s) -> str:
@@ -48,61 +49,106 @@ def _heading(text, styles):
     return Paragraph(f"<b>{_e(text)}</b>", styles["body"])
 
 
-def _plan_flowables(plan, styles) -> list:
+def _h1(text, styles):
+    st = ParagraphStyle("wsH1", parent=styles["body"], fontSize=12, leading=15, spaceBefore=10, spaceAfter=4,
+                        textColor=HexColor("#1B2A4A"))
+    return Paragraph(f"<b>{_e(text)}</b>", st)
+
+
+def _callout(markup, styles):
+    """CoCo Prompt callout: shaded box with a blue left rule (template .coco-prompt)."""
+    t = Table([[Paragraph(markup, styles["body"])]], colWidths=[7.3 * 72])
+    t.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, -1), HexColor("#F0F8FF")),
+                           ("LINEBEFORE", (0, 0), (0, -1), 3, HexColor("#29B5E8")),
+                           ("LEFTPADDING", (0, 0), (-1, -1), 8), ("TOPPADDING", (0, 0), (-1, -1), 5),
+                           ("BOTTOMPADDING", (0, 0), (-1, -1), 5)]))
+    return t
+
+
+def _source(url, styles):
+    return [Paragraph(f"<i>Source: {_link(url)}</i>", styles["body"])] if str(url or "").startswith("https://") else []
+
+
+def _plan_flowables(plan, styles, w=None) -> list:
+    """Same numbering, titles and tables as the HTML report (skill template sections 1-7, optional 8)."""
     body, out = styles["body"], []
-    plan = _dict(plan)
+    plan, w = _dict(plan), _dict(w)
+    title = dict(template_sections())
     rows = lambda key, fields: [[_e(_dict(r).get(f)) for f in fields] for r in _list(plan.get(key))]
+    sub = lambda t: _heading(t, styles)
+    # 1. Context & Background
+    out.append(_h1(title["context"], styles))
+    out += [sub("Customer Overview"), Paragraph(f"{_e(w.get('account'))} is planning {_e(w.get('name'))} on Snowflake.", body)]
     if plan.get("problem_statement"):
-        out += [_heading("Problem Statement", styles), Paragraph(_e(plan["problem_statement"]), body)]
+        out += [sub("Problem Statement"), Paragraph(_e(plan["problem_statement"]), body)]
     t = _table(("Topic", "Previous State", "Snowflake Solution", "Status"),
                rows("executive_summary", ("topic", "previous_state", "solution", "status")), styles, (1.5, 2.0, 2.6, 1.2))
-    out += ([_heading("Executive Summary", styles)] + t) if t else []
+    out += ([sub("Executive Summary")] + t) if t else []
     if _list(plan.get("decision_criteria_alignment")):
-        out.append(_heading("Decision Criteria Alignment", styles))
+        out.append(sub("Decision Criteria Alignment"))
         out += [Paragraph(f"&bull; {_e(x)}", body) for x in plan["decision_criteria_alignment"]]
-    if _list(plan.get("architecture_layers")) or plan.get("architecture_flow") or _list(plan.get("component_status")):
-        out.append(_heading("Solution Architecture", styles))
-        out += [Paragraph(f"&bull; {_e(x)}", body) for x in _list(plan.get("architecture_layers"))]
-        if plan.get("architecture_flow"):
-            out.append(_code(plan["architecture_flow"], styles))
-        out += _table(("Component", "Status", "Details", "Source"),
-                      [[_e(_dict(r).get("component")), _e(_dict(r).get("status")), _e(_dict(r).get("details")),
-                        _link(_dict(r).get("source_url"), "docs") if _dict(r).get("source_url") else ""]
-                       for r in _list(plan.get("component_status"))], styles, (1.8, 1.3, 3.3, 0.9))
-    if _list(plan.get("sections")):
-        out.append(_heading("Detailed Technical Approach", styles))
-        for i, s in enumerate(plan["sections"], 1):
-            s = _dict(s)
-            out.append(Paragraph(f"<b>{i}. {_e(s.get('title'))}</b>", body))
-            if s.get("challenge"):
-                out.append(Paragraph(f"<i>Challenge:</i> {_e(s['challenge'])}", body))
-            if s.get("explanation"):
-                out.append(Paragraph(_e(s["explanation"]), body))
-            if s.get("coco_prompt"):
-                out.append(Paragraph(f"<b>CoCo Prompt:</b> {_e(s['coco_prompt'])}", body))
-            if s.get("sql"):
-                out.append(_code(s["sql"], styles))
-                if s.get("source_url"):
-                    out.append(Paragraph(f"<i>Source:</i> {_link(s['source_url'])}", body))
-            out += [Paragraph(f"&bull; {_e(n)}", body) for n in _list(s.get("notes"))]
-    t = _table(("CoCo Skill", "What It Does for This Use Case", "Steps"),
-               rows("coco_skills", ("skill", "what_it_does", "steps")), styles, (1.6, 3.2, 2.5))
-    out += ([_heading("CoCo Skills Acceleration", styles)] + t) if t else []
+    # 2. Solution Architecture
+    out += [_h1(title["architecture"], styles), sub("Layered Architecture")]
+    out += [Paragraph(f"&bull; {_e(x)}", body) for x in _list(plan.get("architecture_layers"))]
+    arch = _dict(plan.get("architecture"))
+    flow = diagram.render(arch) if _list(arch.get("layers")) else str(plan.get("architecture_flow") or "")
+    if flow:
+        out.append(_code(diagram.to_ascii(flow), styles))
+    t = _table(("Component", "Status", "Details"),
+               [[_e(_dict(r).get("component")), _e(_dict(r).get("status")),
+                 _e(_dict(r).get("details")) + (f" ({_link(_dict(r)['source_url'], 'docs')})"
+                                                if str(_dict(r).get("source_url") or "").startswith("https://") else "")]
+                for r in _list(plan.get("component_status"))], styles, (2.0, 1.4, 3.9))
+    out += ([sub("Component Status")] + t) if t else []
+    # 3. Detailed Technical Approach
+    out.append(_h1(title["technical"], styles))
+    for i, s in enumerate(_list(plan.get("sections")), 1):
+        s = _dict(s)
+        out.append(sub(f"3.{i} {s.get('title') or ''}"))
+        if s.get("challenge"):
+            out.append(Paragraph(f"<b>Challenge:</b> {_e(s['challenge'])}", body))
+        if s.get("explanation"):
+            out.append(Paragraph(_e(s["explanation"]), body))
+        if s.get("coco_prompt"):
+            out.append(_callout(f"<b>CoCo Prompt:</b> <i>{_e(s['coco_prompt'])}</i>", styles))
+        if s.get("sql"):
+            out.append(_code(s["sql"], styles))
+            out += _source(s.get("source_url"), styles)
+        out += [Paragraph(f"&bull; {_e(n)}", body) for n in _list(s.get("notes"))]
+    # 4. CoCo Skills Acceleration
+    out.append(_h1(title["coco"], styles))
+    out += _table(("CoCo Skill", "What It Does for This Use Case", "Steps"),
+                  rows("coco_skills", ("skill", "what_it_does", "steps")), styles, (1.6, 3.2, 2.5))
     t = _table(("Task", "Without CoCo", "With CoCo"), rows("before_after", ("task", "without", "with")),
                styles, (1.8, 2.75, 2.75))
-    out += ([_heading("Before vs After", styles)] + t) if t else []
-    t = _table(("Topic", "Verdict", "Production Ready?", "Action Required"),
-               rows("decision_matrix", ("topic", "verdict", "production_ready", "action")), styles, (1.8, 1.2, 1.6, 2.7))
-    out += ([_heading("Decision Matrix", styles)] + t) if t else []
-    if _list(plan.get("next_steps")):
-        out.append(_heading("Recommended Next Steps", styles))
-        out += [Paragraph(f"{i}. {_e(x)}", body) for i, x in enumerate(plan["next_steps"], 1)]
+    out += ([sub("Before vs After")] + t) if t else []
+    # 5. Summary & Decision Matrix
+    out.append(_h1(title["decision"], styles))
+    out += _table(("Topic", "Verdict", "Production Ready?", "Action Required"),
+                  rows("decision_matrix", ("topic", "verdict", "production_ready", "action")), styles, (1.8, 1.2, 1.6, 2.7))
+    # 6. Recommended Next Steps
+    out.append(_h1(title["nextsteps"], styles))
+    out += [Paragraph(f"{i}. {_e(x)}", body) for i, x in enumerate(_list(plan.get("next_steps")), 1)]
+    # 7. Quickstart Resources & Documentation (three tables)
+    out.append(_h1(title["resources"], styles))
     res = _dict(plan.get("resources"))
-    links = [(label, d) for key, label in (("quickstarts", "Quickstart"), ("docs", "Docs"), ("github", "GitHub"))
-             for d in _list(res.get(key)) if str(_dict(d).get("url") or "").startswith("https://")]
-    if links:
-        out.append(_heading("Resources", styles))
-        out += [Paragraph(f"{label}: {_doc(d)}", body) for label, d in links]
+    ok = lambda k: [_dict(d) for d in _list(res.get(k)) if str(_dict(d).get("url") or "").startswith("https://")]
+    t = _table(("Name", "Link"), [[_e(d.get("title")), _doc(d)] for d in ok("quickstarts")], styles, (2.8, 4.5))
+    out += ([sub("Quickstarts")] + t) if t else []
+    t = _table(("Feature", "Status", "URL"), [[_e(d.get("title")), _e(d.get("status") or "See page"), _doc(d)]
+                                            for d in ok("docs")], styles, (2.2, 1.3, 3.8))
+    out += ([sub("Documentation")] + t) if t else []
+    t = _table(("Repo", "Description", "URL"), [[_e(d.get("title")), _e(d.get("description")), _link(d["url"])]
+                                              for d in ok("github")], styles, (2.2, 2.3, 2.8))
+    out += ([sub("GitHub Repositories")] + t) if t else []
+    ho = _dict(plan.get("hands_on"))
+    if ho.get("intro") or ho.get("sql"):
+        out.append(_h1(HANDS_ON[1], styles))
+        if ho.get("intro"):
+            out.append(Paragraph(_e(ho["intro"]), body))
+        if ho.get("sql"):
+            out.append(_code(ho["sql"], styles))
+            out += _source(ho.get("source_url"), styles)
     return out
 
 
@@ -115,7 +161,7 @@ def scope_note_flowable(styles):
     return t
 
 
-def workshop_pdf_flowables(workshops, styles) -> list:
+def workshop_pdf_flowables(workshops, styles, partner: str = "") -> list:
     out = []
     h2, body = styles["heading2"], styles["body"]
     for w in workshops or []:
@@ -143,5 +189,8 @@ def workshop_pdf_flowables(workshops, styles) -> list:
         if not _list(plan.get("sections")):
             out.append(Paragraph("The implementation plan for this use case is not available in this "
                                  "report. Regenerate the report to retry.", body))
-        out += _plan_flowables(plan, styles)
+        else:
+            if partner:
+                out.append(Paragraph(f"Recommended Implementation Plan &middot; prepared with {_e(partner)}", body))
+            out += _plan_flowables(plan, styles, w)
     return out

@@ -54,6 +54,7 @@ def grounding_links(grounding: dict) -> set:
 def asset_version() -> str:
     h = hashlib.sha256((_ASSETS / "skills" / "VERSIONS.json").read_bytes())
     h.update(override_text().encode())
+    h.update(b"s2-schema:structured-architecture-v3")  # bump when the Session 2 JSON schema changes
     for name in ("grounding.json", "vendor_terms.json", "locations.json", "first_names.json"):
         if (_ASSETS / name).exists():
             h.update((_ASSETS / name).read_bytes())

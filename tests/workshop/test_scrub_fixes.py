@@ -108,7 +108,7 @@ def test_s2_scrubs_not_rejects():
     out = generator.build_one(UC, "D", None, {}, _llm(s2=json.dumps(payload), log=log))
     plan = out["session2"]["plan"]
     assert out["_degraded"] is False
-    assert sum("pse-uc-implementation-plan" in p for p in log) == 1
+    assert sum("pse-uc-implementation-plan" in p and "=== REPAIR ===" not in p for p in log) == 1
     assert out["brief"] == "Real goal."
     assert plan["sections"][0]["explanation"] == "Build it."
     assert plan["sections"][0]["sql"] == "SELECT $1:a FROM @s"

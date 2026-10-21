@@ -1,4 +1,10 @@
+import datetime
+import functools
 import html
+import re
+
+from . import assets, diagram
+from .css_scope import prefix_css
 
 SCOPE_NOTE = ("The summary above reflects all use cases in the selected period. The sections that follow "
               "focus only on use cases not yet in production — each with a ready-to-run workshop plan for "
@@ -41,14 +47,6 @@ def _md_block(text):
             f'border-radius:4px;">{_h(text)}</pre>')
 
 
-def _doc_link(d):
-    d = _dict(d)
-    url, title = str(d.get("url") or ""), d.get("title") or d.get("url") or ""
-    if url.startswith("https://"):
-        return f'<a href="{_h(url)}" target="_blank" rel="noopener noreferrer">{_h(title)}</a>'
-    return _h(title)
-
-
 def _session1(items):
     out = ""
     for i, p in enumerate(_list(items), 1):
@@ -59,69 +57,175 @@ def _session1(items):
     return out
 
 
-_TH = 'style="text-align:left;padding:5px 8px;background:#f1f5f9;border-bottom:1px solid #e5e7eb;"'
-_TD = 'style="padding:5px 8px;border-bottom:1px solid #f1f5f9;vertical-align:top;"'
-S2_HEADINGS = ("Problem Statement", "Executive Summary", "Decision Criteria Alignment", "Solution Architecture",
-               "Detailed Technical Approach", "CoCo Skills Acceleration", "Before vs After", "Decision Matrix",
-               "Recommended Next Steps", "Resources")
+
+_TEMPLATE = "pse-uc-implementation-plan/templates/report_template.html"
+SCOPE = ".sgx"
+# Host-page adjustments layered on the template: Snowflake-blue band, page-embedded spacing.
+_OVERRIDES = (".header{background:#29B5E8;margin:0 0 24px;padding:32px 28px;border-radius:8px}"
+              ".header .logo{color:#FFFFFF}.header h1{color:#FFFFFF;border:0;padding:0}"
+              ".header h2{color:#0B3D5C}.header .meta{opacity:.9;color:#FFFFFF}"
+              "body{max-width:none;padding:0}h1{font-size:1.45em}")
 
 
-def _h4(t):
-    return f'<h4 style="margin:16px 0 6px;color:#0f172a;">{_h(t)}</h4>'
+@functools.lru_cache(maxsize=None)
+def template_sections() -> tuple:
+    """(anchor, title) for each numbered h1 in the skill's report template, in order."""
+    t = assets.skill_text(_TEMPLATE)
+    return tuple((a, html.unescape(x)) for a, x in re.findall(r'<h1 id="([^"]+)">(.*?)</h1>', t))
 
 
-def _url_link(url, label=None):
+@functools.lru_cache(maxsize=None)
+def report_css() -> str:
+    """The template's stylesheet, scoped under SCOPE so it cannot leak into the host page."""
+    css = re.search(r"<style>(.*?)</style>", assets.skill_text(_TEMPLATE), re.S).group(1)
+    return prefix_css(css + _OVERRIDES, SCOPE)
+
+
+# Titles of the template's numbered sections (e.g. "1. Context & Background").
+S2_HEADINGS = tuple(t for _, t in template_sections())
+HANDS_ON = ("handson", "8. Hands-On Exercise")
+
+
+def badge_class(status) -> str:
+    s = str(status or "")
+    if re.search(r"roadmap|planned|future", s, re.I):
+        return "badge-blue"
+    if re.search(r"preview|\bprpr\b|in progress|beta|pilot", s, re.I):
+        return "badge-amber"
+    if re.search(r"\bGA\b|generally available|resolved|available|recommended|\byes\b|ready|adopt", s, re.I):
+        return "badge-green"
+    return "badge-gray"
+
+
+def _badge(status):
+    return f'<span class="badge {badge_class(status)}">{_h(status)}</span>' if str(status or "").strip() else ""
+
+
+def uc_slug(w, i) -> str:
+    return f"sgx{i}-" + (re.sub(r"[^A-Za-z0-9]+", "-", str(_dict(w).get("uc_id") or "")).strip("-").lower() or "uc")
+
+
+def _rtable(headers, rows):
+    """Template-styled table; rows are lists of pre-escaped cell HTML."""
+    if not rows:
+        return ""
+    head = "".join(f"<th>{_h(x)}</th>" for x in headers)
+    body = "".join("<tr>" + "".join(f"<td>{c}</td>" for c in r) + "</tr>" for r in rows)
+    return f'<div class="table-wrap"><table><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table></div>'
+
+
+def _a(url, label=None):
     url = str(url or "")
     if url.startswith("https://"):
-        return (f'<a href="{_h(url)}" target="_blank" rel="noopener noreferrer">'
-                f'{_h(label or url.replace("https://", ""))}</a>')
+        return f'<a href="{_h(url)}" target="_blank" rel="noopener noreferrer">{_h(label or url.replace("https://", ""))}</a>'
     return _h(label or "")
 
 
-def _table(headers, rows):
-    """rows: lists of pre-escaped cell HTML."""
-    if not rows:
-        return ""
-    head = "".join(f"<th {_TH}>{_h(x)}</th>" for x in headers)
-    body = "".join("<tr>" + "".join(f"<td {_TD}>{c}</td>" for c in r) + "</tr>" for r in rows)
-    return f'<table style="border-collapse:collapse;width:100%;font-size:12px;margin:4px 0 10px;">' \
-           f'<tr>{head}</tr>{body}</table>'
+def _source(url):
+    return f'<p class="source">Source: {_a(url)}</p>' if str(url or "").startswith("https://") else ""
 
 
-def _ul(items, tag="ul"):
+def _rul(items, tag="ul"):
     items = [x for x in _list(items) if str(x).strip()]
     return f"<{tag}>" + "".join(f"<li>{_h(x)}</li>" for x in items) + f"</{tag}>" if items else ""
 
 
-def _section(i, s):
+def _tech_section(n, s):
     s = _dict(s)
-    out = f'<div style="margin:10px 0 14px;"><b>{i}. {_h(s.get("title"))}</b>'
+    out = f"<h2>3.{n} {_h(s.get('title'))}</h2>"
     if s.get("challenge"):
-        out += f'<div style="font-size:12px;"><i>Challenge:</i> {_h(s["challenge"])}</div>'
+        out += f"<p><strong>Challenge:</strong> {_h(s['challenge'])}</p>"
     if s.get("explanation"):
-        out += f'<div style="font-size:12.5px;margin:4px 0;">{_h(s["explanation"])}</div>'
+        out += f"<p>{_h(s['explanation'])}</p>"
     if s.get("coco_prompt"):
-        out += (f'<div style="border-left:3px solid #29b5e8;background:#f0f9ff;padding:6px 10px;font-size:12px;'
-                f'margin:6px 0;"><b>CoCo Prompt:</b> {_h(s["coco_prompt"])}</div>')
+        out += f'<div class="coco-prompt"><strong>CoCo Prompt:</strong> {_h(s["coco_prompt"])}</div>'
     if s.get("sql"):
-        out += _md_block(s["sql"])
-        if s.get("source_url"):
-            out += f'<p style="font-size:11px;color:#706e6b;font-style:italic;margin:2px 0;">Source: {_url_link(s["source_url"])}</p>'
-    out += _ul(s.get("notes"))
-    return out + "</div>"
+        out += f"<pre>{_h(s['sql'])}</pre>" + _source(s.get("source_url"))
+    return out + _rul(s.get("notes"))
 
 
-def _resources(res):
-    res = _dict(res)
-    out = ""
-    for key, label in (("quickstarts", "Quickstarts"), ("docs", "Documentation"), ("github", "GitHub")):
-        links = [d for d in _list(res.get(key)) if str(_dict(d).get("url") or "").startswith("https://")]
-        if links:
-            out += f"<b>{label}</b><ul>" + "".join(f"<li>{_doc_link(d)}</li>" for d in links) + "</ul>"
-    return out
+def _diagram_text(plan):
+    arch = _dict(plan.get("architecture"))
+    return diagram.render(arch) if _list(arch.get("layers")) else str(plan.get("architecture_flow") or "")
 
 
-def _session2(s2):
+def report_html(w, slug, partner="", date=None) -> str:
+    """Session 2 plan rendered with the skill's report template structure (scoped under SCOPE)."""
+    w = _dict(w)
+    plan = _dict(_dict(w.get("session2")).get("plan"))
+    secs = dict(template_sections())
+    ho = _dict(plan.get("hands_on"))
+    order = [a for a, _ in template_sections()] + ([HANDS_ON[0]] if ho.get("intro") or ho.get("sql") else [])
+    title = dict(secs, **{HANDS_ON[0]: HANDS_ON[1]})
+    hid = lambda a: f"{slug}-{a}"
+    h1 = lambda a: f'<h1 id="{hid(a)}">{_h(title[a])}</h1>'
+    date = date or datetime.date.today().strftime("%B %Y")
+    meta = (f"Prepared with: {_h(partner)}<br />" if partner else "") + \
+        f"Prepared by: Snowflake Partner Solutions Engineering (PSE)<br />Date: {_h(date)}"
+    out = (f'<div class="header"><div class="logo">SNOWFLAKE</div><h1>{_h(w.get("account"))}</h1>'
+           f'<h2>{_h(w.get("name"))}</h2>'
+           f'<div style="margin:12px 0 8px;font-size:0.95em;letter-spacing:2px;text-transform:uppercase;'
+           f'color:#FFFFFF;font-weight:600;">Recommended Implementation Plan</div>'
+           f'<div class="meta">{meta}</div></div>')
+    out += ('<div class="toc"><h3>Table of Contents</h3><ol>' + "".join(
+        f'<li><a href="#{hid(a)}">{_h(re.sub(r"^\d+\.\s*", "", title[a]))}</a></li>' for a in order) + "</ol></div>")
+    # 1. Context & Background
+    out += h1("context") + "<h2>Customer Overview</h2>" + \
+        f"<p>{_h(w.get('account'))} is planning {_h(w.get('name'))} on Snowflake.</p>"
+    if plan.get("problem_statement"):
+        out += f"<h2>Problem Statement</h2><p>{_h(plan['problem_statement'])}</p>"
+    rows = [[_h(_dict(r).get("topic")), _h(_dict(r).get("previous_state")), _h(_dict(r).get("solution")),
+             _badge(_dict(r).get("status"))] for r in _list(plan.get("executive_summary"))]
+    if rows:
+        out += "<h2>Executive Summary</h2>" + _rtable(("Topic", "Previous State", "Snowflake Solution", "Status"), rows)
+    if _list(plan.get("decision_criteria_alignment")):
+        out += "<h2>Decision Criteria Alignment</h2>" + _rul(plan["decision_criteria_alignment"])
+    # 2. Solution Architecture
+    out += h1("architecture") + "<h2>Layered Architecture</h2>" + _rul(plan.get("architecture_layers"))
+    flow = _diagram_text(plan)
+    if flow:
+        out += f"<pre>{_h(flow)}</pre>"
+    rows = [[_h(_dict(r).get("component")), _badge(_dict(r).get("status")),
+             _h(_dict(r).get("details")) + (f" ({_a(_dict(r)['source_url'], 'docs')})"
+                                            if str(_dict(r).get("source_url") or "").startswith("https://") else "")]
+            for r in _list(plan.get("component_status"))]
+    if rows:
+        out += "<h2>Component Status</h2>" + _rtable(("Component", "Status", "Details"), rows)
+    # 3. Detailed Technical Approach
+    out += h1("technical") + "".join(_tech_section(n, s) for n, s in enumerate(_list(plan.get("sections")), 1))
+    # 4. CoCo Skills Acceleration
+    out += h1("coco") + _rtable(("CoCo Skill", "What It Does for This Use Case", "Steps"), [
+        [_h(_dict(r).get(k)) for k in ("skill", "what_it_does", "steps")] for r in _list(plan.get("coco_skills"))])
+    if _list(plan.get("before_after")):
+        out += "<h2>Before vs After</h2>" + _rtable(("Task", "Without CoCo", "With CoCo"), [
+            [_h(_dict(r).get(k)) for k in ("task", "without", "with")] for r in plan["before_after"]])
+    # 5. Summary & Decision Matrix
+    out += h1("decision") + _rtable(("Topic", "Verdict", "Production Ready?", "Action Required"), [
+        [_h(_dict(r).get("topic")), _h(_dict(r).get("verdict")), _badge(_dict(r).get("production_ready")),
+         _h(_dict(r).get("action"))] for r in _list(plan.get("decision_matrix"))])
+    # 6. Recommended Next Steps
+    out += h1("nextsteps") + _rul(plan.get("next_steps"), "ol")
+    # 7. Quickstart Resources & Documentation (three tables)
+    res = _dict(plan.get("resources"))
+    ok = lambda k: [_dict(d) for d in _list(res.get(k)) if str(_dict(d).get("url") or "").startswith("https://")]
+    out += h1("resources")
+    if ok("quickstarts"):
+        out += "<h2>Quickstarts</h2>" + _rtable(("Name", "Link"), [[_h(d.get("title")), _a(d["url"], d.get("title"))]
+                                                                  for d in ok("quickstarts")])
+    if ok("docs"):
+        out += "<h2>Documentation</h2>" + _rtable(("Feature", "Status", "URL"), [
+            [_h(d.get("title")), _badge(d.get("status") or "See page"), _a(d["url"], d.get("title"))] for d in ok("docs")])
+    if ok("github"):
+        out += "<h2>GitHub Repositories</h2>" + _rtable(("Repo", "Description", "URL"), [
+            [_h(d.get("title")), _h(d.get("description")), _a(d["url"])] for d in ok("github")])
+    if HANDS_ON[0] in order:
+        out += h1(HANDS_ON[0]) + (f"<p>{_h(ho['intro'])}</p>" if ho.get("intro") else "")
+        if ho.get("sql"):
+            out += f"<pre>{_h(ho['sql'])}</pre>" + _source(ho.get("source_url"))
+    return f'<div class="{SCOPE[1:]}">{out}</div>'
+
+
+def _session2(s2, w=None, slug="sgx", partner=""):
     s2 = _dict(s2)
     rec, plan = _dict(s2.get("recipe")), _dict(s2.get("plan"))
     out = ""
@@ -135,48 +239,16 @@ def _session2(s2):
         out += (f'<p style="font-size:12px;color:#6b7280;">Closest recipe: {_h(rec.get("title"))} · '
                 f'{_conf(rec.get("confidence"))}% — reference</p>')
     if not _list(plan.get("sections")):
-        out += ('<p style="font-size:12.5px;color:#92400e;">The implementation plan for this use case is not '
-                'available in this report. Regenerate the report to retry.</p>')
-    if plan.get("problem_statement"):
-        out += _h4("Problem Statement") + f'<p style="font-size:12.5px;">{_h(plan["problem_statement"])}</p>'
-    out += (_h4("Executive Summary") + _table(("Topic", "Previous State", "Snowflake Solution", "Status"), [
-        [_h(_dict(r).get(k)) for k in ("topic", "previous_state", "solution", "status")]
-        for r in _list(plan.get("executive_summary"))])) if _list(plan.get("executive_summary")) else ""
-    if _list(plan.get("decision_criteria_alignment")):
-        out += _h4("Decision Criteria Alignment") + _ul(plan["decision_criteria_alignment"])
-    if _list(plan.get("architecture_layers")) or plan.get("architecture_flow") or _list(plan.get("component_status")):
-        out += _h4("Solution Architecture") + _ul(plan.get("architecture_layers"))
-        if plan.get("architecture_flow"):
-            out += _md_block(plan["architecture_flow"])
-        out += _table(("Component", "Status", "Details", "Source"), [
-            [_h(_dict(r).get("component")), _h(_dict(r).get("status")), _h(_dict(r).get("details")),
-             _url_link(_dict(r).get("source_url"), "docs") if _dict(r).get("source_url") else ""]
-            for r in _list(plan.get("component_status"))])
-    if _list(plan.get("sections")):
-        out += _h4("Detailed Technical Approach") + "".join(
-            _section(i, s) for i, s in enumerate(plan["sections"], 1))
-    if _list(plan.get("coco_skills")):
-        out += _h4("CoCo Skills Acceleration") + _table(("CoCo Skill", "What It Does for This Use Case", "Steps"), [
-            [_h(_dict(r).get(k)) for k in ("skill", "what_it_does", "steps")] for r in plan["coco_skills"]])
-    if _list(plan.get("before_after")):
-        out += _h4("Before vs After") + _table(("Task", "Without CoCo", "With CoCo"), [
-            [_h(_dict(r).get(k)) for k in ("task", "without", "with")] for r in plan["before_after"]])
-    if _list(plan.get("decision_matrix")):
-        out += _h4("Decision Matrix") + _table(("Topic", "Verdict", "Production Ready?", "Action Required"), [
-            [_h(_dict(r).get(k)) for k in ("topic", "verdict", "production_ready", "action")]
-            for r in plan["decision_matrix"]])
-    if _list(plan.get("next_steps")):
-        out += _h4("Recommended Next Steps") + _ul(plan["next_steps"], "ol")
-    res = _resources(plan.get("resources"))
-    if res:
-        out += _h4("Resources") + res
-    return out
+        return out + ('<p style="font-size:12.5px;color:#92400e;">The implementation plan for this use case is not '
+                      'available in this report. Regenerate the report to retry.</p>')
+    return out + report_html(dict(_dict(w), session2=s2), slug, partner)
 
 
-def render_workshop_html(workshops: list) -> str:
+
+def render_workshop_html(workshops: list, partner: str = "") -> str:
     if not workshops:
         return ""
-    css = [".ws-pane,.ws-sec{display:none}",
+    css = [report_css(), ".ws-pane,.ws-sec{display:none}",
            ".ws-side label{display:block;padding:8px 10px;border-radius:4px;cursor:pointer;font-size:12px;color:#374151}",
            ".ws-tabs label{display:inline-block;padding:6px 12px;margin-right:4px;border-bottom:2px solid transparent;cursor:pointer;font-size:12.5px}",
            ".ws input{display:none}"]
@@ -199,7 +271,7 @@ def render_workshop_html(workshops: list) -> str:
                   f'<div class="ws-sec ws-sa"><h3 style="margin:0 0 6px;">{_h(w.get("name"))}</h3>'
                   f'<p style="font-size:12.5px;">{_h(w.get("brief"))}</p><p style="font-size:12px;"><b>Proposed CoCo skills:</b> {skills}</p></div>'
                   f'<div class="ws-sec ws-sb"><h3 style="margin:0 0 6px;">Session 1 — Get started with CoCo</h3>{_session1(w.get("session1"))}</div>'
-                  f'<div class="ws-sec ws-sc"><h3 style="margin:0 0 6px;">Session 2 — Co-build</h3>{_session2(w.get("session2"))}</div></div>')
+                  f'<div class="ws-sec ws-sc"><h3 style="margin:0 0 6px;">Session 2 — Co-build</h3>{_session2(w.get("session2"), w, uc_slug(w, i), partner)}</div></div>')
     return (f'<style>{"".join(css)}</style>'
             f'<div style="font-size:14px;font-weight:800;color:#0f172a;margin:26px 0 8px;">Workshop Plans</div>'
             f'<div class="ws">{radios}<div class="ws-body" style="display:flex;gap:14px;border:1px solid #e5e7eb;border-radius:6px;padding:10px;">'
