@@ -16,9 +16,8 @@ def test_session1_prompt_unlisted_has_no_account_signals():
     assert "usage_tier" not in p and "ACCOUNT_SIGNALS" not in p
 
 
-def test_recipe_match_prompt_lists_all_recipes():
-    p = prompts.recipe_match_prompt(UC)
-    assert p.count('"id"') == 23
+def test_recipe_match_prompt_removed():
+    assert not hasattr(prompts, "recipe_match_prompt") and not hasattr(prompts, "RECIPE_SCHEMA")
 
 
 def test_session2_prompt_carries_private_context_and_allowlist():

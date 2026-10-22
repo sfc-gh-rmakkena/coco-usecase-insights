@@ -44,8 +44,8 @@ def link_allowlist() -> frozenset:
 def grounding_links(grounding: dict) -> set:
     out = set()
     for v in grounding.values():
-        for kind in ("docs", "quickstarts", "github"):
-            out.update(d["url"] for d in v.get(kind, []))
+        for kind in ("docs", "quickstarts"):
+            out.update(d["url"] for d in v.get(kind, []) if "github.com" not in d["url"])
         out.update(s["source_url"] for s in v.get("sql_snippets", []))
     return out
 
@@ -54,8 +54,10 @@ def grounding_links(grounding: dict) -> set:
 def asset_version() -> str:
     h = hashlib.sha256((_ASSETS / "skills" / "VERSIONS.json").read_bytes())
     h.update(override_text().encode())
-    h.update(b"s2-schema:structured-architecture-v3")  # bump when the Session 2 JSON schema changes
-    for name in ("grounding.json", "vendor_terms.json", "locations.json", "first_names.json"):
+    h.update(b"s2-schema:no-status-no-github-no-recipe-v5-ctx-pack")  # bump when the Session 2 JSON schema changes
+    # recipe_units.json carries the per-guide content digests, so any guide change re-keys the cache.
+    for name in ("grounding.json", "vendor_terms.json", "locations.json", "first_names.json",
+                 "recipe_units.json"):
         if (_ASSETS / name).exists():
             h.update((_ASSETS / name).read_bytes())
     return h.hexdigest()[:16]

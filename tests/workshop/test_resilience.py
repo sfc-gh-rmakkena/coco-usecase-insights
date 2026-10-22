@@ -74,11 +74,11 @@ def test_reason_codes_parse_truncated_violation():
     def llm(p):
         if "starter-prompts" in p:
             return "no json here}"
-        if "Pick the single cookbook recipe" in p:
+        if "candidate build guide" in p:
             return json.dumps({"recipe_id": "nope"})
         return '{"steps": [{"title": "Spend is $2M."'
     r = generator.build_one(UC, "D", None, {}, llm)["_degraded_reasons"]
-    assert "s1:parse_empty" in r and "recipe:invalid_shape" in r and "s2:truncated" in r
+    assert "s1:parse_empty" in r and "ctx:invalid_shape" in r and not any(x.startswith("recipe:") for x in r) and "s2:truncated" in r
 
     def llm2(p):
         if "starter-prompts" in p:

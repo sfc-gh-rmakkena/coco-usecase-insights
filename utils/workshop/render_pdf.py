@@ -5,7 +5,7 @@ from reportlab.lib.styles import ParagraphStyle
 from reportlab.platypus import PageBreak, Paragraph, Preformatted, Spacer, Table, TableStyle
 
 from . import diagram
-from .render_html import HANDS_ON, SCOPE_NOTE, _conf, _dict, _list, template_sections
+from .render_html import HANDS_ON, SCOPE_NOTE, _dict, _list, template_sections
 
 
 def _e(s) -> str:
@@ -81,8 +81,8 @@ def _plan_flowables(plan, styles, w=None) -> list:
     out += [sub("Customer Overview"), Paragraph(f"{_e(w.get('account'))} is planning {_e(w.get('name'))} on Snowflake.", body)]
     if plan.get("problem_statement"):
         out += [sub("Problem Statement"), Paragraph(_e(plan["problem_statement"]), body)]
-    t = _table(("Topic", "Previous State", "Snowflake Solution", "Status"),
-               rows("executive_summary", ("topic", "previous_state", "solution", "status")), styles, (1.5, 2.0, 2.6, 1.2))
+    t = _table(("Topic", "Previous State", "Snowflake Solution"),
+               rows("executive_summary", ("topic", "previous_state", "solution")), styles, (1.7, 2.5, 3.1))
     out += ([sub("Executive Summary")] + t) if t else []
     if _list(plan.get("decision_criteria_alignment")):
         out.append(sub("Decision Criteria Alignment"))
@@ -94,11 +94,11 @@ def _plan_flowables(plan, styles, w=None) -> list:
     flow = diagram.render(arch) if _list(arch.get("layers")) else str(plan.get("architecture_flow") or "")
     if flow:
         out.append(_code(diagram.to_ascii(flow), styles))
-    t = _table(("Component", "Status", "Details"),
-               [[_e(_dict(r).get("component")), _e(_dict(r).get("status")),
+    t = _table(("Component", "Details"),
+               [[_e(_dict(r).get("component")),
                  _e(_dict(r).get("details")) + (f" ({_link(_dict(r)['source_url'], 'docs')})"
                                                 if str(_dict(r).get("source_url") or "").startswith("https://") else "")]
-                for r in _list(plan.get("component_status"))], styles, (2.0, 1.4, 3.9))
+                for r in _list(plan.get("component_status"))], styles, (2.0, 5.3))
     out += ([sub("Component Status")] + t) if t else []
     # 3. Detailed Technical Approach
     out.append(_h1(title["technical"], styles))
@@ -124,23 +124,20 @@ def _plan_flowables(plan, styles, w=None) -> list:
     out += ([sub("Before vs After")] + t) if t else []
     # 5. Summary & Decision Matrix
     out.append(_h1(title["decision"], styles))
-    out += _table(("Topic", "Verdict", "Production Ready?", "Action Required"),
-                  rows("decision_matrix", ("topic", "verdict", "production_ready", "action")), styles, (1.8, 1.2, 1.6, 2.7))
+    out += _table(("Topic", "Verdict", "Action Required"),
+                  rows("decision_matrix", ("topic", "verdict", "action")), styles, (2.0, 1.8, 3.5))
     # 6. Recommended Next Steps
     out.append(_h1(title["nextsteps"], styles))
     out += [Paragraph(f"{i}. {_e(x)}", body) for i, x in enumerate(_list(plan.get("next_steps")), 1)]
-    # 7. Quickstart Resources & Documentation (three tables)
+    # 7. Quickstart Resources & Documentation (two tables; legacy resources.github is ignored)
     out.append(_h1(title["resources"], styles))
     res = _dict(plan.get("resources"))
-    ok = lambda k: [_dict(d) for d in _list(res.get(k)) if str(_dict(d).get("url") or "").startswith("https://")]
+    ok = lambda k: [_dict(d) for d in _list(res.get(k)) if str(_dict(d).get("url") or "").startswith("https://")
+                    and "github.com" not in str(_dict(d).get("url"))]
     t = _table(("Name", "Link"), [[_e(d.get("title")), _doc(d)] for d in ok("quickstarts")], styles, (2.8, 4.5))
     out += ([sub("Quickstarts")] + t) if t else []
-    t = _table(("Feature", "Status", "URL"), [[_e(d.get("title")), _e(d.get("status") or "See page"), _doc(d)]
-                                            for d in ok("docs")], styles, (2.2, 1.3, 3.8))
+    t = _table(("Feature", "URL"), [[_e(d.get("title")), _doc(d)] for d in ok("docs")], styles, (2.8, 4.5))
     out += ([sub("Documentation")] + t) if t else []
-    t = _table(("Repo", "Description", "URL"), [[_e(d.get("title")), _e(d.get("description")), _link(d["url"])]
-                                              for d in ok("github")], styles, (2.2, 2.3, 2.8))
-    out += ([sub("GitHub Repositories")] + t) if t else []
     ho = _dict(plan.get("hands_on"))
     if ho.get("intro") or ho.get("sql"):
         out.append(_h1(HANDS_ON[1], styles))
@@ -177,15 +174,8 @@ def workshop_pdf_flowables(workshops, styles, partner: str = "") -> list:
             out.append(Paragraph(f"<b>{i}. {_e(p.get('title'))}</b> &mdash; {_e(p.get('purpose'))}", body))
             out.append(_code(p.get("prompt"), styles))
         out.append(Paragraph("Session 2 &mdash; Co-build", h2))
-        s2 = _dict(w.get("session2"))
-        rec, plan = _dict(s2.get("recipe")), _dict(s2.get("plan"))
-        if rec.get("band") == "full":
-            out.append(Paragraph(f"<b>Recommended recipe:</b> {_e(rec.get('title'))} "
-                                 f"({_conf(rec.get('confidence'))}% match). {_e(rec.get('rationale'))}", body))
-            out.append(_code(rec.get("body"), styles))
-        elif rec.get("band") == "reference":
-            out.append(Paragraph(f"Closest recipe: {_e(rec.get('title'))} &middot; "
-                                 f"{_conf(rec.get('confidence'))}% &mdash; reference", body))
+        # Only the plan is rendered; any legacy session2.recipe in cached payloads is ignored.
+        plan = _dict(_dict(w.get("session2")).get("plan"))
         if not _list(plan.get("sections")):
             out.append(Paragraph("The implementation plan for this use case is not available in this "
                                  "report. Regenerate the report to retry.", body))

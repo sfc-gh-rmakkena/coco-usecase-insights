@@ -11,23 +11,8 @@ SCOPE_NOTE = ("The summary above reflects all use cases in the selected period. 
               "focus only on use cases not yet in production — each with a ready-to-run workshop plan for "
               "the partner and Snowflake to co-build with the customer.")
 
-_HTML_BODY_CAP = 20000
-
-
 def _h(s) -> str:
     return html.escape(str(s if s is not None else ""))
-
-
-def _conf(v) -> int:
-    try:
-        return int(float(v))
-    except (TypeError, ValueError):
-        return 0
-
-
-def _cap(text, n):
-    text = str(text or "")
-    return text[:n] + "…" if len(text) > n else text
 
 
 def _list(v) -> list:
@@ -85,21 +70,6 @@ def report_css() -> str:
 # Titles of the template's numbered sections (e.g. "1. Context & Background").
 S2_HEADINGS = tuple(t for _, t in template_sections())
 HANDS_ON = ("handson", "8. Hands-On Exercise")
-
-
-def badge_class(status) -> str:
-    s = str(status or "")
-    if re.search(r"roadmap|planned|future", s, re.I):
-        return "badge-blue"
-    if re.search(r"preview|\bprpr\b|in progress|beta|pilot", s, re.I):
-        return "badge-amber"
-    if re.search(r"\bGA\b|generally available|resolved|available|recommended|\byes\b|ready|adopt", s, re.I):
-        return "badge-green"
-    return "badge-gray"
-
-
-def _badge(status):
-    return f'<span class="badge {badge_class(status)}">{_h(status)}</span>' if str(status or "").strip() else ""
 
 
 def uc_slug(w, i) -> str:
@@ -176,10 +146,10 @@ def report_html(w, slug, partner="", date=None) -> str:
         f"<p>{_h(w.get('account'))} is planning {_h(w.get('name'))} on Snowflake.</p>"
     if plan.get("problem_statement"):
         out += f"<h2>Problem Statement</h2><p>{_h(plan['problem_statement'])}</p>"
-    rows = [[_h(_dict(r).get("topic")), _h(_dict(r).get("previous_state")), _h(_dict(r).get("solution")),
-             _badge(_dict(r).get("status"))] for r in _list(plan.get("executive_summary"))]
+    rows = [[_h(_dict(r).get("topic")), _h(_dict(r).get("previous_state")), _h(_dict(r).get("solution"))]
+            for r in _list(plan.get("executive_summary"))]
     if rows:
-        out += "<h2>Executive Summary</h2>" + _rtable(("Topic", "Previous State", "Snowflake Solution", "Status"), rows)
+        out += "<h2>Executive Summary</h2>" + _rtable(("Topic", "Previous State", "Snowflake Solution"), rows)
     if _list(plan.get("decision_criteria_alignment")):
         out += "<h2>Decision Criteria Alignment</h2>" + _rul(plan["decision_criteria_alignment"])
     # 2. Solution Architecture
@@ -187,12 +157,12 @@ def report_html(w, slug, partner="", date=None) -> str:
     flow = _diagram_text(plan)
     if flow:
         out += f"<pre>{_h(flow)}</pre>"
-    rows = [[_h(_dict(r).get("component")), _badge(_dict(r).get("status")),
+    rows = [[_h(_dict(r).get("component")),
              _h(_dict(r).get("details")) + (f" ({_a(_dict(r)['source_url'], 'docs')})"
                                             if str(_dict(r).get("source_url") or "").startswith("https://") else "")]
             for r in _list(plan.get("component_status"))]
     if rows:
-        out += "<h2>Component Status</h2>" + _rtable(("Component", "Status", "Details"), rows)
+        out += "<h2>Component Status</h2>" + _rtable(("Component", "Details"), rows)
     # 3. Detailed Technical Approach
     out += h1("technical") + "".join(_tech_section(n, s) for n, s in enumerate(_list(plan.get("sections")), 1))
     # 4. CoCo Skills Acceleration
@@ -202,24 +172,21 @@ def report_html(w, slug, partner="", date=None) -> str:
         out += "<h2>Before vs After</h2>" + _rtable(("Task", "Without CoCo", "With CoCo"), [
             [_h(_dict(r).get(k)) for k in ("task", "without", "with")] for r in plan["before_after"]])
     # 5. Summary & Decision Matrix
-    out += h1("decision") + _rtable(("Topic", "Verdict", "Production Ready?", "Action Required"), [
-        [_h(_dict(r).get("topic")), _h(_dict(r).get("verdict")), _badge(_dict(r).get("production_ready")),
-         _h(_dict(r).get("action"))] for r in _list(plan.get("decision_matrix"))])
+    out += h1("decision") + _rtable(("Topic", "Verdict", "Action Required"), [
+        [_h(_dict(r).get("topic")), _h(_dict(r).get("verdict")), _h(_dict(r).get("action"))] for r in _list(plan.get("decision_matrix"))])
     # 6. Recommended Next Steps
     out += h1("nextsteps") + _rul(plan.get("next_steps"), "ol")
-    # 7. Quickstart Resources & Documentation (three tables)
+    # 7. Quickstart Resources & Documentation (two tables; legacy resources.github is ignored)
     res = _dict(plan.get("resources"))
-    ok = lambda k: [_dict(d) for d in _list(res.get(k)) if str(_dict(d).get("url") or "").startswith("https://")]
+    ok = lambda k: [_dict(d) for d in _list(res.get(k)) if str(_dict(d).get("url") or "").startswith("https://")
+                    and "github.com" not in str(_dict(d).get("url"))]
     out += h1("resources")
     if ok("quickstarts"):
         out += "<h2>Quickstarts</h2>" + _rtable(("Name", "Link"), [[_h(d.get("title")), _a(d["url"], d.get("title"))]
                                                                   for d in ok("quickstarts")])
     if ok("docs"):
-        out += "<h2>Documentation</h2>" + _rtable(("Feature", "Status", "URL"), [
-            [_h(d.get("title")), _badge(d.get("status") or "See page"), _a(d["url"], d.get("title"))] for d in ok("docs")])
-    if ok("github"):
-        out += "<h2>GitHub Repositories</h2>" + _rtable(("Repo", "Description", "URL"), [
-            [_h(d.get("title")), _h(d.get("description")), _a(d["url"])] for d in ok("github")])
+        out += "<h2>Documentation</h2>" + _rtable(("Feature", "URL"), [
+            [_h(d.get("title")), _a(d["url"], d.get("title"))] for d in ok("docs")])
     if HANDS_ON[0] in order:
         out += h1(HANDS_ON[0]) + (f"<p>{_h(ho['intro'])}</p>" if ho.get("intro") else "")
         if ho.get("sql"):
@@ -228,22 +195,12 @@ def report_html(w, slug, partner="", date=None) -> str:
 
 
 def _session2(s2, w=None, slug="sgx", partner=""):
-    s2 = _dict(s2)
-    rec, plan = _dict(s2.get("recipe")), _dict(s2.get("plan"))
-    out = ""
-    if rec.get("band") == "full":
-        out += (f'<h4 style="margin:0 0 6px;">Recommended recipe: {_h(rec.get("title"))} '
-                f'<span style="background:#dcfce7;color:#166534;border-radius:10px;padding:1px 8px;font-size:11px;">'
-                f'{_conf(rec.get("confidence"))}% match</span></h4>'
-                f'<p style="font-size:12px;">{_h(rec.get("rationale"))}</p>'
-                f'{_md_block(_cap(rec.get("body"), _HTML_BODY_CAP))}')
-    elif rec.get("band") == "reference":
-        out += (f'<p style="font-size:12px;color:#6b7280;">Closest recipe: {_h(rec.get("title"))} · '
-                f'{_conf(rec.get("confidence"))}% — reference</p>')
+    # Only the plan is rendered; any legacy session2.recipe in cached payloads is ignored.
+    plan = _dict(_dict(s2).get("plan"))
     if not _list(plan.get("sections")):
-        return out + ('<p style="font-size:12.5px;color:#92400e;">The implementation plan for this use case is not '
+        return ('<p style="font-size:12.5px;color:#92400e;">The implementation plan for this use case is not '
                       'available in this report. Regenerate the report to retry.</p>')
-    return out + report_html(dict(_dict(w), session2=s2), slug, partner)
+    return report_html(dict(_dict(w), session2={"plan": plan}), slug, partner)
 
 
 

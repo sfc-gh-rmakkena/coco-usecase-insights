@@ -109,10 +109,9 @@ def test_stable_shapes():
     a = generator.build_one(UC, "D", None, {}, fake_llm_factory())
     b = generator.build_one(UC, "D", None, {}, _boom)
     assert set(a["session2"]["plan"]) == set(b["session2"]["plan"]) == set(generator.PLAN_DEFAULT)
-    assert set(a["session2"]["plan"]["resources"]) == {"quickstarts", "docs", "github"}
+    assert set(a["session2"]["plan"]["resources"]) == {"quickstarts", "docs"}
     assert set(a["session2"]["plan"]["sections"][0]) == set(generator._ROWS["sections"])
-    keys = {"band", "id", "title", "confidence", "rationale", "body"}
-    assert set(a["session2"]["recipe"]) == set(b["session2"]["recipe"]) == keys
+    assert set(a["session2"]) == set(b["session2"]) == {"plan"}
     assert a["_degraded"] is False and b["_degraded"] is True
 
 

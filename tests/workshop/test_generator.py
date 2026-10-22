@@ -18,9 +18,8 @@ def s2_payload(stmt="Weekly demand forecasting.", sql="SELECT 1", n=3, url=SRC, 
 
 def fake_llm_factory(recipe_conf=90, leak=False):
     def llm(prompt):
-        if "Pick the single cookbook recipe" in prompt:
-            from utils.workshop import assets
-            return json.dumps({"recipe_id": assets.recipes_index()[0]["id"], "confidence": recipe_conf, "rationale": "fits"})
+        if "candidate build guide" in prompt:
+            return json.dumps({"recipes": []})
         if "starter-prompts" in prompt:
             return json.dumps({"prompts": [{"title": f"T{i}", "purpose": "p", "prompt": "do x"} for i in range(3)]})
         stmt = "Spend is $2M." if leak else "Weekly demand forecasting."
@@ -28,19 +27,12 @@ def fake_llm_factory(recipe_conf=90, leak=False):
     return llm
 
 
-def test_recipe_band_full_reference_none():
-    assert generator.recipe_band(81) == "full"
-    assert generator.recipe_band(80) == "reference"
-    assert generator.recipe_band(50) == "reference"
-    assert generator.recipe_band(49) == "none"
-
-
 def test_build_one_shape_identical_for_both_paths():
     a = generator.build_one(UC, "Deloitte", {"usage_tier": "Low"}, {}, fake_llm_factory())
     b = generator.build_one(UC, "Deloitte", None, {}, fake_llm_factory())
-    assert set(a) == set(b) == {"_degraded", "_degraded_reasons", "uc_id", "account", "name", "skills", "brief", "session1", "session2"}
+    assert set(a) == set(b) == {"_degraded", "_degraded_reasons", "_context_sources", "uc_id", "account", "name", "skills", "brief", "session1", "session2"}
     assert len(a["session1"]) == 3
-    assert a["session2"]["recipe"]["band"] == "full"
+    assert set(a["session2"]) == {"plan"}
 
 
 def test_build_one_scrubs_and_falls_back():
@@ -53,7 +45,7 @@ def test_build_one_survives_llm_failure():
         raise RuntimeError("down")
     out = generator.build_one(UC, "Deloitte", None, {}, boom)
     assert len(out["session1"]) == 3
-    assert out["session2"]["recipe"]["band"] == "none"
+    assert set(out["session2"]) == {"plan"}
 
 
 def test_generate_workshops_cache_and_audit():

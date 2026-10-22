@@ -34,21 +34,21 @@ def test_scope_note_wording():
     assert "not yet in production" in SCOPE_NOTE
 
 
-def test_html_doc_links_https_only_and_conf_int():
+def test_html_doc_links_https_only_and_no_recipe():
     ws = [dict(WS[0], session2={"recipe": dict(WS[0]["session2"]["recipe"], confidence=87.0),
                                 "plan": {"sections": [{"title": "s", "sql": "SELECT 1"}], "resources": {"docs": [{"title": "Good", "url": "https://docs.snowflake.com/x"},
                                                                 {"title": "Bad", "url": "javascript:alert(1)"}]}}})]
     h = render_workshop_html(ws)
     assert 'href="https://docs.snowflake.com/x"' in h
     assert "javascript:" not in h
-    assert "87% match" in h
+    assert "% match" not in h and "Rec" + "ommended recipe" not in h
 
 
-def test_html_empty_values_and_body_cap():
+def test_html_empty_values_and_legacy_recipe_body_ignored():
     assert render_workshop_html(EMPTY)
     ws = [dict(WS[0], session2={"recipe": dict(WS[0]["session2"]["recipe"], body="z" * 30000), "plan": {}})]
     h = render_workshop_html(ws)
-    assert "z" * 20000 + "…" in h and "z" * 20001 not in h
+    assert "zzzz" not in h
 
 
 import io

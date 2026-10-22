@@ -14,7 +14,14 @@ from utils.workshop.render_html import SCOPE, render_workshop_html, report_css
 FIXTURE = json.loads((Path(__file__).parent / "fixtures" / "disney_plan.json").read_text())
 TEMPLATE = assets.skill_text("pse-uc-implementation-plan/templates/report_template.html")
 REFERENCE = Path.home() / "Downloads" / "Disney_Experiences_Financial_Transformation_Phase3_Solution_Guide.html"
-RESOURCE_HEADERS = [["Name", "Link"], ["Feature", "Status", "URL"], ["Repo", "Description", "URL"]]
+# Deliberate exclusions vs the skill reference HTML: the reference also has a "Status" column in
+# Executive Summary, Component Status and Documentation, a "Production Ready?" column in the
+# Decision Matrix, and a third "GitHub Repositories" resource table. These are dropped on purpose
+# (generic status filler, unverifiable repo links) and are not compared.
+RESOURCE_HEADERS = [["Name", "Link"], ["Feature", "URL"]]
+TABLE_HEADERS = {"Executive Summary": ["Topic", "Previous State", "Snowflake Solution"],
+                 "Component Status": ["Component", "Details"]}
+DECISION_HEADERS = ["Topic", "Verdict", "Action Required"]
 REQUIRED = prompts.primary_capabilities(DISNEY_UC, DISNEY_CTX)
 
 
@@ -69,12 +76,67 @@ def test_coco_prompts_and_sources(report):
         assert tech[m.end():].startswith('<p class="source">Source: <a href="https://')
 
 
-def test_status_badges(report):
-    assert 'class="badge badge-green"' in report
+def _headers_after(text, marker):
+    part = text[text.find(marker):]
+    return re.findall(r"<th>(.*?)</th>", re.search(r"<thead>(.*?)</thead>", part, re.S).group(1))
 
 
-def test_three_resource_tables(report):
+def test_table_headers_have_no_status_columns(report):
+    for h2, cols in TABLE_HEADERS.items():
+        assert _headers_after(report, f"<h2>{h2}</h2>") == cols, h2
+    assert _headers_after(report, "5. Summary") == DECISION_HEADERS
+
+
+def test_two_resource_tables(report):
     assert _resource_headers(report) == RESOURCE_HEADERS
+    assert "GitHub Repositories" not in report and "github.com" not in report
+
+
+LEGACY = json.loads(json.dumps(FIXTURE))
+LEGACY["session2"]["recipe"] = {"band": "full", "id": "r/1", "title": "Cookbook recipe X", "confidence": 91,
+                               "rationale": "cookbook fit", "body": "# Recipe steps"}
+_lp = LEGACY["session2"]["plan"]
+for _k, _f in (("executive_summary", "status"), ("component_status", "status"),
+               ("decision_matrix", "production_ready")):
+    for _r in _lp[_k]:
+        _r[_f] = "Production Ready"
+for _d in _lp["resources"]["docs"]:
+    _d["status"] = "GA"
+_lp["resources"]["github"] = [{"title": "Repo", "url": "https://github.com/Snowflake-Labs/x",
+                               "description": "repo"}]
+FORBIDDEN = ("recipe", "Recipe", "cookbook", "% match", "Closest", "github.com", "GitHub Repositories",
+             "Production Ready")
+
+
+def test_legacy_payload_renders_without_dropped_content():
+    import io
+    from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.platypus import Paragraph, Preformatted, Table
+    from utils.workshop.render_pdf import workshop_pdf_flowables
+
+    page = re.sub(r"<style>.*?</style>", "", render_workshop_html([LEGACY], "P"), flags=re.S)
+    text = html.unescape(re.sub(r"<[^>]+>", " ", page))
+    for t in FORBIDDEN:
+        assert t not in page and t not in text, t
+    assert "<th>Status</th>" not in page
+
+    ss = getSampleStyleSheet()
+    flow = workshop_pdf_flowables([LEGACY], {"heading2": ss["Heading2"], "body": ss["BodyText"],
+                                             "cell": ss["BodyText"]})
+
+    def texts(f):
+        if isinstance(f, Paragraph):
+            yield f.text
+        elif isinstance(f, Preformatted):
+            yield "\n".join(f.lines)
+        elif isinstance(f, Table):
+            for row in f._cellvalues:
+                for c in row:
+                    yield from texts(c)
+    pdf_text = "\n".join(t for f in flow for t in texts(f))
+    for t in FORBIDDEN:
+        assert t not in pdf_text, t
+    assert "<b>Status</b>" not in pdf_text
 
 
 def test_diagram_contains_medallion_and_required_caps(report):
@@ -100,4 +162,7 @@ def test_css_selectors_all_prefixed():
 def test_parity_with_reference_skill_html(report):
     ref = REFERENCE.read_text(encoding="utf-8")
     assert _h1s(report) == _h1s(ref)
-    assert _resource_headers(report) == _resource_headers(ref)
+    # Resource tables: ours must be the reference's minus the deliberate exclusions above.
+    drop = {"Status", "Repo", "Description"}
+    expected = [[c for c in t if c not in drop] for t in _resource_headers(ref) if "Repo" not in t]
+    assert _resource_headers(report) == expected

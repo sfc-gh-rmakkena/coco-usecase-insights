@@ -169,3 +169,31 @@ def private_deny_terms(private_context, account="") -> list:
             seen.add(t.lower())
             uniq.append(t)
     return uniq
+
+
+_BACKSTOP_WORDS = ("recipe", "recipes", "cookbook", "cookbooks", "% match")
+_RECIPE_URL = re.compile(r"https?://\S*(?:cookbook|recipe)\S*|\.\./\.\./[\w./-]+", re.I)
+_OBJ_NAME = re.compile(r"\bCOOKBOOK_[A-Z0-9_]+\b", re.I)
+
+
+@functools.lru_cache(maxsize=None)
+def recipe_backstop_terms() -> tuple:
+    """Terms that would attribute plan content to the bundled build guides: the words, every
+    guide title, distinctive (4+ word) sub-headings, guide/cookbook URLs and object names."""
+    from .assets import recipes_index
+    from .recipes import load_units
+    out = list(_BACKSTOP_WORDS)
+    out += [r["title"] for r in recipes_index() if r.get("title")]
+    for u in load_units():
+        h = re.sub(r"[`*?:()]", "", u["heading"]).strip()
+        if len(h.split()) >= 4:
+            out.append(h)
+        blob = u["text"] + "\n" + u["sql"]
+        out += [m.rstrip(".,;:)") for m in _RECIPE_URL.findall(blob)]
+        out += [m.upper() for m in _OBJ_NAME.findall(blob)]
+    seen, uniq = set(), []
+    for t in out:
+        if t and t.lower() not in seen:
+            seen.add(t.lower())
+            uniq.append(t)
+    return tuple(uniq)

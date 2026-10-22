@@ -208,11 +208,15 @@ def _stream_once(conn, payload) -> str:
         return "".join(parts).strip()
 
 
-def cortex_complete_rest_stream(conn, model: str, prompt: str, max_tokens: int = 16384) -> str:
+def cortex_complete_rest_stream(conn, model: str, prompt: str, max_tokens: int = 16384,
+                                temperature=None) -> str:
     """Streaming twin of cortex_complete_rest for long outputs: idle-timeout per chunk,
-    retries with backoff on timeouts, connection drops, 429 and 5xx."""
+    retries with backoff on timeouts, connection drops, 429 and 5xx. temperature is sent
+    only when given."""
     payload = {"model": model, "max_tokens": max_tokens,
                "messages": [{"role": "user", "content": prompt}]}
+    if temperature is not None:
+        payload["temperature"] = temperature
     attempt = 0
     while True:
         try:

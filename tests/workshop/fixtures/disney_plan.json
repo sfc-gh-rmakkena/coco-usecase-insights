@@ -24,9 +24,6 @@
   }
  ],
  "session2": {
-  "recipe": {
-   "band": "none"
-  },
   "plan": {
    "problem_statement": "The customer needs a unified, governed data layer that standardizes source data, keeps reporting consistent across business units, performs well for BI at scale, and is ready for AI-assisted analysis.",
    "architecture_flow": "",
@@ -36,14 +33,14 @@
     "Performance at scale: Dynamic Tables, Search Optimization, and intelligent caching deliver sub-second query response times even as data volumes grow"
    ],
    "architecture_layers": [
-    "Ingestion: Openflow \u2014 CDC connectors, incremental replication",
-    "Bronze: Iceberg Tables \u2014 raw landing tables, one schema per source",
-    "Silver: Dynamic Tables \u2014 conformed, deduplicated entities",
-    "Gold: Dynamic Tables \u2014 finance marts and aggregates",
-    "Semantic: Semantic Views \u2014 consistent business metrics",
-    "Consumption: Cortex Agents \u2014 natural-language Q&A",
-    "Sharing: Internal Marketplace \u2014 other business units",
-    "Governance: Row Access Policies \u2014 row-level security on gold"
+    "Ingestion: Openflow — CDC connectors, incremental replication",
+    "Bronze: Iceberg Tables — raw landing tables, one schema per source",
+    "Silver: Dynamic Tables — conformed, deduplicated entities",
+    "Gold: Dynamic Tables — finance marts and aggregates",
+    "Semantic: Semantic Views — consistent business metrics",
+    "Consumption: Cortex Agents — natural-language Q&A",
+    "Sharing: Internal Marketplace — other business units",
+    "Governance: Row Access Policies — row-level security on gold"
    ],
    "next_steps": [
     "Deploy Openflow CDC connectors for priority source systems; configure Snowpipe for cloud storage ingestion",
@@ -59,128 +56,107 @@
     {
      "topic": "Data Ingestion",
      "previous_state": "Manual file transfers and disconnected source systems creating fragmented data flows",
-     "solution": "Openflow CDC for real-time replication, Snowpipe for continuous file ingestion, streaming ingestion for high-volume event data",
-     "status": "Implementation Ready"
+     "solution": "Openflow CDC for real-time replication, Snowpipe for continuous file ingestion, streaming ingestion for high-volume event data"
     },
     {
      "topic": "Data Transformation",
      "previous_state": "Complex ETL scripts requiring manual maintenance and slow refresh cycles",
-     "solution": "Dynamic Tables for declarative pipelines, Tasks for orchestration, dbt Projects for version-controlled transformations",
-     "status": "Implementation Ready"
+     "solution": "Dynamic Tables for declarative pipelines, Tasks for orchestration, dbt Projects for version-controlled transformations"
     },
     {
      "topic": "Analytics & Reporting",
      "previous_state": "Slow queries on large tables, manual metric definitions, limited self-service capabilities",
-     "solution": "Semantic Views for standardized metrics, Cortex Agents for natural language query, optimized data structures",
-     "status": "Implementation Ready"
+     "solution": "Semantic Views for standardized metrics, Cortex Agents for natural language query, optimized data structures"
     },
     {
      "topic": "Data Governance",
      "previous_state": "Inconsistent access controls preventing efficient query performance",
-     "solution": "Row access policies with partition-aware design, dynamic data masking, object tagging for classification",
-     "status": "Implementation Ready"
+     "solution": "Row access policies with partition-aware design, dynamic data masking, object tagging for classification"
     },
     {
      "topic": "Lakehouse Architecture",
      "previous_state": "Siloed data across multiple platforms limiting cross-functional analysis",
-     "solution": "Iceberg Tables for open lakehouse, Notebooks for interactive exploration, unified catalog integration",
-     "status": "Implementation Ready"
+     "solution": "Iceberg Tables for open lakehouse, Notebooks for interactive exploration, unified catalog integration"
     },
     {
      "topic": "Cross-Unit Collaboration",
      "previous_state": "Data duplication and manual sharing processes across business units",
-     "solution": "Secure Data Sharing for live access, Internal Marketplace for data products, governance-enabled collaboration",
-     "status": "Implementation Ready"
+     "solution": "Secure Data Sharing for live access, Internal Marketplace for data products, governance-enabled collaboration"
     },
     {
      "topic": "Query Performance",
      "previous_state": "Report timeouts and slow dashboards on high-cardinality dimensions",
-     "solution": "Search Optimization Service for point lookups and joins, materialized aggregations, partition pruning strategies",
-     "status": "Implementation Ready"
+     "solution": "Search Optimization Service for point lookups and joins, materialized aggregations, partition pruning strategies"
     },
     {
      "topic": "Cost Management",
      "previous_state": "Unpredictable resource consumption as data volumes grow",
-     "solution": "Custom Budgets for proactive alerts, Resource Monitors for automatic controls, warehouse right-sizing",
-     "status": "Implementation Ready"
+     "solution": "Custom Budgets for proactive alerts, Resource Monitors for automatic controls, warehouse right-sizing"
     }
    ],
    "component_status": [
     {
      "component": "Openflow Connector (SQL Server CDC)",
-     "status": "Generally Available",
      "details": "Supported in AWS, Azure, GCP commercial regions; other connectors vary by source",
      "source_url": "https://docs.snowflake.com/en/user-guide/data-integration/openflow/about"
     },
     {
      "component": "Snowpipe (auto-ingest)",
-     "status": "Generally Available",
      "details": "Cloud storage auto-ingest with SQS/Event Grid notifications",
      "source_url": "https://docs.snowflake.com/en/user-guide/data-load-snowpipe-intro"
     },
     {
      "component": "Snowpipe Streaming (high-performance)",
-     "status": "Generally Available",
      "details": "supports Iceberg Tables for low-latency ingestion",
      "source_url": "https://docs.snowflake.com/en/release-notes/2025/other/2025-09-23-snowpipe-streaming-high-performance-architecture"
     },
     {
      "component": "Dynamic Tables",
-     "status": "Generally Available",
      "details": "Declarative data pipelines with incremental refresh and TARGET_LAG controls",
      "source_url": "https://docs.snowflake.com/en/user-guide/dynamic-tables/overview"
     },
     {
      "component": "dbt Projects on Snowflake",
-     "status": "Generally Available",
      "details": "Native dbt orchestration via Git integration",
      "source_url": "https://docs.snowflake.com/en/user-guide/data-engineering/dbt-projects-on-snowflake"
     },
     {
      "component": "Semantic Views",
-     "status": "Generally Available",
      "details": "YAML-defined semantic layer for consistent metric definitions",
      "source_url": "https://docs.snowflake.com/en/user-guide/views-semantic/overview"
     },
     {
      "component": "Cortex Agents",
-     "status": "Generally Available",
      "details": "Natural language to SQL via Cortex Analyst tool",
      "source_url": "https://docs.snowflake.com/en/user-guide/snowflake-cortex/cortex-agents"
     },
     {
      "component": "Iceberg Tables",
-     "status": "Generally Available",
      "details": "Open lakehouse format with native catalog integration",
      "source_url": "https://docs.snowflake.com/en/user-guide/tables-iceberg"
     },
     {
      "component": "Snowflake Notebooks",
-     "status": "Generally Available",
      "details": "Python/SQL interactive notebooks with Snowpark integration",
      "source_url": "https://docs.snowflake.com/en/user-guide/ui-snowsight/notebooks"
     },
     {
      "component": "Internal Marketplace (Organizational Listings)",
-     "status": "Generally Available",
      "details": "share data products across accounts within the same organization",
      "source_url": "https://docs.snowflake.com/en/release-notes/2024/other/2024-11-12-organizational-listings"
     },
     {
      "component": "Search Optimization Service",
-     "status": "Generally Available (Enterprise+)",
      "details": "Accelerates point lookups and joins on high-cardinality columns",
      "source_url": "https://docs.snowflake.com/en/user-guide/search-optimization/queries-that-benefit"
     },
     {
      "component": "Row Access Policies",
-     "status": "Generally Available (Enterprise+)",
      "details": "Table and view-level row filtering with partition-aware performance",
      "source_url": "https://docs.snowflake.com/en/user-guide/security-row-intro"
     },
     {
      "component": "Custom Budgets",
-     "status": "Generally Available",
      "details": "Proactive cost monitoring with configurable thresholds and notifications",
      "source_url": "https://docs.snowflake.com/en/user-guide/budgets/custom-budget"
     }
@@ -400,67 +376,56 @@
     {
      "topic": "Real-Time CDC Ingestion (Openflow)",
      "verdict": "Recommended for all transactional source systems",
-     "production_ready": "Yes (GA for SQL Server CDC; verify other connectors)",
      "action": "Deploy Openflow connectors for each source database; configure monitoring and alerting"
     },
     {
      "topic": "Continuous File Loading (Snowpipe)",
      "verdict": "Recommended for all cloud storage integrations",
-     "production_ready": "Yes (GA)",
      "action": "Enable auto-ingest pipes for S3/Azure/GCS stages; set up cloud event notifications"
     },
     {
      "topic": "High-Volume Event Streaming (Snowpipe Streaming)",
      "verdict": "Recommended for event-driven workloads requiring sub-minute latency",
-     "production_ready": "Yes",
      "action": "Configure streaming pipes with Iceberg Tables for append-only event logs"
     },
     {
      "topic": "Declarative Transformations (Dynamic Tables)",
      "verdict": "Recommended for all transformation pipelines",
-     "production_ready": "Yes (GA)",
-     "action": "Migrate ETL scripts to Dynamic Tables; start with Bronze\u2192Silver\u2192Gold medallion architecture"
+     "action": "Migrate ETL scripts to Dynamic Tables; start with Bronze→Silver→Gold medallion architecture"
     },
     {
      "topic": "Version-Controlled Pipelines (dbt Projects)",
      "verdict": "Recommended for teams using Git-based workflows",
-     "production_ready": "Yes (GA)",
      "action": "Deploy dbt Projects from Git repositories; schedule with native Tasks"
     },
     {
      "topic": "Semantic Layer (Semantic Views + Cortex Agents)",
      "verdict": "Recommended for all BI and self-service analytics use cases",
-     "production_ready": "Yes (GA)",
      "action": "Define Semantic Views for key subject areas; deploy Cortex Agents for conversational analytics"
     },
     {
      "topic": "Open Lakehouse (Iceberg Tables)",
      "verdict": "Recommended for cross-platform interoperability and data science workflows",
-     "production_ready": "Yes (GA)",
      "action": "Use Iceberg Tables for raw/bronze layers; enable external catalog integration if needed"
     },
     {
      "topic": "Secure Data Sharing (Internal Marketplace)",
      "verdict": "Recommended for all cross-unit collaboration",
-     "production_ready": "Yes",
      "action": "Create shares for each shared data product; publish to Internal Marketplace for self-service discovery"
     },
     {
      "topic": "Search Optimization (High-Cardinality Dimensions)",
      "verdict": "Recommended for tables with columns >100K cardinality used in filters/joins",
-     "production_ready": "Yes (GA, Enterprise+)",
      "action": "Enable search optimization on customer_id, product_id, and other high-cardinality columns"
     },
     {
      "topic": "Row Access Policies (Partition-Aware Governance)",
      "verdict": "Recommended replacement for view-based row-level security",
-     "production_ready": "Yes (GA, Enterprise+)",
      "action": "Create row access policies with memoizable functions; attach to tables and views"
     },
     {
      "topic": "Cost Governance (Budgets + Resource Monitors)",
      "verdict": "Recommended for all production environments",
-     "production_ready": "Yes (GA)",
      "action": "Create custom budgets for each major workload; configure resource monitors with suspension thresholds"
     }
    ],
@@ -534,120 +499,79 @@
     "docs": [
      {
       "title": "About Openflow",
-      "url": "https://docs.snowflake.com/en/user-guide/data-integration/openflow/about",
-      "status": "Generally Available"
+      "url": "https://docs.snowflake.com/en/user-guide/data-integration/openflow/about"
      },
      {
       "title": "Set up the Openflow Connector for SQL Server (CDC)",
-      "url": "https://docs.snowflake.com/en/user-guide/data-integration/openflow/connectors/sql-server-cdc/setup",
-      "status": "Generally Available"
+      "url": "https://docs.snowflake.com/en/user-guide/data-integration/openflow/connectors/sql-server-cdc/setup"
      },
      {
       "title": "Snowpipe",
-      "url": "https://docs.snowflake.com/en/user-guide/data-load-snowpipe-intro",
-      "status": "See documentation"
+      "url": "https://docs.snowflake.com/en/user-guide/data-load-snowpipe-intro"
      },
      {
       "title": "Snowpipe Streaming high-performance architecture with Apache Iceberg tables",
-      "url": "https://docs.snowflake.com/en/user-guide/snowpipe-streaming/snowpipe-streaming-high-performance-iceberg",
-      "status": "Generally Available"
+      "url": "https://docs.snowflake.com/en/user-guide/snowpipe-streaming/snowpipe-streaming-high-performance-iceberg"
      },
      {
       "title": "Dynamic tables",
-      "url": "https://docs.snowflake.com/en/user-guide/dynamic-tables/overview",
-      "status": "See documentation"
+      "url": "https://docs.snowflake.com/en/user-guide/dynamic-tables/overview"
      },
      {
       "title": "Dynamic table design patterns",
-      "url": "https://docs.snowflake.com/en/user-guide/dynamic-tables/design-patterns",
-      "status": "See documentation"
+      "url": "https://docs.snowflake.com/en/user-guide/dynamic-tables/design-patterns"
      },
      {
       "title": "dbt Projects on Snowflake",
-      "url": "https://docs.snowflake.com/en/user-guide/data-engineering/dbt-projects-on-snowflake",
-      "status": "See documentation"
+      "url": "https://docs.snowflake.com/en/user-guide/data-engineering/dbt-projects-on-snowflake"
      },
      {
       "title": "Overview of semantic views",
-      "url": "https://docs.snowflake.com/en/user-guide/views-semantic/overview",
-      "status": "See documentation"
+      "url": "https://docs.snowflake.com/en/user-guide/views-semantic/overview"
      },
      {
       "title": "Cortex Agents",
-      "url": "https://docs.snowflake.com/en/user-guide/snowflake-cortex/cortex-agents",
-      "status": "See documentation"
+      "url": "https://docs.snowflake.com/en/user-guide/snowflake-cortex/cortex-agents"
      },
      {
       "title": "Cortex Analyst",
-      "url": "https://docs.snowflake.com/en/user-guide/snowflake-cortex/cortex-analyst",
-      "status": "See documentation"
+      "url": "https://docs.snowflake.com/en/user-guide/snowflake-cortex/cortex-analyst"
      },
      {
       "title": "Apache Iceberg tables",
-      "url": "https://docs.snowflake.com/en/user-guide/tables-iceberg",
-      "status": "See documentation"
+      "url": "https://docs.snowflake.com/en/user-guide/tables-iceberg"
      },
      {
       "title": "Snowflake Notebooks",
-      "url": "https://docs.snowflake.com/en/user-guide/ui-snowsight/notebooks",
-      "status": "See documentation"
+      "url": "https://docs.snowflake.com/en/user-guide/ui-snowsight/notebooks"
      },
      {
       "title": "Introduction to Secure Data Sharing",
-      "url": "https://docs.snowflake.com/en/user-guide/data-sharing-intro",
-      "status": "Generally Available"
+      "url": "https://docs.snowflake.com/en/user-guide/data-sharing-intro"
      },
      {
       "title": "About organizational listings",
-      "url": "https://docs.snowflake.com/en/user-guide/collaboration/listings/organizational/org-listing-about",
-      "status": "Generally Available"
+      "url": "https://docs.snowflake.com/en/user-guide/collaboration/listings/organizational/org-listing-about"
      },
      {
       "title": "Identifying queries that benefit from search optimization",
-      "url": "https://docs.snowflake.com/en/user-guide/search-optimization/queries-that-benefit",
-      "status": "See documentation"
+      "url": "https://docs.snowflake.com/en/user-guide/search-optimization/queries-that-benefit"
      },
      {
       "title": "Understanding row access policies",
-      "url": "https://docs.snowflake.com/en/user-guide/security-row-intro",
-      "status": "See documentation"
+      "url": "https://docs.snowflake.com/en/user-guide/security-row-intro"
      },
      {
       "title": "Using Dynamic Data Masking",
-      "url": "https://docs.snowflake.com/en/user-guide/security-column-ddm-use",
-      "status": "See documentation"
+      "url": "https://docs.snowflake.com/en/user-guide/security-column-ddm-use"
      },
      {
       "title": "Monitor credit usage with budgets",
-      "url": "https://docs.snowflake.com/en/user-guide/budgets",
-      "status": "See documentation"
+      "url": "https://docs.snowflake.com/en/user-guide/budgets"
      },
      {
       "title": "Working with resource monitors",
-      "url": "https://docs.snowflake.com/en/user-guide/resource-monitors",
-      "status": "See documentation"
-     }
-    ],
-    "github": [
-     {
-      "title": "Snowflake-Labs/sfguide-getting-started-with-openflow-spcs",
-      "url": "https://github.com/Snowflake-Labs/sfguide-getting-started-with-openflow-spcs",
-      "description": "Companion repository"
-     },
-     {
-      "title": "Snowflake-Labs/sfguide-data-engineering-with-snowpark-python",
-      "url": "https://github.com/Snowflake-Labs/sfguide-data-engineering-with-snowpark-python",
-      "description": "Companion repository"
-     },
-     {
-      "title": "Snowflake-Labs/sfguide-getting-started-with-cortex-agents",
-      "url": "https://github.com/Snowflake-Labs/sfguide-getting-started-with-cortex-agents",
-      "description": "Companion repository"
-     },
-     {
-      "title": "Snowflake-Labs/snowflake-demo-notebooks",
-      "url": "https://github.com/Snowflake-Labs/snowflake-demo-notebooks",
-      "description": "Companion repository"
+      "url": "https://docs.snowflake.com/en/user-guide/resource-monitors"
      }
     ]
    },

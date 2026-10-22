@@ -28,6 +28,8 @@ def ensure_tables(conn):
             GENERATED_AT TIMESTAMP_LTZ DEFAULT CURRENT_TIMESTAMP())""")
         cur.execute(f"ALTER TABLE {_t('WORKSHOP_GENERATION_AUDIT')} "
                     "ADD COLUMN IF NOT EXISTS DEGRADED_REASONS STRING")
+        cur.execute(f"ALTER TABLE {_t('WORKSHOP_GENERATION_AUDIT')} "
+                    "ADD COLUMN IF NOT EXISTS CONTEXT_SOURCES VARIANT")
 
 
 def compute_hash(inputs: dict, asset_version: str) -> str:
@@ -78,11 +80,13 @@ def insert(conn, rows: list, asset_version: str = ""):
 
 
 def audit(conn, rows: list):
-    """rows: (partner, uc_id, path, cache_hit, reasons_str)."""
+    """rows: (partner, uc_id, path, cache_hit, reasons_str[, context_sources]). context_sources
+    ([{recipe_id, score}]) is an internal record only; the page never reads it."""
     if not rows:
         return
     sel = " UNION ALL ".join(
-        f"SELECT '{_q(p)}', '{_q(u)}', '{_q(path)}', {str(bool(hit)).upper()}, '{_q(why)}'"
-        for p, u, path, hit, why in rows)
+        f"SELECT '{_q(r[0])}', '{_q(r[1])}', '{_q(r[2])}', {str(bool(r[3])).upper()}, '{_q(r[4])}', "
+        f"PARSE_JSON('{_q(json.dumps(r[5] if len(r) > 5 else []))}')"
+        for r in rows)
     _exec(conn, f"""INSERT INTO {_t('WORKSHOP_GENERATION_AUDIT')}
-        (PARTNER_NAME, USE_CASE_ID, PATH, CACHE_HIT, DEGRADED_REASONS) {sel}""")
+        (PARTNER_NAME, USE_CASE_ID, PATH, CACHE_HIT, DEGRADED_REASONS, CONTEXT_SOURCES) {sel}""")

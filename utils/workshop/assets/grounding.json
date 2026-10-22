@@ -40,12 +40,6 @@
     "sql": "CREATE WAREHOUSE <ingest_warehouse>\n  WITH\n    WAREHOUSE_SIZE = 'XSMALL'\n    AUTO_SUSPEND = 300\n    AUTO_RESUME = TRUE;\n\nGRANT USAGE, OPERATE ON WAREHOUSE <ingest_warehouse> TO ROLE OPENFLOW_<RUNTIME_NAME>_EXECUTE_AS_RL;",
     "source_url": "https://docs.snowflake.com/en/user-guide/data-integration/openflow/connectors/sql-server-cdc/setup"
    }
-  ],
-  "github": [
-   {
-    "title": "Snowflake-Labs/sfguide-getting-started-with-openflow-spcs",
-    "url": "https://github.com/Snowflake-Labs/sfguide-getting-started-with-openflow-spcs"
-   }
   ]
  },
  "snowpipe": {
@@ -86,8 +80,7 @@
     "sql": "SELECT SYSTEM$PIPE_STATUS('mydb.myschema.orders_pipe');",
     "source_url": "https://docs.snowflake.com/en/user-guide/data-load-snowpipe-auto-s3"
    }
-  ],
-  "github": []
+  ]
  },
  "snowpipe_streaming": {
   "status_note": "Snowpipe Streaming high-performance architecture: Generally Available (release note, Sep 23, 2025).",
@@ -117,8 +110,7 @@
     "sql": "-- Option 1: Use the default pipe.\n-- The default pipe is automatically created when you open a channel\n-- against the table using the SDK. The default pipe name follows the\n-- convention: <TABLE_NAME>-STREAMING (for example, MY_ICEBERG_TABLE-STREAMING).\n\n-- Option 2: Create a custom pipe with explicit column mapping.\nCREATE OR REPLACE PIPE my_iceberg_pipe AS\n    COPY INTO my_iceberg_table (event_id, event_type, event_data, event_timestamp)\n    FROM (SELECT $1:event_id, $1:event_type, $1:event_data, $1:event_timestamp);",
     "source_url": "https://docs.snowflake.com/en/user-guide/snowpipe-streaming/snowpipe-streaming-high-performance-iceberg"
    }
-  ],
-  "github": []
+  ]
  },
  "copy_into": {
   "status_note": "Documented in Snowflake docs; confirm availability for your edition and region with your Snowflake SE.",
@@ -144,8 +136,7 @@
     "sql": "COPY INTO mytable VALIDATION_MODE = 'RETURN_ERRORS';",
     "source_url": "https://docs.snowflake.com/en/sql-reference/sql/copy-into-table"
    }
-  ],
-  "github": []
+  ]
  },
  "dynamic_tables": {
   "status_note": "Documented in Snowflake docs; confirm availability for your edition and region with your Snowflake SE.",
@@ -193,8 +184,7 @@
     "sql": "CREATE OR ALTER DYNAMIC TABLE dt_orders\n    TARGET_LAG = '10 minutes'\n    WAREHOUSE = transform_wh\n    REFRESH_MODE = INCREMENTAL\nAS\n    SELECT\n        order_id,\n        customer_id,\n        order_date,\n        TRIM(UPPER(product_name)) AS product_name,\n        quantity,\n        unit_price,\n        quantity * unit_price AS line_total,\n        order_status\n    FROM raw_orders\n    WHERE order_status != 'returned';",
     "source_url": "https://docs.snowflake.com/en/user-guide/dynamic-tables/overview"
    }
-  ],
-  "github": []
+  ]
  },
  "tasks": {
   "status_note": "Documented in Snowflake docs; confirm availability for your edition and region with your Snowflake SE.",
@@ -220,8 +210,7 @@
     "sql": "CREATE TASK SCHEDULED_T2\n  SCHEDULE='30 SECONDS'\n  SERVERLESS_TASK_MIN_STATEMENT_SIZE='SMALL'\n  SERVERLESS_TASK_MAX_STATEMENT_SIZE='LARGE'\n  AS SELECT 1;",
     "source_url": "https://docs.snowflake.com/en/user-guide/tasks-intro"
    }
-  ],
-  "github": []
+  ]
  },
  "snowpark": {
   "status_note": "Documented in Snowflake docs; confirm availability for your edition and region with your Snowflake SE.",
@@ -250,12 +239,6 @@
     "title": "Snowpark Python handler (Python)",
     "sql": "import snowflake.snowpark as snowpark\nfrom snowflake.snowpark.functions import col\n\ndef main(session: snowpark.Session):\n  df_table = session.table(\"sample_product_data\")",
     "source_url": "https://docs.snowflake.com/en/developer-guide/snowpark/python/creating-udfs"
-   }
-  ],
-  "github": [
-   {
-    "title": "Snowflake-Labs/sfguide-data-engineering-with-snowpark-python",
-    "url": "https://github.com/Snowflake-Labs/sfguide-data-engineering-with-snowpark-python"
    }
   ]
  },
@@ -297,8 +280,7 @@
     "sql": "CREATE OR ALTER TASK my_database.my_schema.run_dbt_project\n  WAREHOUSE = my_warehouse\n  SCHEDULE = '6 hours'\nAS\n  EXECUTE DBT PROJECT my_database.my_schema.my_dbt_project args='run --target prod';",
     "source_url": "https://docs.snowflake.com/en/sql-reference/sql/execute-dbt-project"
    }
-  ],
-  "github": []
+  ]
  },
  "iceberg": {
   "status_note": "Documented in Snowflake docs; confirm availability for your edition and region with your Snowflake SE.",
@@ -324,8 +306,7 @@
     "sql": "CREATE ICEBERG TABLE my_iceberg_table (col1 int)\n  CATALOG = 'SNOWFLAKE'\n  EXTERNAL_VOLUME = 'SNOWFLAKE_MANAGED';",
     "source_url": "https://docs.snowflake.com/en/user-guide/tables-iceberg-create"
    }
-  ],
-  "github": []
+  ]
  },
  "semantic_views": {
   "status_note": "Documented in Snowflake docs; confirm availability for your edition and region with your Snowflake SE.",
@@ -364,8 +345,7 @@
     "sql": "SELECT * FROM SEMANTIC VIEW(\n  sv\n  METRICS (\n    table_1.metric_2\n  )\n  DIMENSIONS (\n    table_1.dimension_1,\n    table_1.dimension_2,\n    table_1.dimension_3\n  )\n);",
     "source_url": "https://docs.snowflake.com/en/sql-reference/sql/create-semantic-view"
    }
-  ],
-  "github": []
+  ]
  },
  "cortex_agents": {
   "status_note": "Documented in Snowflake docs; confirm availability for your edition and region with your Snowflake SE.",
@@ -396,12 +376,6 @@
     "sql": "-- Create the original agent\nCREATE OR REPLACE AGENT my_analytics_agent\n  FROM SPECIFICATION\n  $$\n  models:\n    orchestration: auto\n  $$;\n\n-- Grant USAGE on the original agent\nGRANT USAGE ON AGENT my_analytics_agent TO ROLE analyst_role;\n\n-- Check existing grants before replacing\nSHOW GRANTS ON AGENT my_analytics_agent;\n\n-- Replace the agent and copy all existing grants to the replacement\nCREATE OR REPLACE AGENT my_analytics_agent COPY GRANTS\n  FROM SPECIFICATION\n  $$\n  models:\n    orchestration: auto\n  $$;\n\n-- Confirm grants were copied\nSHOW GRANTS ON AGENT my_analytics_agent;",
     "source_url": "https://docs.snowflake.com/en/sql-reference/sql/create-agent"
    }
-  ],
-  "github": [
-   {
-    "title": "Snowflake-Labs/sfguide-getting-started-with-cortex-agents",
-    "url": "https://github.com/Snowflake-Labs/sfguide-getting-started-with-cortex-agents"
-   }
   ]
  },
  "cortex_analyst": {
@@ -424,8 +398,7 @@
     "sql": "GRANT DATABASE ROLE SNOWFLAKE.CORTEX_ANALYST_USER TO ROLE analyst;",
     "source_url": "https://docs.snowflake.com/en/user-guide/snowflake-cortex/cortex-analyst"
    }
-  ],
-  "github": []
+  ]
  },
  "cortex_search": {
   "status_note": "Documented in Snowflake docs; confirm availability for your edition and region with your Snowflake SE.",
@@ -446,8 +419,7 @@
     "sql": "CREATE OR REPLACE CORTEX SEARCH SERVICE transcript_search_service\n  ON transcript_text\n  ATTRIBUTES region\n  WAREHOUSE = cortex_search_wh\n  TARGET_LAG = '1 day'\n  EMBEDDING_MODEL = 'snowflake-arctic-embed-l-v2.0'\n  AS (\n    SELECT\n        transcript_text,\n        region,\n        agent_id\n    FROM support_transcripts\n);",
     "source_url": "https://docs.snowflake.com/en/user-guide/snowflake-cortex/cortex-search/cortex-search-overview"
    }
-  ],
-  "github": []
+  ]
  },
  "interactive": {
   "status_note": "Documented in Snowflake docs; confirm availability for your edition and region with your Snowflake SE.",
@@ -474,8 +446,7 @@
     "sql": "ALTER WAREHOUSE interactive_demo ADD TABLES (orders);",
     "source_url": "https://docs.snowflake.com/en/user-guide/interactive"
    }
-  ],
-  "github": []
+  ]
  },
  "migrations": {
   "status_note": "Documented in Snowflake docs; confirm availability for your edition and region with your Snowflake SE.",
@@ -505,8 +476,7 @@
     "sql": "GRANT CREATE MIGRATION ON ACCOUNT TO ROLE <your_role>;",
     "source_url": "https://www.snowflake.com/en/developers/guides/how-to-accelerate-data-warehouse-migrations-with-snowconvert-ai/"
    }
-  ],
-  "github": []
+  ]
  },
  "notebooks": {
   "status_note": "Documented in Snowflake docs; confirm availability for your edition and region with your Snowflake SE.",
@@ -531,12 +501,6 @@
     "title": "Notebook from a stage",
     "sql": "CREATE NOTEBOOK mynotebook\n FROM '@my_db.my_schema.my_stage'\n MAIN_FILE = 'my_notebook_file.ipynb'\n QUERY_WAREHOUSE = my_warehouse;",
     "source_url": "https://docs.snowflake.com/en/sql-reference/sql/create-notebook"
-   }
-  ],
-  "github": [
-   {
-    "title": "Snowflake-Labs/snowflake-demo-notebooks",
-    "url": "https://github.com/Snowflake-Labs/snowflake-demo-notebooks"
    }
   ]
  },
@@ -569,8 +533,7 @@
     "sql": "from snowflake.ml.model import task, type_hints\nmv = reg.log_model(clf,\n                   model_name=\"my_model\",\n                   version_name=\"v1\",\n                   conda_dependencies=[\"scikit-learn\"],\n                   comment=\"My awesome ML model\",\n                   metrics={\"score\": 96},\n                   sample_input_data=train_features,\n                   task=task.Task.TABULAR_BINARY_CLASSIFICATION)",
     "source_url": "https://docs.snowflake.com/en/developer-guide/snowflake-ml/model-registry/overview"
    }
-  ],
-  "github": []
+  ]
  },
  "ai_functions": {
   "status_note": "Documented in Snowflake docs; confirm availability for your edition and region with your Snowflake SE.",
@@ -605,8 +568,7 @@
     "sql": "WITH staged_docs AS (\n  SELECT TO_FILE(file_url) AS doc FROM DIRECTORY(@my_doc_stage)\n)\nSELECT doc, AI_CLASSIFY(doc, ['invoice', 'contract', 'lab_report']):labels AS classification\nFROM staged_docs;",
     "source_url": "https://docs.snowflake.com/en/sql-reference/functions/ai_classify"
    }
-  ],
-  "github": []
+  ]
  },
  "document_ai": {
   "status_note": "Documented in Snowflake docs; confirm availability for your edition and region with your Snowflake SE.",
@@ -636,8 +598,7 @@
     "sql": "SELECT AI_PARSE_DOCUMENT(\n  TO_FILE( '@docs.doc_stage', 'document_1.pdf' ),\n  { 'mode': 'OCR' } ) AS OCR;",
     "source_url": "https://docs.snowflake.com/en/user-guide/snowflake-cortex/parse-document"
    }
-  ],
-  "github": []
+  ]
  },
  "apps": {
   "status_note": "Snowflake Native App Framework: Generally Available. Streamlit in Snowflake: Documented in Snowflake docs; confirm availability for your edition and region with your Snowflake SE.",
@@ -667,8 +628,7 @@
     "sql": "CREATE STREAMLIT hello_streamlit\n  FROM @streamlit_db.streamlit_schema.streamlit_stage\n  MAIN_FILE = 'streamlit_main.py'\n  QUERY_WAREHOUSE = my_warehouse;",
     "source_url": "https://docs.snowflake.com/en/sql-reference/sql/create-streamlit"
    }
-  ],
-  "github": []
+  ]
  },
  "collaboration": {
   "status_note": "Organizational listings (Internal Marketplace): Generally Available (release note, Nov 12, 2024). Data Clean Rooms collaboration experience: Generally Available. Secure Data Sharing: Documented in Snowflake docs; confirm availability for your edition and region with your Snowflake SE.",
@@ -707,8 +667,7 @@
     "sql": "GRANT USAGE ON DATABASE sales_db TO SHARE sales_s;\n\nGRANT USAGE ON SCHEMA sales_db.aggregates_eula TO SHARE sales_s;\n\nGRANT SELECT ON TABLE sales_db.aggregates_eula.aggregate_1 TO SHARE sales_s;",
     "source_url": "https://docs.snowflake.com/en/user-guide/data-sharing-provider"
    }
-  ],
-  "github": []
+  ]
  },
  "governance": {
   "status_note": "Row access policies and dynamic data masking: Requires Enterprise Edition (or higher) per Snowflake docs. Object tagging: Documented in Snowflake docs; confirm availability for your edition and region with your Snowflake SE.",
@@ -766,8 +725,7 @@
     "sql": "CREATE TAG cost_center\n  ALLOWED_VALUES 'finance', 'engineering';",
     "source_url": "https://docs.snowflake.com/en/user-guide/object-tagging/work"
    }
-  ],
-  "github": []
+  ]
  },
  "cost": {
   "status_note": "Documented in Snowflake docs; confirm availability for your edition and region with your Snowflake SE.",
@@ -802,8 +760,7 @@
     "sql": "USE ROLE ACCOUNTADMIN;\n\nCREATE OR REPLACE RESOURCE MONITOR limit1 WITH CREDIT_QUOTA = <credit_quota>\n  TRIGGERS ON 100 PERCENT DO SUSPEND;\n\nALTER WAREHOUSE wh1 SET RESOURCE_MONITOR = limit1;",
     "source_url": "https://docs.snowflake.com/en/user-guide/resource-monitors"
    }
-  ],
-  "github": []
+  ]
  },
  "observability": {
   "status_note": "Data Quality Monitoring (data metric functions): Requires Enterprise Edition (or higher) per Snowflake docs.",
@@ -838,8 +795,7 @@
     "sql": "CREATE OR REPLACE DATA METRIC FUNCTION governance.dmfs.referential_check(\n  arg_t1 TABLE (arg_c1 INT), arg_t2 TABLE (arg_c2 INT))\nRETURNS NUMBER AS\n 'SELECT COUNT(*) FROM arg_t1\n  WHERE arg_c1 NOT IN (SELECT arg_c2 FROM arg_t2)';",
     "source_url": "https://docs.snowflake.com/en/user-guide/data-quality-custom-dmfs"
    }
-  ],
-  "github": []
+  ]
  },
  "search_optimization": {
   "status_note": "Search optimization service: Requires Enterprise Edition (or higher) per Snowflake docs.",
@@ -874,7 +830,6 @@
     "sql": "ALTER TABLE mytable ADD SEARCH OPTIMIZATION ON EQUALITY(mycol);",
     "source_url": "https://docs.snowflake.com/en/user-guide/search-optimization/join-queries"
    }
-  ],
-  "github": []
+  ]
  }
 }

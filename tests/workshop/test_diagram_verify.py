@@ -70,8 +70,8 @@ def test_verify_each_failure_code():
         "diagram_missing:openflow": lambda p: p["architecture"]["layers"].pop(0),
         "component_missing:openflow": lambda p: p.update(component_status=[
             r for r in p["component_status"] if "openflow" not in r["component"].lower()]),
-        "component_status_empty": lambda p: p["component_status"][0].update(status=""),
-        "link": lambda p: p["resources"]["github"].append({"title": "x", "url": "http://github.com/x"}),
+        "github_link": lambda p: p["resources"]["docs"].append({"title": "x", "url": "https://github.com/x"}),
+        "link": lambda p: p["resources"]["docs"].append({"title": "x", "url": "http://example.com/x"}),
         "leak:money": lambda p: p.update(problem_statement="Budget is $2M."),
     }
     for code, mutate in cases.items():
@@ -100,7 +100,7 @@ def test_missing_required_capability_injected():
     out = generator.build_one(UC, "D", None, {}, _llm(s2_payload()))
     plan, why = out["session2"]["plan"], out["_degraded_reasons"]
     assert any(l["capability"] == "Snowpark ML" for l in plan["architecture"]["layers"])
-    assert any(r["component"] == "Snowpark ML" and r["status"] and r["source_url"] for r in plan["component_status"])
+    assert any(r["component"] == "Snowpark ML" and "status" not in r and r["source_url"] for r in plan["component_status"])
     assert "s2:arch_filled" in why and "Snowpark ML" in diagram.render(plan["architecture"])
     assert plan["architecture_layers"]
 

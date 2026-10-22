@@ -1,22 +1,19 @@
 """Per-use-case workshop generation. Output dict has identical keys on every path."""
+import inspect
 import json
 import re
 from concurrent.futures import ThreadPoolExecutor
 
-from . import assets, cache, capabilities, diagram, prompts
+from . import assets, cache, capabilities, diagram, prompts, recipes
 from .compliance import classify_violations, find_violations, scrub
 from .context import fetch_uc_context
-from .deny import private_deny_terms
+from .deny import private_deny_terms, recipe_backstop_terms
 from .gate import fetch_a360_context, is_listed, load_listed_names
 from .verify import verify_plan
 
 MODEL = "claude-sonnet-4-5"
 MAX_WORKERS = 16
 _FENCE = re.compile(r"^```(?:json)?|```$", re.M)
-
-
-def recipe_band(conf: int) -> str:
-    return "full" if conf > 80 else ("reference" if conf >= 50 else "none")
 
 
 def _parse(raw: str) -> dict:
@@ -37,13 +34,13 @@ def _parse(raw: str) -> dict:
 _LINK = {"title": "", "url": ""}
 # Field -> default for one row of each list-of-objects field (stable shape on every path).
 _ROWS = {
-    "executive_summary": {"topic": "", "previous_state": "", "solution": "", "status": ""},
-    "component_status": {"component": "", "status": "", "details": "", "source_url": ""},
+    "executive_summary": {"topic": "", "previous_state": "", "solution": ""},
+    "component_status": {"component": "", "details": "", "source_url": ""},
     "sections": {"title": "", "challenge": "", "explanation": "", "coco_prompt": "", "sql": "",
                  "source_url": "", "notes": []},
     "coco_skills": {"skill": "", "what_it_does": "", "steps": ""},
     "before_after": {"task": "", "without": "", "with": ""},
-    "decision_matrix": {"topic": "", "verdict": "", "production_ready": "", "action": ""},
+    "decision_matrix": {"topic": "", "verdict": "", "action": ""},
 }
 # architecture_flow is legacy (old cached payloads); new plans carry the structured `architecture`
 # and architecture_layers is derived from it.
@@ -51,13 +48,12 @@ PLAN_DEFAULT = {"problem_statement": "", "executive_summary": [], "decision_crit
                 "architecture": {"sources": [], "layers": [], "consumers": []},
                 "architecture_layers": [], "architecture_flow": "", "component_status": [], "sections": [],
                 "coco_skills": [], "before_after": [], "decision_matrix": [], "next_steps": [],
-                "resources": {"quickstarts": [], "docs": [], "github": []},
+                "resources": {"quickstarts": [], "docs": []},
                 "hands_on": {"intro": "", "sql": "", "source_url": ""}}
-_RES_FIELDS = {"quickstarts": ("title", "url"), "docs": ("title", "url", "status"),
-               "github": ("title", "url", "description")}
+_RES_FIELDS = {"quickstarts": ("title", "url"), "docs": ("title", "url")}
 _LAYER_NAMES = ("Ingestion", "Bronze", "Silver", "Gold", "Semantic", "Consumption", "Sharing", "Governance")
-RECIPE_DEFAULT = {"band": "none", "id": "", "title": "", "confidence": 0, "rationale": "", "body": ""}
 MIN_SQL_SECTIONS = 3
+JUDGE_RUNS = 3
 # Identifiers that do not exist in Snowflake but models invent; scrubbed from prose too.
 INVENTED_TERMS = ["CORTEX_AGENT_USAGE_HISTORY", "DATA_AGENT_RUN", "INVOKER_ROLE"]
 # Constructs the model has invented in the past; SQL containing them is dropped.
@@ -154,21 +150,10 @@ def _ground_sections(plan, allow):
         ho["source_url"] = ""
     if ho["sql"] and (not ho["source_url"] or any(p.search(ho["sql"]) for p in _INVENTED)):
         ho["sql"] = ""
-    plan["resources"] = {k: [d for d in v if d["url"].startswith("https://") and d["url"].rstrip("/") in ok]
+    plan["resources"] = {k: [d for d in v if d["url"].startswith("https://") and d["url"].rstrip("/") in ok
+                             and "github.com" not in d["url"]]
                          for k, v in plan["resources"].items()}
-    for d in plan["resources"]["docs"]:
-        d["status"] = d["status"] or _doc_status(d["url"])
-    for d in plan["resources"]["github"]:
-        d["description"] = d["description"] or "Companion repository"
     return plan
-
-
-def _doc_status(url):
-    u = url.rstrip("/")
-    for v in capabilities.grounding().values():
-        if any(d["url"].rstrip("/") == u for d in v.get("docs", [])):
-            return capabilities.status_from_note(v.get("status_note"))
-    return "See page"
 
 
 def _fill_architecture(plan, required) -> bool:
@@ -186,7 +171,6 @@ def _fill_architecture(plan, required) -> bool:
         if not any(capabilities.cap_matches(k, r["component"]) for r in plan["component_status"]):
             docs = g.get(k, {}).get("docs") or [{}]
             plan["component_status"].append({"component": capabilities.cap_label(k),
-                                             "status": capabilities.status_from_note(note),
                                              "details": note, "source_url": docs[0].get("url", "")})
             added = True
     if added:
@@ -214,11 +198,53 @@ def _valid_s2(d):
                     and str(s.get("source_url") or "").startswith("https://")) >= MIN_SQL_SECTIONS)
 
 
-def _to_conf(v) -> int:
+def _drop_invented(pack: dict) -> dict:
+    """Snippets naming a construct the checks treat as invented would only get blanked later."""
+    return {cap: [e for e in es if not any(t in (e.get("sql") or "").upper() for t in INVENTED_TERMS)]
+            for cap, es in (pack or {}).items()}
+
+
+def _accepts_temperature(llm) -> bool:
     try:
-        return max(0, min(100, int(float(v))))
+        ps = inspect.signature(llm).parameters.values()
     except (TypeError, ValueError):
-        return 0
+        return False
+    return any(p.name == "temperature" or p.kind == p.VAR_KEYWORD for p in ps)
+
+
+def _context_sources(uc, private_context, llm, deny, reasons):
+    """Prefilter + rubric judge (temperature 0) + selection. Returns [(recipe_id, score)]."""
+    units = recipes.load_units()
+    req = prompts.required_capabilities(uc, private_context)
+    cands = recipes.prefilter(uc, req, units)
+    if not cands:
+        return []
+    views = [recipes.candidate_view(rid, units) for rid in cands]
+    t0 = (lambda p: llm(p, temperature=0)) if _accepts_temperature(llm) else llm
+    runs = []
+    for _ in range(JUDGE_RUNS):
+        judged, why, _ = _call_json(t0, prompts.recipe_judge_prompt(uc, views),
+                                    lambda d: isinstance(d.get("recipes"), list), deny, "ctx")
+        reasons += [r for r in why if r not in reasons]
+        if judged:
+            runs.append(recipes.score_all(judged, cands, units))
+    if not runs:
+        return []
+    # Median across runs: a single run flipping one rubric item cannot change selection.
+    scores = {rid: sorted(r.get(rid, 0) for r in runs)[(len(runs) - 1) // 2] for rid in cands}
+    return [(rid, scores[rid]) for rid in recipes.select(scores)]
+
+
+def _repair_codes(fails, packs):
+    """Failure codes for the model: guide ids become the neutral snippet titles to use."""
+    out = []
+    for f in fails:
+        if f.startswith("ctx_unused:"):
+            titles = [e["title"] for e in packs.get(f.split(":", 1)[1], [])]
+            out.append("grounding_unused: use these GROUNDING snippets: " + "; ".join(titles))
+        else:
+            out.append(f)
+    return out
 
 
 def _add(reasons, code):
@@ -324,23 +350,19 @@ def build_one(uc, partner, account_signals, private_context, llm, deny=()) -> di
     if session1 is None:
         session1 = _fallback_session1(uc)
 
-    rm, why, _ = _call_json(llm, prompts.recipe_match_prompt(uc),
-                            lambda d: assets.recipe_meta(d.get("recipe_id", "")) != {}, deny, "recipe")
-    reasons += [r for r in why if r not in reasons]
-    recipe = dict(RECIPE_DEFAULT)
-    if rm:
-        _note_scrubbed(reasons, rm, deny, "recipe")
-        conf = _to_conf(rm.get("confidence", 0))
-        band = recipe_band(conf)
-        if band != "none":
-            meta = assets.recipe_meta(rm["recipe_id"])
-            recipe = {"band": band, "id": meta["id"], "title": meta["title"], "confidence": conf,
-                      "rationale": scrub(str(rm.get("rationale", "")), allow, deny),
-                      "body": assets.recipe_body(meta["id"]) if band == "full" else ""}
-
-    # Only a full-band recipe steers the plan; a reference match is shown as a one-liner only.
-    plan_recipe = {k: recipe[k] for k in ("id", "title")} if recipe["band"] == "full" else None
-    base = prompts.session2_prompt(uc, partner, private_context, plan_recipe, deny)
+    sources = _context_sources(uc, private_context, llm, deny, reasons)
+    selected = [rid for rid, _ in sources]
+    units = recipes.load_units()
+    all_caps = prompts.required_capabilities(uc, private_context)
+    pack = _drop_invented(recipes.integration_pack(selected, units, all_caps, allow))
+    by_recipe = {rid: _drop_invented({"_": es})["_"]
+                 for rid, es in recipes.packs_by_recipe(selected, units, all_caps, allow).items()}
+    base_g = capabilities.grounding_for(all_caps + capabilities.OPTIONAL)
+    tokens = {rid: recipes.key_tokens(es, base_g) for rid, es in by_recipe.items()}
+    if selected:
+        _add(reasons, f"ctx:selected:{len(selected)}")
+    backstop = recipe_backstop_terms()
+    base = prompts.session2_prompt(uc, partner, private_context, pack, deny)
     s2, why, _ = _call_json(llm, base, _valid_s2, deny, "s2")
     if s2:
         _note_scrubbed(why, s2, deny, "s2")
@@ -348,17 +370,21 @@ def build_one(uc, partner, account_signals, private_context, llm, deny=()) -> di
     required = prompts.primary_capabilities(uc, private_context)
     plan, filled = _finish_plan(s2, allow, deny, required)
     if s2:
-        fails = verify_plan(plan, required, allow, deny)
+        fails = verify_plan(plan, required, allow, deny, tokens, backstop)
         if fails:
             # One repair pass: failure codes only (no confidential text) + the already-cleaned plan.
-            s2b, why, _ = _call_json(llm, prompts.session2_repair_prompt(base, fails, plan), _valid_s2, deny, "s2r")
+            s2b, why, _ = _call_json(llm, prompts.session2_repair_prompt(base, _repair_codes(fails, by_recipe), plan),
+                                     _valid_s2, deny, "s2r")
             reasons += [r for r in why if r not in reasons]
             if s2b:
                 plan_b, filled_b = _finish_plan(s2b, allow, deny, required)
-                fails_b = verify_plan(plan_b, required, allow, deny)
+                fails_b = verify_plan(plan_b, required, allow, deny, tokens, backstop)
                 if len(fails_b) < len(fails):
                     plan, filled, fails = plan_b, filled_b, fails_b
                     _note_scrubbed(reasons, s2b, deny, "s2r")
+        if "attribution" in fails:
+            # Backstop: scrub attributing terms out of the final plan (SQL that names one is blanked).
+            plan, _ = _finish_plan(plan, allow, list(deny) + list(backstop), required)
         if filled:
             _add(reasons, "s2:arch_filled")
         for f in fails:
@@ -367,8 +393,9 @@ def build_one(uc, partner, account_signals, private_context, llm, deny=()) -> di
         _add(reasons, "s2:clean_emptied")
     degraded = degraded or _sql_sections(plan) < MIN_SQL_SECTIONS
     brief = _brief(plan, uc, allow, deny)
-    return {"_degraded": degraded, "_degraded_reasons": reasons, "uc_id": uc["uc_id"], "account": uc["account"], "name": uc["name"], "skills": uc["skills"],
-            "brief": brief, "session1": session1, "session2": {"recipe": recipe, "plan": plan}}
+    return {"_degraded": degraded, "_degraded_reasons": reasons,
+            "_context_sources": [{"recipe_id": rid, "score": s} for rid, s in sources], "uc_id": uc["uc_id"], "account": uc["account"], "name": uc["name"], "skills": uc["skills"],
+            "brief": brief, "session1": session1, "session2": {"plan": plan}}
 
 
 def _safe_read(label, fn, default, diagnostics):
@@ -413,10 +440,10 @@ def generate_workshops(conn, rows: list, partner: str, complete_fn, call_log=Non
         if key in hits:
             return hits[key]
 
-        def llm(prompt):
+        def llm(prompt, **kw):
             if log_wrap and call_log is not None:
-                return log_wrap(call_log, "workshop", r["name"], complete_fn, conn, MODEL, prompt)
-            return complete_fn(conn, MODEL, prompt)
+                return log_wrap(call_log, "workshop", r["name"], complete_fn, conn, MODEL, prompt, **kw)
+            return complete_fn(conn, MODEL, prompt, **kw)
         return build_one(r, partner, signals, ctx["llm"], llm, deny=ctx["deny"])
 
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
@@ -425,13 +452,14 @@ def generate_workshops(conn, rows: list, partner: str, complete_fn, call_log=Non
     # Cached payloads never carry these keys; pop so they never reach the page.
     degraded = [bool(res.pop("_degraded", False)) for res in results]
     why = [res.pop("_degraded_reasons", None) or [] for res in results]
+    srcs = [res.pop("_context_sources", None) or [] for res in results]
     # Persistence is best-effort: a failed write must never lose generated results.
     _safe_read("cache_insert", lambda: cache.insert(
         conn, [(j[3], partner, j[0]["uc_id"], res) for j, res, bad in zip(jobs, results, degraded)
                if j[3] not in hits and not bad], asset_version=version), None, diagnostics)
     _safe_read("audit", lambda: cache.audit(
-        conn, [(partner, j[0]["uc_id"], j[4], j[3] in hits, ";".join(w))
-               for j, w in zip(jobs, why)]), None, diagnostics)
+        conn, [(partner, j[0]["uc_id"], j[4], j[3] in hits, ";".join(w), s)
+               for j, w, s in zip(jobs, why, srcs)]), None, diagnostics)
     if diagnostics is not None:
         diagnostics.append(f"degraded: {sum(degraded)}/{len(results)}")
     return results

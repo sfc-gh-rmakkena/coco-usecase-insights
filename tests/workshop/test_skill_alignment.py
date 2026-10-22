@@ -43,8 +43,8 @@ MUST_DENY = ["Dave", "Ramos", "Caleb", "Brian", "Reif", "Kam", "Oracle", "EPM", 
 
 def _llm(s2):
     def llm(p):
-        if "Pick the single cookbook recipe" in p:
-            return json.dumps({"recipe_id": assets.recipes_index()[0]["id"], "confidence": 72, "rationale": "x"})
+        if "candidate build guide" in p:
+            return json.dumps({"recipes": []})
         if "starter-prompts" in p:
             return json.dumps({"prompts": [{"title": "t", "purpose": "p", "prompt": "do x"}] * 3})
         llm.s2_prompt = p
@@ -56,16 +56,8 @@ def _llm(s2):
 def test_reference_band_recipe_not_passed_to_plan():
     llm = _llm(s2_payload())
     out = generator.build_one(UC, "D", None, {}, llm)
-    assert out["session2"]["recipe"]["band"] == "reference" and out["session2"]["recipe"]["body"] == ""
+    assert set(out["session2"]) == {"plan"}
     assert "MATCHED_RECIPE" not in llm.s2_prompt
-
-
-def test_full_band_recipe_passed_to_plan():
-    from tests.workshop.test_generator import fake_llm_factory
-    seen = []
-    base = fake_llm_factory(recipe_conf=90)
-    generator.build_one(UC, "D", None, {}, lambda p: (seen.append(p), base(p))[1])
-    assert any("MATCHED_RECIPE" in p for p in seen if "pse-uc-implementation-plan" in p)
 
 
 # 2. Deterministic capability mapping
@@ -120,8 +112,9 @@ def test_grounding_covers_every_mapped_capability_and_is_allowlisted():
         for s in v["sql_snippets"]:
             assert s["source_url"].startswith("https://") and s["source_url"] in allow
             assert find_violations(s["sql"], sql=True) == [], (k, s["title"])
-        for d in v["docs"] + v["quickstarts"] + v["github"]:
+        for d in v["docs"] + v["quickstarts"]:
             assert d["url"] in allow
+        assert "github" not in v and "github.com" not in json.dumps(v)
 
 
 # 4. Output shape
@@ -131,7 +124,7 @@ def test_plan_shape_defaults_on_every_path():
     for out in (ok, bad):
         plan = out["session2"]["plan"]
         assert set(plan) == set(generator.PLAN_DEFAULT)
-        assert set(plan["resources"]) == {"quickstarts", "docs", "github"}
+        assert set(plan["resources"]) == {"quickstarts", "docs"}
     assert ok["_degraded"] is False and bad["_degraded"] is True
     assert generator._shape({})["sections"] == [] and generator._shape(None)["architecture_flow"] == ""
 
@@ -165,7 +158,7 @@ def test_html_session2_follows_skill_order():
     assert all(p > 0 for p in pos) and pos == sorted(pos)
     assert "CoCo Prompt:" in h and "Source: <a" in h and "<ol><li>first</li>" in h
     assert "<script" not in h.lower() and "javascript:" not in h
-    assert h.find("Closest recipe") < h.find(">Problem Statement<") > 0
+    assert "Closest" not in h and h.find(">Problem Statement<") > 0
     assert not re.search(r"\son[a-z]+\s*=", h.lower())
 
 

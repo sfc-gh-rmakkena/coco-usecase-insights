@@ -1,6 +1,6 @@
 """Regenerate utils/workshop/assets from the AI cookbook and the two source skills.
 
-Usage: uv run --with pyyaml python scripts/bundle_workshop_assets.py
+Usage: uv run --with pyyaml python scripts/bundle_workshop_assets.py [--units-only]
 Env overrides: COOKBOOK_DIR (cookbook recipes dir), ACTIVATION_SKILL_DIR (activation planner skill dir).
 """
 import glob
@@ -10,8 +10,6 @@ import os
 import re
 import shutil
 from pathlib import Path
-
-import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "utils" / "workshop" / "assets"
@@ -29,7 +27,23 @@ def sha(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def write_units():
+    """assets/recipe_units.json from the bundled guides + index (no source checkout needed)."""
+    import sys
+    sys.path.insert(0, str(ROOT))
+    from utils.workshop import recipes as rec
+    index = json.loads((OUT / "recipes_index.json").read_text())
+
+    def body(rid):
+        p = OUT / "recipes" / (rid.replace("/", "__") + ".md")
+        return p.read_text() if p.exists() else ""
+    data = rec.build_units(index, body)
+    (OUT / rec.UNITS_FILE).write_text(json.dumps(data, indent=1, sort_keys=True))
+    print(f"units={len(data['units'])} recipes={len(data['digests'])}")
+
+
 def main():
+    import yaml
     if not COOKBOOK.is_dir():
         raise SystemExit(f"COOKBOOK_DIR not found: {COOKBOOK}")
     recipe_ymls = sorted(COOKBOOK.glob("*/*/recipe.yaml"))
@@ -90,7 +104,9 @@ def main():
     (OUT / "link_allowlist.json").write_text(json.dumps(sorted(links), indent=1))
     (OUT / "skills" / "VERSIONS.json").write_text(json.dumps(versions, indent=1, sort_keys=True))
     print(f"recipes={len(index)} links={len(links)} skills=3 curated={sorted(curated)}")
+    write_units()
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+    write_units() if "--units-only" in sys.argv else main()
