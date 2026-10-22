@@ -113,10 +113,11 @@ def session2_repair_prompt(base_prompt, failure_codes, previous_plan):
     return (f"{base_prompt}\n\n=== REPAIR ===\nYour previous JSON failed these verification checks: "
             f"{json.dumps(list(failure_codes))}.\nReturn the complete JSON again, fixing ONLY these gaps and keeping "
             f"everything else unchanged. All rules above still apply.\nPREVIOUS_JSON:\n{json.dumps(previous_plan)}")
-JUDGE_SCHEMA = ('{"recipes": [{"recipe_id": str, "problem_fit": "none|partial|strong", '
+JUDGE_SCHEMA = ('{"pairs": [{"recipe_id": str, "area": str, "goal_match": "none|partial|strong", '
                 '"capability_fit": "none|partial|strong", "steps_reusable": bool, "audience_fit": bool, '
-                '"contraindicated": bool, "evidence": {"problem_fit": str, "capability_fit": str, '
-                '"steps_reusable": str, "audience_fit": str, "contraindicated": str}}]}')
+                '"contraindicated": bool, "evidence": {"section_goal": str, "recipe_goal": str, '
+                '"capability_fit": str, "steps_reusable": str, "audience_fit": str, "contraindicated": str}}] '
+                '(exactly one entry per PAIRS item)}')
 
 
 _S1_RULES = ("Write general, non-confidential prompts: no people, no vendors other than Snowflake, no metrics, "
@@ -142,16 +143,29 @@ def session1_prompt(uc, partner, account_signals, never_mention=()):
             f"{signals}\nNEVER_MENTION: {json.dumps(sorted(set(never_mention)))}\nReturn JSON: {S1_SCHEMA}")
 
 
-def recipe_judge_prompt(uc, candidates):
-    """candidates: recipes.candidate_view dicts. The app scores the rubric answers."""
-    return ("Assess how well each candidate build guide fits this use case. For every candidate answer "
-            "the rubric, and for each criterion quote a short verbatim phrase from that candidate's text "
-            "as evidence (empty string if none). problem_fit: does when_to_use describe this use case's "
-            "problem? capability_fit: do how_it_works and steps use the Snowflake features this use case "
-            "needs? steps_reusable: can the steps be followed for this use case with only renaming? "
-            "audience_fit: are the end users / operators the same kind? contraindicated: does "
-            "when_not_to_use describe this use case (quote it)?\n"
-            f"USE_CASE:\n{_header(uc, '')}\nCANDIDATES:\n{json.dumps(candidates, indent=0)}\n"
+def recipe_judge_prompt(uc, candidates, areas, pairs):
+    """candidates: recipes.candidate_view dicts; areas: capability_areas dicts; pairs:
+    [(recipe_id, area)] to assess. The app scores the rubric answers."""
+    area_view = [{"area": a["area"], "capabilities": [capabilities.cap_label(k) for k in a["capabilities"]],
+                  "coco_skills": a.get("coco_skills") or []} for a in areas]
+    return ("The implementation plan for this use case has one section per capability area. For every "
+            "PAIRS item, assess how well that candidate build guide fits what THAT area's section must "
+            "build (not the use case as a whole). Answer the rubric, and for each criterion quote a short "
+            "verbatim phrase from that candidate's text as evidence (empty string if none). "
+            "goal_match: first quote in evidence.section_goal a verbatim phrase from USE_CASE (name or "
+            "internal_summary) or from that area's name/capabilities stating what THIS section must "
+            "deliver; then quote in evidence.recipe_goal a verbatim phrase from that candidate's "
+            "when_to_use stating the same goal. strong ONLY if the candidate's primary outcome is what "
+            "the section must deliver; partial if it only helps around it; none otherwise. A guide whose "
+            "primary outcome is building, testing, evaluating, versioning, deploying or monitoring an "
+            "agent does NOT match a BI / dashboard / reporting, data migration, ingestion or "
+            "transformation section. capability_fit: do how_it_works and steps use this area's capabilities? "
+            "steps_reusable: can the steps be followed for this area with only renaming? audience_fit: "
+            "are the end users / operators of this area the same kind? contraindicated: does "
+            "when_not_to_use describe this use case or this area (quote it)?\n"
+            f"USE_CASE:\n{_header(uc, '')}\nCAPABILITY_AREAS:\n{json.dumps(area_view)}\n"
+            f"CANDIDATES:\n{json.dumps(candidates, indent=0)}\n"
+            f"PAIRS:\n{json.dumps([{'recipe_id': r, 'area': a} for r, a in pairs])}\n"
             f"Return JSON: {JUDGE_SCHEMA}")
 
 

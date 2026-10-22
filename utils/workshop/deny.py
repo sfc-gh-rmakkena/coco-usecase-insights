@@ -148,7 +148,8 @@ def meddpicc_labels(text) -> list:
 
 
 def private_deny_terms(private_context, account="") -> list:
-    ctx = private_context or {}
+    ctx = {k: (_URL_IN_TEXT.sub(" ", v) if isinstance(v, str) else v)
+           for k, v in (private_context or {}).items()}
     out = []
     for k in TEXT_FIELDS:
         v = ctx.get(k)
@@ -165,10 +166,16 @@ def private_deny_terms(private_context, account="") -> list:
     seen, uniq = set(), []
     for t in out:
         t = t.strip()
-        if len(t) >= 2 and t.lower() not in seen:
+        # URL fragments (e.g. "https:") would blank every link and the SQL that cites it.
+        if len(t) >= 2 and t.lower() not in seen and not _URL_FRAGMENT.match(t):
             seen.add(t.lower())
             uniq.append(t)
     return uniq
+
+
+# URLs pasted into private notes are not confidential vocabulary; drop them before extraction.
+_URL_IN_TEXT = re.compile(r"(?:https?://|www\.)\S+", re.I)
+_URL_FRAGMENT = re.compile(r"^(?:https?:?/*|www\.?|\.com|:?//)$", re.I)
 
 
 _BACKSTOP_WORDS = ("recipe", "recipes", "cookbook", "cookbooks", "% match")

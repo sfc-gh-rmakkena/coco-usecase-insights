@@ -95,29 +95,182 @@ def _view():
     return recipes.candidate_view("t/mt", recipes.split_units("t/mt", BODY, META))
 
 
+SEC = "Multi-tenant analytics agent\nServe many tenants from one agent with isolation.\nAI: Agents\nCortex Agents"
+FULL = {"goal_match": "strong", "capability_fit": "strong", "steps_reusable": True,
+        "audience_fit": True, "contraindicated": False,
+        "evidence": {"section_goal": "many tenants from one agent with isolation",
+                     "recipe_goal": "Tenants share tables", "capability_fit": "reads a session attribute",
+                     "steps_reusable": "The policy", "audience_fit": "need isolation",
+                     "contraindicated": ""}}
+
+
 def test_score_computed_by_app_with_evidence_rule_and_penalty():
     v = _view()
-    full = {"problem_fit": "strong", "capability_fit": "strong", "steps_reusable": True,
-            "audience_fit": True, "contraindicated": False,
-            "evidence": {"problem_fit": "Tenants share tables", "capability_fit": "reads a session attribute",
-                         "steps_reusable": "The policy", "audience_fit": "need isolation",
-                         "contraindicated": ""}}
-    assert recipes.score_one(full, v) == 100
-    no_ev = dict(full, evidence=dict(full["evidence"], problem_fit="made up quote not in text"))
-    assert recipes.score_one(no_ev, v) == 60
-    partial = dict(full, problem_fit="partial", capability_fit="partial")
-    assert recipes.score_one(partial, v) == 65
+    full = FULL
+    assert recipes.score_one(full, v, SEC) == 100
+    no_ev = dict(full, evidence=dict(full["evidence"], capability_fit="made up quote not in text"))
+    assert recipes.score_one(no_ev, v, SEC) == 75
     contra = dict(full, contraindicated=True,
                   evidence=dict(full["evidence"], contraindicated="have their own Snowflake identities"))
-    assert recipes.score_one(contra, v) == 100 - recipes.CONTRA_PENALTY
+    assert recipes.score_one(contra, v, SEC) == 100 - recipes.CONTRA_PENALTY
     unquoted = dict(full, contraindicated=True)
-    assert recipes.score_one(unquoted, v) == 100
-    assert recipes.score_one({"problem_fit": "strong"}, v) == 0
+    assert recipes.score_one(unquoted, v, SEC) == 100
+    assert recipes.score_one({"goal_match": "strong"}, v, SEC) == 0
 
 
-def test_select_above_80_max_3():
-    assert recipes.select({"a": 81, "b": 80, "c": 95, "d": 90, "e": 85}) == ["c", "d", "e"]
-    assert recipes.select({"a": 80, "b": 10}) == []
+def test_goal_match_needs_both_verbatim_quotes():
+    v = _view()
+    ev = FULL["evidence"]
+    # section quote not in use case / area text -> goal 0 and capped at 80
+    bad_sec = dict(FULL, evidence=dict(ev, section_goal="build an executive BI dashboard"))
+    assert recipes.score_one(bad_sec, v, SEC) == 55
+    # recipe quote must come from when_to_use (how_it_works text does not count)
+    bad_rec = dict(FULL, evidence=dict(ev, recipe_goal="The agent reads a session attribute"))
+    assert recipes.score_one(bad_rec, v, SEC) == 55
+    assert recipes.score_one(FULL, v, "") == 55  # no section text shown -> no goal evidence
+
+
+def test_goal_match_weights_and_partial_never_selectable():
+    v = _view()
+    assert recipes.GOAL_POINTS == {"strong": 45, "partial": 15}
+    assert recipes.RUBRIC["capability_fit"] == {"strong": 25, "partial": 10}
+    partial = dict(FULL, goal_match="partial")
+    assert recipes.score_one(partial, v, SEC) == 70
+    assert recipes.score_one(dict(partial, capability_fit="partial"), v, SEC) == 55
+    # even with inflated criteria a non-strong goal is capped at the bar (not > 80)
+    for g in ("partial", "none", ""):
+        assert recipes.score_one(dict(FULL, goal_match=g), v, SEC) <= recipes.SELECT_MIN
+    assert recipes.select({("t/mt", "X"): recipes.score_one(partial, v, SEC)}) == []
+
+
+def test_select_ties_by_coverage_then_prefilter_then_id():
+    s = {("a", "X"): 100, ("b", "X"): 100, ("c", "X"): 100}
+    assert recipes.select(s)[0][0] == "a"  # no tiebreak -> id
+    tb = {("a", "X"): (1, 9), ("b", "X"): (2, 1), ("c", "X"): (2, 5)}
+    assert recipes.select(s, tiebreak=tb) == [("c", "X", 100)]
+    tb2 = {("a", "X"): (1, 9), ("b", "X"): (1, 9), ("c", "X"): (1, 3)}
+    assert recipes.select(s, tiebreak=tb2) == [("a", "X", 100)]
+    # score still dominates the tiebreak
+    assert recipes.select({("a", "X"): 95, ("b", "X"): 90}, tiebreak={("b", "X"): (9, 9)})[0][0] == "a"
+
+
+def test_aggregate_requires_two_of_three_above_bar():
+    p = ("a", "X")
+    assert recipes.aggregate([{p: 100}, {p: 100}, {p: 0}], [p]) == {p: 100}
+    assert recipes.aggregate([{p: 100}, {p: 70}, {p: 90}], [p]) == {p: 90}
+    # median > 80 but only one run above the bar is impossible with 3 runs; with values
+    # straddling the bar the 2-of-3 rule still holds
+    assert recipes.aggregate([{p: 100}, {p: 80}, {p: 80}], [p]) == {p: 80}
+    assert recipes.aggregate([{p: 100}, {}, {}], [p]) == {p: 0}
+    # two runs only: both must clear the bar
+    assert recipes.aggregate([{p: 100}, {p: 60}], [p]) == {p: 60}
+    assert recipes.aggregate([{p: 100}, {p: 90}], [p]) == {p: 90}
+    assert recipes.select(recipes.aggregate([{p: 100}, {p: 50}, {p: 80}], [p])) == []
+
+
+def test_area_coverage_and_prefilter_scores():
+    units = recipes.split_units("t/mt", BODY, META)
+    assert recipes.own_caps(units, "t/mt") == {"governance"}
+    assert recipes.area_coverage("t/mt", {"capabilities": ["governance", "cortex_agents"]}, units) == 1
+    ps = recipes.prefilter_scores(UC, [], units, AREAS)
+    assert set(ps) == {("t/mt", AREAS[0]["area"]), ("t/mt", AREAS[1]["area"])} and all(v > 0 for v in ps.values())
+
+
+def test_select_above_80_max_3_one_per_area():
+    s = {("a", "X"): 81, ("b", "X"): 95, ("c", "Y"): 90, ("d", "Z"): 85, ("e", "W"): 99, ("f", "V"): 80}
+    assert recipes.select(s) == [("e", "W", 99), ("b", "X", 95), ("c", "Y", 90)]
+    # one guide per area (highest wins), one area per guide, nothing at or below 80
+    assert recipes.select({("a", "X"): 90, ("b", "X"): 85, ("a", "Y"): 88, ("c", "Y"): 82}) == \
+        [("a", "X", 90), ("c", "Y", 82)]
+    assert recipes.select({("a", "X"): 80, ("b", "Y"): 10}) == []
+
+
+AREAS = [{"area": "Platform: Compliance & Governance", "capabilities": ["governance"], "coco_skills": []},
+         {"area": "AI: Agents", "capabilities": ["cortex_agents"], "coco_skills": []},
+         {"area": "DE: Ingestion", "capabilities": ["snowpipe"], "coco_skills": []}]
+
+
+def test_prefilter_and_pairs_per_area():
+    units = recipes.split_units("t/mt", BODY, META)
+    assert recipes.prefilter(UC, [], units, areas=AREAS) == ["t/mt"]
+    assert recipes.prefilter(UC, [], units, areas=[AREAS[2]]) == []
+    # cortex_agents is only inherited from index metadata, not built by the guide's units
+    assert recipes.candidate_pairs(["t/mt"], AREAS, units) == [("t/mt", "Platform: Compliance & Governance")]
+
+
+def test_eligibility_gate_uses_primary_capability_only():
+    units = recipes.split_units("t/mt", BODY, META)
+    # governance is in the area but not first -> not eligible
+    sec_second = {"area": "BI", "capabilities": ["semantic_views", "governance"]}
+    assert not recipes.eligible("t/mt", sec_second, units)
+    assert recipes.eligible("t/mt", {"area": "G", "capabilities": ["governance", "semantic_views"]}, units)
+    assert not recipes.eligible("t/mt", {"area": "E", "capabilities": []}, units)
+    assert recipes.candidate_pairs(["t/mt"], [sec_second], units) == []
+
+
+def test_bundled_gate_drops_agent_guides_from_bi_and_transformation():
+    units = recipes.load_units()
+    bi = {"area": "Analytics: Business Intelligence", "capabilities": ["semantic_views", "cortex_agents"]}
+    tr = {"area": "DE: Transformation", "capabilities": ["dynamic_tables", "tasks", "snowpark", "dbt"]}
+    assert not recipes.eligible("cortex-agents/scoping-agentic-implementations", bi, units)
+    assert not recipes.eligible("ai-observability/agent-feedback-to-evals", bi, units)
+    assert not recipes.eligible("cortex-agents/agent-ci-cd-with-dbt", tr, units)
+    assert recipes.eligible("semantic-views/mixed-grain-and-verified-queries", bi, units)
+
+
+def test_score_all_per_pair():
+    units = recipes.split_units("t/mt", BODY, META)
+    pairs = [("t/mt", "Platform: Compliance & Governance"), ("t/mt", "AI: Agents")]
+    ans = dict(FULL, recipe_id="t/mt", area=pairs[0][1])
+    ans["evidence"] = dict(FULL["evidence"], section_goal="Compliance & Governance")
+    weak = dict(ans, area=pairs[1][1], goal_match="none")
+    got = recipes.score_all({"pairs": [ans, weak, dict(ans, area="unknown")]}, pairs, units, UC, AREAS)
+    assert got == {pairs[0]: 100, pairs[1]: 55}
+    # the section quote is checked against THAT area's text
+    other = dict(ans, area=pairs[1][1])
+    assert recipes.score_all({"pairs": [other]}, pairs, units, UC, AREAS)[pairs[1]] == 55
+
+
+def test_pack_limited_to_area_units():
+    body = BODY.replace("## Teardown", "### Load files with Snowpipe\n\n```sql\nCREATE PIPE P AUTO_INGEST = TRUE AS COPY INTO "
+                        "COOKBOOK_MT.APP.RAW FROM @S;\n```\n\n## Teardown")
+    units = recipes.split_units("t/mt", body, dict(META, features=["row-access", "snowpipe"]))
+    allow = {"https://docs.snowflake.com/en/user-guide/security-row-intro"}
+    gov = recipes.integration_pack([("t/mt", ["governance"], 90)], units, [], allow)
+    assert set(gov) == {"governance"} and "CREATE PIPE" not in json.dumps(gov)
+    pipe = recipes.packs_by_recipe([("t/mt", ["snowpipe"], 90)], units, [], allow)["t/mt"]
+    assert pipe and all("CREATE PIPE" in e["sql"] for e in pipe)
+
+
+def test_verify_ctx_unused_section_scoped():
+    toks = ["TENANT_POLICY", "GITHUB_SUBJECT", "DEPLOYER_ROLE"]
+    sql = "SELECT TENANT_POLICY, GITHUB_SUBJECT, DEPLOYER_ROLE"
+    spec = {"a": {"tokens": toks, "capabilities": ["governance"]}}
+    right = {"sections": [{"title": "Row access policies for tenants", "sql": sql},
+                          {"title": "Snowpipe ingestion", "sql": "SELECT 1"}]}
+    wrong = {"sections": [{"title": "Row access policies for tenants", "sql": "SELECT 1"},
+                          {"title": "Snowpipe ingestion", "sql": sql}]}
+    assert "ctx_unused:a" not in verify_plan(right, [], set(), packs=spec)
+    assert "ctx_unused:a" in verify_plan(wrong, [], set(), packs=spec)
+    assert "ctx_unused:a" not in verify_plan(wrong, [], set(), packs={"a": toks})  # legacy: whole plan
+
+
+def test_area_sections_match_title_capability_explanation_and_sql():
+    from utils.workshop.verify import area_sections
+    secs = [{"title": "Semantic Layer with Natural Language Analytics",
+             "explanation": "Define a semantic view over the gold tables.", "sql": "SELECT 1"},
+            {"title": "Agent", "explanation": "Cortex Agent on top.", "sql": "CREATE AGENT a"},
+            {"title": "Model", "explanation": "x", "sql": "CREATE SEMANTIC VIEW v TABLES (t)"}]
+    got = area_sections(secs, ["semantic_views", "cortex_agents"])
+    assert [s["title"] for s in got] == ["Semantic Layer with Natural Language Analytics", "Model"]
+    # primary absent everywhere -> falls back to the area's other capabilities
+    assert [s["title"] for s in area_sections(secs[1:2], ["semantic_views", "cortex_agents"])] == ["Agent"]
+    assert area_sections(secs, []) == []
+    toks = ["TENANT_POLICY", "GITHUB_SUBJECT", "DEPLOYER_ROLE"]
+    plan = {"sections": [{"title": "Semantic Layer", "explanation": "semantic view",
+                          "sql": "SELECT TENANT_POLICY, GITHUB_SUBJECT, DEPLOYER_ROLE"}]}
+    assert "ctx_unused:a" not in verify_plan(plan, [], set(), packs={"a": {"tokens": toks,
+                                                                          "capabilities": ["semantic_views"]}})
 
 
 def test_pack_shape_docs_urls_neutral_titles_placeholders():
@@ -168,6 +321,24 @@ def test_key_tokens_exclude_base():
     assert recipes.key_tokens(es, base) == ["AI_REDACT"]
 
 
+def test_private_urls_never_become_deny_terms():
+    from utils.workshop.deny import private_deny_terms
+    from utils.workshop.compliance import scrub
+    t = private_deny_terms({"SE_COMMENTS": "Notes at https://acme.example.com/x and www.acme.example.com. 40% growth."}, "Acme")
+    assert not any(x.lower().startswith(("http", "www")) for x in t)
+    u = "https://docs.snowflake.com/en/sql-reference/sql/create-agent"
+    assert scrub(u, {u}, t) == u
+
+
+def test_tie_prefers_pair_stable_across_runs(monkeypatch):
+    a, b = ("r/a", "Area"), ("r/b", "Area")
+    runs = [{a: 100, b: 100}, {a: 100, b: 100}, {a: 100, b: 70}]
+    scores = recipes.aggregate(runs, [a, b])
+    assert scores[a] == scores[b] == 100
+    tb = {a: (3, 100.0, 1, 1), b: (2, 90.0, 9, 9)}
+    assert recipes.select(scores, tiebreak=tb)[0][0] == "r/a"
+
+
 def test_key_tokens_drop_generic_and_min_hits():
     es = [{"title": "t", "sql": "SELECT METRIC_NAME, DEFAULT_ROLE, TENANT_POLICY, GITHUB_SUBJECT, DEPLOYER_ROLE",
            "source_url": "u"}]
@@ -199,13 +370,15 @@ def test_judge_prompt_and_generator_flow(monkeypatch):
         seen.append(p)
         if "candidate build guide" in p:
             temps.append(temperature)
-            return json.dumps({"recipes": [{"recipe_id": "t/mt", "problem_fit": "strong",
-                                            "capability_fit": "strong", "steps_reusable": True,
-                                            "audience_fit": True, "contraindicated": False,
-                                            "evidence": {"problem_fit": "Tenants share tables",
-                                                         "capability_fit": "session attribute",
-                                                         "steps_reusable": "The policy",
-                                                         "audience_fit": "need isolation"}}]})
+            return json.dumps({"pairs": [{"recipe_id": "t/mt", "area": "Platform: Compliance & Governance",
+                                          "goal_match": "strong",
+                                          "capability_fit": "strong", "steps_reusable": True,
+                                          "audience_fit": True, "contraindicated": False,
+                                          "evidence": {"section_goal": "Tenant isolation",
+                                                       "recipe_goal": "Tenants share tables",
+                                                       "capability_fit": "session attribute",
+                                                       "steps_reusable": "The policy",
+                                                       "audience_fit": "need isolation"}}]})
         if "starter-prompts" in p:
             return json.dumps({"prompts": [{"title": "t", "purpose": "p", "prompt": "do x"}] * 3})
         return json.dumps(s2_payload(sql="SELECT 1"))
@@ -213,9 +386,12 @@ def test_judge_prompt_and_generator_flow(monkeypatch):
     out = generator.build_one(uc, "D", None, {}, llm)
     judge = [p for p in seen if "candidate build guide" in p][0]
     assert v["when_not_to_use"][:20] in judge and temps == [0] * generator.JUDGE_RUNS
+    assert "PAIRS" in judge and "Platform: Compliance & Governance" in judge
+    assert "goal_match" in judge and "area_fit" not in judge and "section_goal" in judge
     s2 = [p for p in seen if "pse-uc-implementation-plan" in p][0]
     assert "<DB>.<SCHEMA>.ORDERS" in s2 and "MATCHED_RECIPE" not in s2
-    assert out["_context_sources"] == [{"recipe_id": "t/mt", "score": 100}]
+    assert out["_context_sources"] == [{"recipe_id": "t/mt", "area": "Platform: Compliance & Governance",
+                                        "score": 100}]
     assert "ctx:selected:1" in out["_degraded_reasons"]
     assert any(r.startswith("s2:verify:ctx_unused:t/mt") for r in out["_degraded_reasons"])
     repair = [p for p in seen if "=== REPAIR ===" in p][0]

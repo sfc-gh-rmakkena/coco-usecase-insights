@@ -77,7 +77,9 @@ def test_reason_codes_parse_truncated_violation():
         if "candidate build guide" in p:
             return json.dumps({"recipe_id": "nope"})
         return '{"steps": [{"title": "Spend is $2M."'
-    r = generator.build_one(UC, "D", None, {}, llm)["_degraded_reasons"]
+    # A use case whose area has guides passing the eligibility gate, so the judge is called.
+    uc = dict(UC, skills=["data-governance"], name="Access governance")
+    r = generator.build_one(uc, "D", None, {}, llm)["_degraded_reasons"]
     assert "s1:parse_empty" in r and "ctx:invalid_shape" in r and not any(x.startswith("recipe:") for x in r) and "s2:truncated" in r
 
     def llm2(p):

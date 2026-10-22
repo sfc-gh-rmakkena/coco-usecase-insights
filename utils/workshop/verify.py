@@ -43,7 +43,8 @@ def attribution_hits(plan, backstop) -> bool:
 
 
 def verify_plan(plan, required_caps, allow, deny=(), packs=None, backstop=()) -> list:
-    """packs: {recipe_id: [distinctive pack tokens]} for the selected guides; backstop: terms
+    """packs: {recipe_id: [distinctive pack tokens]} (whole plan) or {recipe_id: {"tokens": [...],
+    "capabilities": [area caps]}} (checked only in that area's sections); backstop: terms
     that would attribute content to them."""
     plan = _d(plan)
     allow = {str(u).rstrip("/") for u in allow or ()}
@@ -80,9 +81,31 @@ def verify_plan(plan, required_caps, allow, deny=(), packs=None, backstop=()) ->
         if c != "credits":
             chk(False, f"leak:{c}")
     upper = json.dumps(plan).upper()
-    for rid, toks in (packs or {}).items():
+    for rid, spec in (packs or {}).items():
+        toks, text = spec, upper
+        if isinstance(spec, dict):
+            # Scoped to the plan section(s) of the guide's capability area.
+            toks, text = spec.get("tokens") or [], json.dumps(area_sections(secs, spec.get("capabilities"))).upper()
         if toks:
-            hits = sum(bool(re.search(r"(?<![\w])" + re.escape(t) + r"(?![\w])", upper)) for t in toks)
+            hits = sum(bool(re.search(r"(?<![\w])" + re.escape(t) + r"(?![\w])", text)) for t in toks)
             chk(hits >= min(CTX_MIN_HITS, len(toks)), f"ctx_unused:{rid}")
     chk(not attribution_hits(plan, backstop), "attribution")
     return fails
+
+
+_SECTION_FIELDS = ("title", "capability", "explanation", "sql")
+
+
+def _names(sec, k) -> bool:
+    return any(capabilities.cap_matches(k, sec.get(f)) for f in _SECTION_FIELDS)
+
+
+def area_sections(sections, caps) -> list:
+    """Plan sections for a capability area: title, capability, explanation or SQL names the
+    area's primary (first) capability; if none does, any of its capabilities."""
+    caps = list(caps or ())
+    secs = [s for s in sections or () if isinstance(s, dict)]
+    if not caps:
+        return []
+    hit = [s for s in secs if _names(s, caps[0])]
+    return hit or [s for s in secs if any(_names(s, k) for k in caps[1:])]

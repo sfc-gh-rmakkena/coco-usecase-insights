@@ -213,26 +213,42 @@ def _accepts_temperature(llm) -> bool:
 
 
 def _context_sources(uc, private_context, llm, deny, reasons):
-    """Prefilter + rubric judge (temperature 0) + selection. Returns [(recipe_id, score)]."""
+    """Per capability area: prefilter + rubric judge over (guide, area) pairs (temperature 0,
+    JUDGE_RUNS runs, median per pair) + selection. Returns [(recipe_id, area_caps, score)]."""
     units = recipes.load_units()
     req = prompts.required_capabilities(uc, private_context)
-    cands = recipes.prefilter(uc, req, units)
-    if not cands:
+    areas = prompts.capability_areas(uc, private_context)
+    cands = recipes.prefilter(uc, req, units, areas=areas)
+    pairs = recipes.candidate_pairs(cands, areas, units)
+    if not pairs:
         return []
-    views = [recipes.candidate_view(rid, units) for rid in cands]
+    views = [recipes.candidate_view(rid, units) for rid in cands if any(r == rid for r, _ in pairs)]
     t0 = (lambda p: llm(p, temperature=0)) if _accepts_temperature(llm) else llm
+    prompt = prompts.recipe_judge_prompt(uc, views, areas, pairs)
     runs = []
     for _ in range(JUDGE_RUNS):
-        judged, why, _ = _call_json(t0, prompts.recipe_judge_prompt(uc, views),
-                                    lambda d: isinstance(d.get("recipes"), list), deny, "ctx")
+        judged, why, _ = _call_json(t0, prompt, lambda d: isinstance(d.get("pairs"), list), deny, "ctx")
         reasons += [r for r in why if r not in reasons]
         if judged:
-            runs.append(recipes.score_all(judged, cands, units))
+            runs.append(recipes.score_all(judged, pairs, units, uc, areas))
     if not runs:
         return []
-    # Median across runs: a single run flipping one rubric item cannot change selection.
-    scores = {rid: sorted(r.get(rid, 0) for r in runs)[(len(runs) - 1) // 2] for rid in cands}
-    return [(rid, scores[rid]) for rid in recipes.select(scores)]
+    # Median across runs, and above the bar in at least STABLE_MIN_RUNS runs: a single run
+    # flipping one rubric item cannot change selection.
+    scores = recipes.aggregate(runs, pairs)
+    by_area = {a["area"]: a for a in areas}
+    pre = recipes.prefilter_scores(uc, req, units, areas)
+    # Ties: the pair that cleared the bar in more runs (then higher mean) wins, so the choice
+    # does not flip between executions; then area coverage, prefilter score, id.
+    tiebreak = {p: (sum(r.get(p, 0) > recipes.SELECT_MIN for r in runs),
+                    sum(r.get(p, 0) for r in runs) / len(runs),
+                    recipes.area_coverage(p[0], by_area[p[1]], units), pre.get(p, 0)) for p in pairs}
+    return [(rid, by_area[area]["capabilities"], s) for rid, area, s in recipes.select(scores, tiebreak=tiebreak)]
+
+
+def _area_name(uc, private_context, caps):
+    return next((a["area"] for a in prompts.capability_areas(uc, private_context)
+                 if a["capabilities"] == list(caps)), "")
 
 
 def _repair_codes(fails, packs):
@@ -241,7 +257,8 @@ def _repair_codes(fails, packs):
     for f in fails:
         if f.startswith("ctx_unused:"):
             titles = [e["title"] for e in packs.get(f.split(":", 1)[1], [])]
-            out.append("grounding_unused: use these GROUNDING snippets: " + "; ".join(titles))
+            out.append("grounding_unused: use these GROUNDING snippets in their capability's section: "
+                       + "; ".join(titles))
         else:
             out.append(f)
     return out
@@ -351,14 +368,15 @@ def build_one(uc, partner, account_signals, private_context, llm, deny=()) -> di
         session1 = _fallback_session1(uc)
 
     sources = _context_sources(uc, private_context, llm, deny, reasons)
-    selected = [rid for rid, _ in sources]
+    selected = [(rid, caps) for rid, caps, _ in sources]
     units = recipes.load_units()
     all_caps = prompts.required_capabilities(uc, private_context)
     pack = _drop_invented(recipes.integration_pack(selected, units, all_caps, allow))
     by_recipe = {rid: _drop_invented({"_": es})["_"]
                  for rid, es in recipes.packs_by_recipe(selected, units, all_caps, allow).items()}
     base_g = capabilities.grounding_for(all_caps + capabilities.OPTIONAL)
-    tokens = {rid: recipes.key_tokens(es, base_g) for rid, es in by_recipe.items()}
+    tokens = {rid: {"tokens": recipes.key_tokens(by_recipe[rid], base_g), "capabilities": caps}
+              for rid, caps in selected}
     if selected:
         _add(reasons, f"ctx:selected:{len(selected)}")
     backstop = recipe_backstop_terms()
@@ -394,7 +412,9 @@ def build_one(uc, partner, account_signals, private_context, llm, deny=()) -> di
     degraded = degraded or _sql_sections(plan) < MIN_SQL_SECTIONS
     brief = _brief(plan, uc, allow, deny)
     return {"_degraded": degraded, "_degraded_reasons": reasons,
-            "_context_sources": [{"recipe_id": rid, "score": s} for rid, s in sources], "uc_id": uc["uc_id"], "account": uc["account"], "name": uc["name"], "skills": uc["skills"],
+            "_context_sources": [{"recipe_id": rid, "area": _area_name(uc, private_context, caps), "score": s}
+                                 for rid, caps, s in sources],
+            "uc_id": uc["uc_id"], "account": uc["account"], "name": uc["name"], "skills": uc["skills"],
             "brief": brief, "session1": session1, "session2": {"plan": plan}}
 
 

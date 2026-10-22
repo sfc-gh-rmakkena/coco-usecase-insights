@@ -1,8 +1,9 @@
 """Bundled build guides -> grounding content (internal only; never named in output).
 
 Units are cut at bundle time (scripts/bundle_workshop_assets.py) from each guide's headings.
-At run time: deterministic prefilter -> rubric judge (LLM answers, app scores) -> select ->
-integration_pack, which turns the selected guides' units into ordinary grounding snippets.
+At run time, per capability area of the use case: deterministic prefilter -> rubric judge over
+(guide, area) pairs (LLM answers, app scores) -> select (one guide per area) -> integration_pack,
+which turns the selected guide's units for that area into ordinary grounding snippets.
 """
 import functools
 import hashlib
@@ -164,19 +165,60 @@ def _by_recipe(units) -> dict:
     return out
 
 
-def prefilter(uc, required_caps, units, k=PREFILTER_K) -> list:
-    """Top-k guide ids by capability, skill and when-to-use keyword overlap (deterministic)."""
-    req, skills = set(required_caps or ()), set(uc.get("skills") or ())
+def _areas(uc, required_caps, areas):
+    """Capability areas ({area, capabilities, coco_skills}); one catch-all area when none given."""
+    if areas:
+        return [a for a in areas if a.get("capabilities")]
+    return [{"area": "all", "capabilities": list(required_caps or ()), "coco_skills": list(uc.get("skills") or ())}]
+
+
+def prefilter_scores(uc, required_caps, units, areas=None) -> dict:
+    """{(recipe_id, area): overlap score} from capabilities, skills and when-to-use keywords
+    (deterministic); only pairs with a capability in common."""
+    areas = _areas(uc, required_caps, areas)
+    skills = set(uc.get("skills") or ())
     words = _words(f"{uc.get('name', '')} {uc.get('sanitized_desc', '')}")
-    ranked = []
+    out = {}
     for rid, us in _by_recipe(units).items():
         caps = {c for u in us for c in u["capabilities"]}
         rskills = set(_meta(rid).get("related_skills") or ())
-        when = " ".join(u["text"] for u in us if u["kind"] == "when_to_use")
-        score = 3 * len(caps & req) + 2 * len(rskills & skills) + len(words & _words(when))
-        if score > 0:
-            ranked.append((-score, rid))
-    return [rid for _, rid in sorted(ranked)[:k]]
+        kw = len(words & _words(" ".join(u["text"] for u in us if u["kind"] == "when_to_use")))
+        for a in areas:
+            hit = caps & set(a["capabilities"])
+            if hit:
+                out[(rid, a["area"])] = (3 * len(hit) + 2 * len(rskills & (set(a.get("coco_skills") or ()) | skills))
+                                         + kw)
+    return out
+
+
+def prefilter(uc, required_caps, units, k=PREFILTER_K, areas=None) -> list:
+    """Top-k guide ids overall by their best per-area prefilter score."""
+    best = {}
+    for (rid, _), s in prefilter_scores(uc, required_caps, units, areas).items():
+        best[rid] = max(best.get(rid, 0), s)
+    return [rid for _, rid in sorted((-s, rid) for rid, s in best.items() if s > 0)[:k]]
+
+
+def own_caps(units, rid) -> set:
+    """Capabilities a guide's units build themselves (heading + SQL), not inherited from its
+    index metadata."""
+    return {c for u in units if u["recipe_id"] == rid for c in _caps_in(f"{u['heading']}\n{u['sql']}")}
+
+
+def eligible(rid, area, units) -> bool:
+    """Gate: the guide's own units must cover the area's PRIMARY (first) capability."""
+    caps = list(area.get("capabilities") or ())
+    return bool(caps) and caps[0] in own_caps(units, rid)
+
+
+def candidate_pairs(cands, areas, units) -> list:
+    """(recipe_id, area name) for each candidate that passes the eligibility gate for the area."""
+    return [(rid, a["area"]) for a in areas for rid in cands if eligible(rid, a, units)]
+
+
+def area_coverage(rid, area, units) -> int:
+    """How many of the area's capabilities the guide's own units cover (tie-break)."""
+    return len(own_caps(units, rid) & set(area.get("capabilities") or ()))
 
 
 def candidate_view(rid, units) -> dict:
@@ -190,12 +232,15 @@ def candidate_view(rid, units) -> dict:
             "steps": [u["heading"] for u in us if u["kind"] in ("step", "quickstart")]}
 
 
-# Rubric: criterion -> {level: points}; booleans use True.
-RUBRIC = {"problem_fit": {"strong": 40, "partial": 20},
-          "capability_fit": {"strong": 30, "partial": 15},
+# Rubric (per recipe x capability area): criterion -> {level: points}; booleans use True.
+# goal_match is scored separately (two quotes); the others need one quote from the guide.
+GOAL_POINTS = {"strong": 45, "partial": 15}
+RUBRIC = {"capability_fit": {"strong": 25, "partial": 10},
           "steps_reusable": {True: 20},
           "audience_fit": {True: 10}}
 CONTRA_PENALTY = 50
+# Without a strong goal match a pair can never pass SELECT_MIN.
+NON_STRONG_CAP = SELECT_MIN
 
 
 def _norm(s):
@@ -214,36 +259,81 @@ def _level(v):
     return True if s in ("true", "yes") else s
 
 
-def score_one(answer, view) -> int:
-    """0-100 from the judge's rubric answers. A criterion only scores when its evidence quote
-    is found verbatim in the guide text shown to the judge; an evidenced contraindication
-    (quoted from when-not-to-use) subtracts CONTRA_PENALTY."""
+def section_text(uc, area) -> str:
+    """What the judge is shown about one section's goal: use case name/summary + area."""
+    caps = [capabilities.cap_label(k) for k in (area or {}).get("capabilities") or ()]
+    return "\n".join([str(uc.get("name") or ""), str(uc.get("sanitized_desc") or ""),
+                      str((area or {}).get("area") or ""), ", ".join(caps)])
+
+
+def score_one(answer, view, section="") -> int:
+    """0-100 from the judge's rubric answers. goal_match scores only when BOTH quotes are
+    verbatim: section_goal in `section` (use case + area text) and recipe_goal in the guide's
+    when-to-use. Other criteria need their quote verbatim in the guide text. An evidenced
+    contraindication subtracts CONTRA_PENALTY. Without a strong, evidenced goal match the
+    total is capped at NON_STRONG_CAP (never selectable)."""
     ev = answer.get("evidence") if isinstance(answer.get("evidence"), dict) else {}
     source = "\n".join([view["when_to_use"], view["when_not_to_use"], view["how_it_works"]]
                        + list(view["steps"]))
-    total = 0
+    goal = _level(answer.get("goal_match"))
+    goal_ok = _evidenced(ev.get("section_goal"), section) and _evidenced(ev.get("recipe_goal"), view["when_to_use"])
+    total = GOAL_POINTS.get(goal, 0) if goal_ok else 0
     for crit, pts in RUBRIC.items():
         if _evidenced(ev.get(crit), source):
             total += pts.get(_level(answer.get(crit)), 0)
     if _level(answer.get("contraindicated")) is True and _evidenced(ev.get("contraindicated"),
                                                                    view["when_not_to_use"]):
         total -= CONTRA_PENALTY
+    if not (goal_ok and goal == "strong"):
+        total = min(total, NON_STRONG_CAP)
     return max(0, min(100, total))
 
 
-def score_all(judged, candidates, units) -> dict:
-    views = {rid: candidate_view(rid, units) for rid in candidates}
-    out = {rid: 0 for rid in candidates}
-    rows = judged.get("recipes") if isinstance(judged, dict) else None
+def score_all(judged, pairs, units, uc=None, areas=None) -> dict:
+    """pairs: [(recipe_id, area)] -> {(recipe_id, area): score}; unanswered pairs score 0."""
+    views = {rid: candidate_view(rid, units) for rid in {r for r, _ in pairs}}
+    by_area = {a["area"]: a for a in areas or ()}
+    out = {tuple(p): 0 for p in pairs}
+    rows = judged.get("pairs") if isinstance(judged, dict) else None
     for a in rows if isinstance(rows, list) else []:
-        if isinstance(a, dict) and a.get("recipe_id") in views:
-            out[a["recipe_id"]] = score_one(a, views[a["recipe_id"]])
+        key = (a.get("recipe_id"), a.get("area")) if isinstance(a, dict) else None
+        if key in out:
+            sec = section_text(uc or {}, by_area.get(key[1], {"area": key[1]}))
+            out[key] = score_one(a, views[key[0]], sec)
     return out
 
 
-def select(scores) -> list:
-    ranked = sorted(scores.items(), key=lambda kv: (-kv[1], kv[0]))
-    return [rid for rid, s in ranked if s > SELECT_MIN][:SELECT_MAX]
+STABLE_MIN_RUNS = 2
+
+
+def aggregate(runs, pairs) -> dict:
+    """Median score per pair across judge runs; a pair that is above SELECT_MIN in fewer than
+    STABLE_MIN_RUNS runs is capped at SELECT_MIN (not selectable)."""
+    out = {}
+    for p in pairs:
+        vals = sorted(r.get(p, 0) for r in runs)
+        med = vals[(len(vals) - 1) // 2] if vals else 0
+        if sum(v > SELECT_MIN for v in vals) < min(STABLE_MIN_RUNS, len(vals)):
+            med = min(med, SELECT_MIN)
+        out[p] = med
+    return out
+
+
+def select(scores, max_total=SELECT_MAX, tiebreak=None) -> list:
+    """{(recipe_id, area): score} -> [(recipe_id, area, score)]: above SELECT_MIN, highest
+    first; at most one guide per area, each guide used once, at most max_total. Ties break by
+    tiebreak[pair] (higher first; e.g. (area coverage, prefilter score)), then by id."""
+    tb = tiebreak or {}
+
+    def key(kv):
+        return (-kv[1], tuple(-x for x in tb.get(kv[0], ())), kv[0])
+    out, areas, rids = [], set(), set()
+    for (rid, area), s in sorted(scores.items(), key=key):
+        if s > SELECT_MIN and area not in areas and rid not in rids and len(out) < max_total:
+            out.append((rid, area, s))
+            areas.add(area)
+            rids.add(rid)
+    return out
 
 
 # ---------------------------------------------------------------- integration pack
@@ -281,16 +371,23 @@ def _docs_url(unit, cap, allow):
     return next((d["url"] for d in docs if "docs.snowflake.com" in d["url"]), "")
 
 
-def _pack_recipe(rid, units, required_caps, allow):
-    req = list(required_caps or ())
+def _unit_caps(u, rcaps):
+    """A unit's own capabilities (heading + SQL); a unit naming none inherits the guide's."""
+    own = _caps_in(f"{u['heading']}\n{u['sql']}")
+    return own or [c for c in u["capabilities"] if c in rcaps]
+
+
+def _pack_recipe(rid, units, area_caps, allow):
+    """Entries from units of `rid` that map to `area_caps` (pack keys are only area capabilities)."""
+    req = list(area_caps or ())
     out, used = [], 0
-    us = [u for u in units if u["recipe_id"] == rid and u["kind"] in PACK_KINDS and u["sql"]]
     rcaps = {c for u in units if u["recipe_id"] == rid for c in u["capabilities"]}
-    fallback = next((c for c in req if c in rcaps), req[0] if req else "")
+    us = [u for u in units if u["recipe_id"] == rid and u["kind"] in PACK_KINDS and u["sql"]
+          and set(_unit_caps(u, rcaps)) & set(req)]
     for u in us:
-        cap = next((c for c in u["capabilities"] if c in req), fallback)
+        cap = next(c for c in _unit_caps(u, rcaps) if c in req)
         sql = neutral_sql(u["sql"])
-        if not cap or not sql or used + len(sql) > PACK_CHARS:
+        if not sql or used + len(sql) > PACK_CHARS:
             continue
         url = _docs_url(u, cap, allow)
         if not url:
@@ -307,17 +404,29 @@ def _allow():
     return {u.rstrip("/") for u in link_allowlist()}
 
 
-def packs_by_recipe(selected, units, required_caps, allow=None) -> dict:
+def _sel(selected, required_caps):
+    """Normalize selections to (recipe_id, area_caps): (rid, caps[, score]) or a bare rid
+    (all required capabilities)."""
+    for s in selected:
+        if isinstance(s, str):
+            yield s, list(required_caps or ())
+        else:
+            yield s[0], list(s[1])
+
+
+def packs_by_recipe(selected, units, required_caps=(), allow=None) -> dict:
     allow = _allow() if allow is None else {u.rstrip("/") for u in allow}
-    return {rid: [e for _, e in _pack_recipe(rid, units, required_caps, allow)] for rid in selected}
+    return {rid: [e for _, e in _pack_recipe(rid, units, caps, allow)]
+            for rid, caps in _sel(selected, required_caps)}
 
 
-def integration_pack(selected, units, required_caps, allow=None) -> dict:
-    """capability -> [grounding sql_snippet entries {title, sql, source_url}]."""
+def integration_pack(selected, units, required_caps=(), allow=None) -> dict:
+    """capability -> [grounding sql_snippet entries {title, sql, source_url}]; each selected
+    guide contributes only to its own area's capabilities."""
     allow = _allow() if allow is None else {u.rstrip("/") for u in allow}
     out = {}
-    for rid in selected:
-        for cap, e in _pack_recipe(rid, units, required_caps, allow):
+    for rid, caps in _sel(selected, required_caps):
+        for cap, e in _pack_recipe(rid, units, caps, allow):
             out.setdefault(cap, []).append(e)
     return out
 

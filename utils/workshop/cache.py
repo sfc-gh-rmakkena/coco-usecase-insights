@@ -81,7 +81,7 @@ def insert(conn, rows: list, asset_version: str = ""):
 
 def audit(conn, rows: list):
     """rows: (partner, uc_id, path, cache_hit, reasons_str[, context_sources]). context_sources
-    ([{recipe_id, score}]) is an internal record only; the page never reads it."""
+    ([{recipe_id, area, score}]) is an internal record only; the page never reads it."""
     if not rows:
         return
     sel = " UNION ALL ".join(
