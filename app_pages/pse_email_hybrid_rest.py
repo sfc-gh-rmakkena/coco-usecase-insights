@@ -865,7 +865,7 @@ def _build_gap_table_rows(conn, non_coco_df: pd.DataFrame, partner: str = "", ca
     return by_region
 
 
-_COCO_INUSE_PIPELINE_VERSION = 1
+_COCO_INUSE_PIPELINE_VERSION = 2
 _COCO_INUSE_PIPELINE_TAG = "rest_coco_inuse"
 _COCO_INUSE_MAX_TOKENS = 600
 _COCO_INUSE_FALLBACK = {"insight": "", "skills": []}

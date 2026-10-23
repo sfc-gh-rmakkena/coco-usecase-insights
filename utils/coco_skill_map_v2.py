@@ -1288,8 +1288,10 @@ def prioritize_aim_skill(skills: list) -> list:
 
 
 # ── CoCo In-Use Use Cases ────────────────────────────────────────────────────
-MAX_INUSE_SKILLS = 4
-_INUSE_CANDIDATE_LIMIT = 12
+MAX_INUSE_SKILLS = 5
+# Every workload-relevant skill goes to the LLM judge; this is only a
+# safety bound for accounts with an unusual number of custom skills.
+_INUSE_CANDIDATE_LIMIT = 40
 
 
 _INUSE_NAME_ALIASES = {"snowflake-migration:migration": "snowflake-migration"}
@@ -1355,7 +1357,8 @@ def build_coco_inuse_prompt(name: str, desc: str, se_comments: str, partner_comm
         "- \"insight\": EXACTLY 1-2 short sentences suitable for sharing externally with a partner: the "
         "business goal of the use case and how CoCo is being applied to it. No preamble, no label.\n"
         "- \"skills\": a JSON array containing ONLY names copied exactly from the CoCo skills list "
-        f"below whose purpose clearly matches the work described in this specific use case (at most {MAX_INUSE_SKILLS}). "
+        f"below whose purpose clearly matches the work described in this specific use case (at most {MAX_INUSE_SKILLS}), "
+        "ordered most relevant first. "
         "Judge each skill by what its name says it does against the use case name and description; "
         "exclude skills that are only generally useful, belong to an unrelated project, or are a "
         "loose topical match. Prefer fewer skills, or an empty array, over a doubtful one. "
