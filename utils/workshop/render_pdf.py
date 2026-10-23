@@ -161,10 +161,17 @@ def scope_note_flowable(styles):
 def workshop_pdf_flowables(workshops, styles, partner: str = "") -> list:
     out = []
     h2, body = styles["heading2"], styles["body"]
+    prev_reg = None
     for w in workshops or []:
         w = _dict(w)
+        reg = w.get("region") or ""
         out.append(PageBreak())
-        out.append(Paragraph(f"{_e(w.get('account'))} &middot; {_e(w.get('name'))}", h2))
+        if reg and reg != prev_reg:
+            # Region section heading (plans arrive sorted by region).
+            out.append(Paragraph(f"{_e(reg)} use cases", styles.get("heading1", h2)))
+        prev_reg = reg
+        tag = f"[{_e(reg)}] " if reg else ""
+        out.append(Paragraph(f"{tag}{_e(w.get('account'))} &middot; {_e(w.get('name'))}", h2))
         out.append(Paragraph(_e(w.get("brief")), body))
         out.append(Paragraph(f"<b>Proposed CoCo skills:</b> {_e(', '.join(map(str, _list(w.get('skills')))))}", body))
         out.append(Spacer(1, 8))

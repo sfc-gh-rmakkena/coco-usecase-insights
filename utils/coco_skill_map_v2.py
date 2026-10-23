@@ -134,6 +134,13 @@ def coco_skill_catalog_prompt_block() -> str:
 
 _COCO_SKILL_CATALOG_BLOCK = coco_skill_catalog_prompt_block()
 
+# Shared partner-safe redaction list -- used verbatim by every partner-facing
+# prompt below so the sanitization rules can never drift between them.
+PARTNER_SAFE_REDACTION_RULES = (
+    "dollar amounts, EACV, competitor names, internal people/team names, deal-risk commentary, "
+    "and anything else sensitive, even if it appears in the SE or partner notes below."
+)
+
 
 def build_summary_prompt(desc: str, se_comments: str, partner_comments: str = "", name: str = "") -> str:
     """Build a small, dedicated prompt for ONLY the partner-facing 1-2
@@ -164,9 +171,7 @@ def build_summary_prompt(desc: str, se_comments: str, partner_comments: str = ""
     return (
         "You are helping a Partner SE prep a partner-facing update for one Salesforce use case.\n\n"
         "Write EXACTLY 1-2 short sentences suitable for sharing externally with a partner, focused only "
-        "on the business problem or goal. Remove dollar amounts, EACV, competitor names, internal "
-        "people/team names, deal-risk commentary, and anything else sensitive, even if it appears in the "
-        "SE or partner notes below.\n\n"
+        "on the business problem or goal. Remove " + PARTNER_SAFE_REDACTION_RULES + "\n\n"
         "Return ONLY the sentence(s) themselves -- no preamble, no quotes, no markdown, no JSON, no "
         "label like \"Summary:\".\n\n" + context
     )
@@ -339,9 +344,8 @@ def build_ai_skill_prompt(desc: str, se_comments: str, deterministic_skills: lis
         "that concretely supports a "
         "skill's actual scope, leave that skill's reason/evidence empty (for deterministic_skill_context) "
         "or omit it entirely (for additional_skills) -- do not force matches just to fill the quota.\n\n"
-        "ALL text fields must be partner-safe: remove dollar amounts, EACV, competitor names, internal "
-        "people/team names, deal-risk commentary, and anything else sensitive, even if it appears in the "
-        "SE or partner notes below. No markdown, no preamble, JSON only.\n\n" + context
+        "ALL text fields must be partner-safe: remove " + PARTNER_SAFE_REDACTION_RULES
+        + " No markdown, no preamble, JSON only.\n\n" + context
     )
 
 
@@ -1281,3 +1285,105 @@ def prioritize_aim_skill(skills: list) -> list:
     if AIM_SKILL_NAME in skills:
         skills = [AIM_SKILL_NAME] + [s for s in skills if s != AIM_SKILL_NAME]
     return skills
+
+
+# ── CoCo In-Use Use Cases ────────────────────────────────────────────────────
+MAX_INUSE_SKILLS = 4
+_INUSE_CANDIDATE_LIMIT = 12
+
+
+_INUSE_NAME_ALIASES = {"snowflake-migration:migration": "snowflake-migration"}
+
+
+def bundled_inuse_skills(raw) -> list:
+    """Skill names from the confidence query's RELEVANT_SKILL_NAMES: the
+    bundled and custom ("u:"-prefixed) skills that matched the use case's
+    scored workload, already ranked by request count. Normalized,
+    deduped, order-preserving, capped at _INUSE_CANDIDATE_LIMIT."""
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        items = re.split(r"[,\n]", raw.strip())
+    else:
+        try:
+            items = list(raw)
+        except TypeError:
+            return []
+    bundled, custom = [], []
+    for s in items:
+        name = str(s or "").strip().strip("[]").strip().strip('"\'').lstrip("$").lower()
+        is_custom = name.startswith("u:")
+        if is_custom:
+            name = name[2:].strip()
+        name = _INUSE_NAME_ALIASES.get(name, name)
+        if not name or name == "nan":
+            continue
+        if name in _INUSE_NAME_ALIASES.values() or is_catalog_skill(name):
+            bucket = bundled
+        elif is_custom:
+            # Custom skill that matched the workload's custom-skill rules.
+            bucket = custom
+        else:
+            # Unprefixed non-catalog name: only matched a loose bundled pattern.
+            continue
+        if name not in bundled and name not in custom:
+            bucket.append(name)
+    # Bundled (incl. AIM) first so custom skills can't crowd them out.
+    out = bundled + custom
+    return out[:_INUSE_CANDIDATE_LIMIT]
+
+
+def build_coco_inuse_prompt(name: str, desc: str, se_comments: str, partner_comments: str,
+                            account_skills: list, workload_category: str = "") -> str:
+    """Prompt for one CoCo-attached use case: a partner-safe insight on the
+    business goal + how CoCo is being applied, and the subset of the
+    account's bundled CoCo skills consistent with THIS use case. Same
+    partner-safe redaction rules as build_summary_prompt/build_ai_skill_prompt
+    (PARTNER_SAFE_REDACTION_RULES); parse with parse_coco_inuse_response."""
+    skills_str = ", ".join(account_skills) if account_skills else "(none)"
+    context = f"Use case name:\n{name or ''}\n\nUse case description:\n{desc or ''}"
+    if se_comments:
+        context += f"\n\nInternal SE notes (context only -- may contain sensitive detail):\n{se_comments}"
+    if partner_comments:
+        context += f"\n\nPartner notes (context only -- may contain sensitive detail):\n{partner_comments}"
+    context += (f"\n\nAccount workload category: {workload_category or 'Unclassified'}"
+                f"\nCoCo skills used on this account for this workload: [{skills_str}]")
+    return (
+        "You are helping a Partner SE prep a partner-facing update for one Salesforce use case where "
+        "Cortex Code (CoCo) is already in use.\n\n"
+        "Return ONLY a JSON object with exactly two keys:\n"
+        "- \"insight\": EXACTLY 1-2 short sentences suitable for sharing externally with a partner: the "
+        "business goal of the use case and how CoCo is being applied to it. No preamble, no label.\n"
+        "- \"skills\": a JSON array containing ONLY names copied exactly from the CoCo skills list "
+        f"below whose purpose clearly matches the work described in this specific use case (at most {MAX_INUSE_SKILLS}). "
+        "Judge each skill by what its name says it does against the use case name and description; "
+        "exclude skills that are only generally useful, belong to an unrelated project, or are a "
+        "loose topical match. Prefer fewer skills, or an empty array, over a doubtful one. "
+        "Never invent or add a skill that is not in that list.\n\n"
+        "The insight must be partner-safe: remove " + PARTNER_SAFE_REDACTION_RULES
+        + " Do not include any metrics, numbers, credits, tokens, user counts, usage volumes, confidence "
+        "levels, or internal attribution/tracking terms. No markdown, no preamble, JSON only.\n\n" + context
+    )
+
+
+def parse_coco_inuse_response(raw_text: str, allowed_skills: list) -> dict:
+    """{"insight": str, "skills": [...]} -- skills filtered to allowed_skills
+    (case-insensitive, deduped, capped at MAX_INUSE_SKILLS). Any parse
+    failure degrades to {"insight": "", "skills": []}, never raises."""
+    allowed = {s.lower(): s for s in (allowed_skills or [])}
+    try:
+        m = re.search(r"\{.*\}", raw_text or "", re.S)
+        obj = json.loads(m.group(0)) if m else {}
+    except (json.JSONDecodeError, TypeError):
+        obj = {}
+    if not isinstance(obj, dict):
+        obj = {}
+    insight = obj.get("insight", "")
+    insight = insight.strip() if isinstance(insight, str) else ""
+    skills = []
+    raw_skills = obj.get("skills", [])
+    for s in raw_skills if isinstance(raw_skills, list) else []:
+        key = str(s or "").strip().lower()
+        if key in allowed and allowed[key] not in skills:
+            skills.append(allowed[key])
+    return {"insight": insight, "skills": skills[:MAX_INUSE_SKILLS]}

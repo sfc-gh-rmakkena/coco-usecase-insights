@@ -4,6 +4,8 @@ Input is the structured plan["architecture"] dict:
   {"sources": [str], "layers": [{"name", "capability", "detail"}], "consumers": [str]}
 Output is plain text (renderers escape it), every line <= MAX_WIDTH columns.
 """
+import textwrap
+
 MAX_WIDTH = 100
 _BOX = 80  # inner width of the medallion boxes
 _PAD = "        "
@@ -22,6 +24,18 @@ def _s(v):
 
 def _cut(line, n=MAX_WIDTH):
     return line if len(line) <= n else line[:n - 1] + "…"
+
+
+def _wrap(line, indent, n=MAX_WIDTH):
+    """Wrap a long line instead of truncating; continuation lines start with `indent`."""
+    if len(line) <= n:
+        return [line]
+    lead = len(line) - len(line.lstrip())
+    first, rest = line[:lead], line[lead:]
+    out = textwrap.wrap(rest, n - lead, break_on_hyphens=False) or [""]
+    head = first + out[0]
+    tail = textwrap.wrap(" ".join(out[1:]), n - len(indent), break_on_hyphens=False)
+    return [head] + [indent + t for t in tail]
 
 
 def _layers(arch):
@@ -45,12 +59,17 @@ def _label(ls, default=""):
 
 
 def _box(title, text):
-    body = _cut(f" {title:<7} {text}", _BOX)
-    return [f"┌{'─' * _BOX}┐", f"│{body:<{_BOX}}│", f"└{'─' * _BOX}┘"]
+    head = f" {title:<7} "
+    pad = " " * len(head)
+    body = textwrap.wrap(text, _BOX - len(head) - 1, break_on_hyphens=False) or [""]
+    rows = [f"│{(head if i == 0 else pad) + b:<{_BOX}}│" for i, b in enumerate(body)]
+    return [f"┌{'─' * _BOX}┐", *rows, f"└{'─' * _BOX}┘"]
 
 
 def _arrow(label):
-    return [_cut(f"{_PAD}│  {label}") if label else f"{_PAD}│", f"{_PAD}▼"]
+    if not label:
+        return [f"{_PAD}│", f"{_PAD}▼"]
+    return [*_wrap(f"{_PAD}│  {label}", f"{_PAD}│  "), f"{_PAD}▼"]
 
 
 def layer_bullets(arch) -> list:
@@ -64,7 +83,7 @@ def render(arch) -> str:
     arch = arch if isinstance(arch, dict) else {}
     layers = _layers(arch)
     sources = [_s(x) for x in arch.get("sources") or [] if _s(x)] or ["Source systems"]
-    lines = [_cut(x) for x in sources]
+    lines = [w for x in sources for w in _wrap(x, "  ")]
     ing = _by(layers, "ingestion")
     ing_detail = "; ".join(l["detail"] for l in ing if l["detail"])
     lines += _arrow(_label(ing, "Ingestion") + (f"  ({ing_detail})" if ing_detail else ""))
@@ -78,7 +97,7 @@ def render(arch) -> str:
             detail = f"{_label(ls)} - {detail}"
         lines += _box(title, detail)
     for l in extra:
-        lines.append(_cut(f"{_PAD}├── {l['name']}: {l['capability']}" + (f" ({l['detail']})" if l["detail"] else "")))
+        lines.extend(_wrap(f"{_PAD}├── {l['name']}: {l['capability']}" + (f" ({l['detail']})" if l["detail"] else ""), f"{_PAD}│   "))
     sem = _by(layers, "semantic")
     if sem:
         lines += _arrow(_label(sem))
@@ -89,13 +108,14 @@ def render(arch) -> str:
     if fan:
         lines.append(f"{_PAD}│")
         for j, f in enumerate(fan):
-            lines.append(_cut(f"{_PAD}{'└' if j == len(fan) - 1 else '├'}──► {f}"))
+            last = j == len(fan) - 1
+            lines.extend(_wrap(f"{_PAD}{'└' if last else '├'}──► {f}", f"{_PAD}{' ' if last else '│'}    "))
     gov = _by(layers, "governance")
     if gov:
         lines.append("")
         lines.append("═" * (_BOX + 2))
         for l in gov:
-            lines.append(_cut(f" GOVERNANCE  {l['capability']}" + (f" - {l['detail']}" if l["detail"] else "")))
+            lines.extend(_wrap(f" GOVERNANCE  {l['capability']}" + (f" - {l['detail']}" if l["detail"] else ""), " " * 13))
         lines.append("═" * (_BOX + 2))
     return "\n".join(l.rstrip() for l in lines)
 

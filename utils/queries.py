@@ -1413,7 +1413,9 @@ def _confidence_scored_query(partner_filter_sql, start_date, end_date, include_n
             SUM(CASE WHEN r.SKILL_CHOICE ILIKE '%dbt%' OR r.SKILL_CHOICE ILIKE '%dynamic-tables%' OR r.SKILL_CHOICE ILIKE '%data:airflow%' OR r.SKILL_CHOICE ILIKE '%openflow%' OR r.SKILL_CHOICE ILIKE '%data-quality%' OR r.SKILL_CHOICE ILIKE '%lineage%' OR r.SKILL_CHOICE ILIKE '%iceberg%' THEN 1 ELSE 0 END) AS de_skill_count,
             SUM(CASE WHEN r.SKILL_CHOICE ILIKE '%cost-intelligence%' OR r.SKILL_CHOICE ILIKE '%warehouse%' OR r.SKILL_CHOICE ILIKE '%data-governance%' OR r.SKILL_CHOICE ILIKE '%access-troubleshooter%' OR r.SKILL_CHOICE ILIKE '%billing%' THEN 1 ELSE 0 END) AS platform_skill_count,
             SUM(CASE WHEN r.SKILL_CHOICE ILIKE '%streamlit%' OR r.SKILL_CHOICE ILIKE '%spcs%' OR r.SKILL_CHOICE ILIKE '%snowflake-apps%' OR r.SKILL_CHOICE ILIKE '%build-app%' OR r.SKILL_CHOICE ILIKE '%notebook%' THEN 1 ELSE 0 END) AS app_skill_count,
-            SUM(CASE WHEN r.SKILL_CHOICE ILIKE '%migration%' OR r.SKILL_CHOICE ILIKE '%spark%' OR r.SKILL_CHOICE ILIKE '%databricks%' THEN 1 ELSE 0 END) AS migration_skill_count
+            SUM(CASE WHEN r.SKILL_CHOICE ILIKE '%migration%' OR r.SKILL_CHOICE ILIKE '%spark%' OR r.SKILL_CHOICE ILIKE '%databricks%' THEN 1 ELSE 0 END) AS migration_skill_count,
+            -- Distinct skill names (bundled filtering happens in Python via is_catalog_skill)
+            ARRAY_TO_STRING(ARRAY_AGG(DISTINCT LOWER(TRIM(r.SKILL_CHOICE))), ',') AS bundled_skill_names
         FROM SNOWSCIENCE.LLM.CORTEX_CODE_REQUEST_STG r
         INNER JOIN account_ids aid ON r.ACCOUNT_ID = aid.ACCOUNT_ID
         WHERE r.ds >= '{start_date}' AND r.SKILL_CHOICE IS NOT NULL AND r.SKILL_CHOICE != ''
@@ -1458,6 +1460,63 @@ def _confidence_scored_query(partner_filter_sql, start_date, end_date, include_n
         LEFT JOIN {SCHEMA}.SKILL_WORKLOAD_CLASSIFICATION cls
             ON LOWER(flattened.skill_name) = LOWER(cls.SKILL_NAME)
         GROUP BY flattened.ACCOUNT_NAME_UPPER
+    ),
+    -- Names behind S1/S2 for each workload, using the exact same bundled
+    -- patterns (relevant_bundled) and custom-skill rules (custom_skills).
+    -- Ranked by request count; read only by the CoCo In-Use grid.
+    relevant_skill_names_wl AS (
+        SELECT ACCOUNT_NAME_UPPER, WL,
+            LISTAGG(skill_name, ',') WITHIN GROUP (ORDER BY n DESC, skill_name) AS skill_names
+        FROM (
+            SELECT b.ACCOUNT_NAME_UPPER, p.WL, b.skill_name, COUNT(*) AS n
+            FROM (
+                SELECT aid.ACCOUNT_NAME_UPPER,
+                    LTRIM(LOWER(TRIM(COALESCE(f.value::STRING, r.SKILL_CHOICE))), '$') AS skill_name
+                FROM SNOWSCIENCE.LLM.CORTEX_CODE_REQUEST_STG r
+                INNER JOIN account_ids aid ON r.ACCOUNT_ID = aid.ACCOUNT_ID,
+                LATERAL FLATTEN(input => TRY_PARSE_JSON(r.SKILL_CHOICE), OUTER => TRUE) f
+                WHERE r.ds >= '{start_date}' AND r.SKILL_CHOICE IS NOT NULL AND r.SKILL_CHOICE != ''
+            ) b
+            INNER JOIN (SELECT * FROM VALUES
+                ('AI', '%cortex-agent%'), ('AI', '%cortex-ai-function%'), ('AI', '%machine-learning%'), ('AI', '%semantic-view%'), ('AI', '%document-intelligence%'),
+                ('Analytics', '%sql-author%'), ('Analytics', '%semantic_studio%'), ('Analytics', '%data:analyzing%'), ('Analytics', '%dashboard%'), ('Analytics', '%cortex-context-sql%'),
+                ('Data Engineering', '%dbt%'), ('Data Engineering', '%dynamic-tables%'), ('Data Engineering', '%data:airflow%'), ('Data Engineering', '%openflow%'), ('Data Engineering', '%data-quality%'), ('Data Engineering', '%lineage%'), ('Data Engineering', '%iceberg%'),
+                ('Platform', '%cost-intelligence%'), ('Platform', '%warehouse%'), ('Platform', '%data-governance%'), ('Platform', '%access-troubleshooter%'), ('Platform', '%billing%'),
+                ('Apps & Collab', '%streamlit%'), ('Apps & Collab', '%spcs%'), ('Apps & Collab', '%snowflake-apps%'), ('Apps & Collab', '%build-app%'), ('Apps & Collab', '%notebook%'),
+                ('Migration', '%migration%'), ('Migration', '%spark%'), ('Migration', '%databricks%'),
+                -- Migration use cases count under Analytics
+                ('Analytics', '%migration%'), ('Analytics', '%spark%'), ('Analytics', '%databricks%')
+                AS t(WL, PAT)) p ON b.skill_name ILIKE p.PAT
+            WHERE b.skill_name IS NOT NULL AND b.skill_name != ''
+            GROUP BY 1, 2, 3
+            UNION ALL
+            SELECT x.ACCOUNT_NAME_UPPER, p.WL, 'u:' || LOWER(x.skill_name), COUNT(*)
+            FROM (
+                SELECT aid.ACCOUNT_NAME_UPPER, sk.value:name::STRING AS skill_name
+                FROM SNOWSCIENCE.LLM.CORTEX_CODE_REQUEST_STG r
+                INNER JOIN account_ids aid ON r.ACCOUNT_ID = aid.ACCOUNT_ID,
+                LATERAL FLATTEN(input => TRY_PARSE_JSON(r.TOOL_RESOURCES_SKILL):skills) sk
+                WHERE r.ds >= '{start_date}'
+                AND r.TOOL_RESOURCES_SKILL IS NOT NULL AND r.TOOL_RESOURCES_SKILL != '' AND r.TOOL_RESOURCES_SKILL != '[]'
+                AND sk.value:skill_source::STRING = 'user'
+            ) x
+            LEFT JOIN {SCHEMA}.SKILL_WORKLOAD_CLASSIFICATION cls
+                ON LOWER(x.skill_name) = LOWER(cls.SKILL_NAME)
+            INNER JOIN (SELECT * FROM VALUES
+                -- Whole-word match (grid only; scoring keeps its own regexes)
+                ('AI', '.*[^a-z0-9](agents?|cortex|llm|ml|mlops|models?|intent|analyst|ai|chat|chatbot|rag|embed[a-z]*)[^a-z0-9].*'),
+                ('Analytics', '.*[^a-z0-9](sql|query|queries|analytics|bi|reports?|reporting|dashboards?|semantic|analyz[a-z]*|analys[a-z]*)[^a-z0-9].*'),
+                ('Data Engineering', '.*[^a-z0-9](dbt|airflow|pipelines?|ingest[a-z]*|transform[a-z]*|etl|elt|dags?|lineage|streams?|streaming|iceberg|cosmos|openlineage|freshness|profiling|tracing)[^a-z0-9].*'),
+                ('Platform', '.*[^a-z0-9](govern[a-z]*|security|access|costs?|warehouses?|billing|admin|platform|monitor[a-z]*)[^a-z0-9].*'),
+                ('Apps & Collab', '.*[^a-z0-9](streamlit|apps?|frontend|ui|react|spcs|notebooks?)[^a-z0-9].*'),
+                ('Migration', '.*[^a-z0-9](migrat[a-z]*|spark|pyspark|databricks|ssis|convert[a-z]*|conversion|legacy|teradata|snowconvert)[^a-z0-9].*'),
+                ('Analytics', '.*[^a-z0-9](migrat[a-z]*|spark|pyspark|databricks|ssis|convert[a-z]*|conversion|legacy|teradata|snowconvert)[^a-z0-9].*')
+                AS t(WL, RX)) p
+                ON ('-' || REGEXP_REPLACE(LOWER(x.skill_name), '[^a-z0-9]+', '-') || '-') REGEXP p.RX OR COALESCE(cls.WORKLOAD_CATEGORY, '') = p.WL
+            WHERE x.skill_name IS NOT NULL AND x.skill_name != ''
+            GROUP BY 1, 2, 3
+        )
+        GROUP BY ACCOUNT_NAME_UPPER, WL
     ),
     -- Score every workload tagged on the use case and keep the strongest one. Use cases
     -- often carry several tags (or the wrong one first), so scoring only the first tag
@@ -1545,6 +1604,7 @@ def _confidence_scored_query(partner_filter_sql, start_date, end_date, include_n
             COALESCE(bw.WL, 'Unclassified') AS WORKLOAD_CATEGORY,
             COALESCE(bw.RS, 0) AS RELEVANT_SKILL_INVOCATIONS,
             COALESCE(bw.RCS, 0) AS RELEVANT_CUSTOM_SKILLS,
+            COALESCE(rsn.skill_names, '') AS RELEVANT_SKILL_NAMES,
             COALESCE(cs.custom_skill_count, 0) AS CUSTOM_SKILLS,
             COALESCE(tu.total_tool_invocations, 0) AS TOOLS_INVOKED,
             COALESCE(pu.active_days, 0) AS ACTIVE_DAYS,
@@ -1580,6 +1640,7 @@ def _confidence_scored_query(partner_filter_sql, start_date, end_date, include_n
         LEFT JOIN product_usage pu ON uc.ACCOUNT_NAME_UPPER = pu.ACCOUNT_NAME_UPPER
         LEFT JOIN account_credits ac ON uc.ACCOUNT_NAME_UPPER = ac.ACCOUNT_NAME_UPPER
         LEFT JOIN best_workload bw ON uc.USE_CASE_ID = bw.USE_CASE_ID
+        LEFT JOIN relevant_skill_names_wl rsn ON uc.ACCOUNT_NAME_UPPER = rsn.ACCOUNT_NAME_UPPER AND rsn.WL = bw.WL
     )
     SELECT *,
         S1_SCORE + S2_SCORE + S3_SCORE + S4_SCORE AS TOTAL_SCORE,

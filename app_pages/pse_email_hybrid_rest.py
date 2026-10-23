@@ -69,6 +69,7 @@ from utils.coco_skill_map_v2 import (
     detect_aim_source, apply_aim_override, rank_skills_by_gpa, prioritize_aim_skill,
     AIM_SKILL_NAME, MAX_SKILLS_PER_USE_CASE,
     is_catalog_skill, build_grounding_judge_prompt, parse_grounding_judge_response,
+    build_coco_inuse_prompt, parse_coco_inuse_response, bundled_inuse_skills,
 )
 
 SNOWFLAKE_BLUE = "#29b5e8"
@@ -695,7 +696,8 @@ def _judge_sanitize_batch(conn, items: list, partner: str = "", call_log=None) -
     return result
 
 
-def _group_non_coco_by_region(non_coco_df: pd.DataFrame, catalog_only: bool = False) -> dict:
+def _group_non_coco_by_region(non_coco_df: pd.DataFrame, catalog_only: bool = False,
+                              extra_cols: tuple = ()) -> dict:
     """Fast (no AI) per-region grouping of non-CoCo UCs with name/account/skills/
     eacv, sorted by EACV desc within region. Shared base for the narrative's
     quick NoAM preview (no sanitization needed there) and the full gap table
@@ -743,7 +745,12 @@ def _group_non_coco_by_region(non_coco_df: pd.DataFrame, catalog_only: bool = Fa
     never a catalog skill) -- callers must reinstate it via
     apply_aim_override(..., row["aim_source"]) once the judge has admitted
     its final candidate pool. When False (Part 1's existing narrative
-    preview), behavior is exactly as before."""
+    preview), behavior is exactly as before.
+
+    `extra_cols`: extra source columns copied onto each row dict under their
+    lower-cased name (used by the CoCo In-Use section for
+    RELEVANT_SKILL_NAMES/WORKLOAD_CATEGORY); empty by default, so the
+    non-CoCo callers are unaffected."""
     sorted_df = non_coco_df.sort_values("USE_CASE_EACV", ascending=False)
     by_region = {}
     for _, row in sorted_df.iterrows():
@@ -779,6 +786,7 @@ def _group_non_coco_by_region(non_coco_df: pd.DataFrame, catalog_only: bool = Fa
             "raw_desc": raw_desc,
             "raw_se_comments": se_comments,
             "raw_partner_comments": partner_comments,
+            **{c.lower(): row.get(c) for c in extra_cols},
         })
     return by_region
 
@@ -854,6 +862,138 @@ def _build_gap_table_rows(conn, non_coco_df: pd.DataFrame, partner: str = "", ca
         del row["raw_desc"]
         del row["raw_se_comments"]
         del row["raw_partner_comments"]
+    return by_region
+
+
+_COCO_INUSE_PIPELINE_VERSION = 1
+_COCO_INUSE_PIPELINE_TAG = "rest_coco_inuse"
+_COCO_INUSE_MAX_TOKENS = 600
+_COCO_INUSE_FALLBACK = {"insight": "", "skills": []}
+
+
+def _coco_inuse_one(conn, uc_id, name, desc, se_comments, partner_comments, account_skills,
+                    workload, call_log=None):
+    """One CoCo-attached use case -> {"insight", "skills"} via the same
+    claude-sonnet-4-5 REST helper as _judge_sanitize_one. Never raises:
+    any failure degrades to _COCO_INUSE_FALLBACK (plus an "error" key so the
+    batch skips persisting it)."""
+    prompt = build_coco_inuse_prompt(name, desc, se_comments, partner_comments, list(account_skills), workload)
+    try:
+        raw = _logged_rest_call(call_log, "CoCo In-Use", name, cortex_complete,
+                                conn, "claude-sonnet-4-5", prompt, max_tokens=_COCO_INUSE_MAX_TOKENS)
+        return uc_id, parse_coco_inuse_response(raw, list(account_skills))
+    except Exception as e:
+        return uc_id, dict(_COCO_INUSE_FALLBACK, error=f"{type(e).__name__}: {e}")
+
+
+def _coco_inuse_batch(conn, items: list, partner: str = "", call_log=None) -> dict:
+    """Batch/parallel wrapper around _coco_inuse_one -- mirrors
+    _judge_sanitize_batch: L1 session cache + L2 utils.judge_cache table
+    (own pipeline tag/version, so bumping _COCO_INUSE_PIPELINE_VERSION
+    forces fresh calls), ThreadPoolExecutor fan-out.
+    items: (uc_id, name, desc, se_comments, partner_comments, account_skills, workload).
+    Returns {uc_id: {"insight": str, "skills": [...]}}."""
+    cache = st.session_state.setdefault("_pse_hybrid_rest_coco_inuse_cache", {})
+    result, to_fetch, l2_pending = {}, [], {}
+    for uc_id, name, desc, se, pc, skills, workload in items:
+        name, desc, se, pc = ((x or "").strip() for x in (name, desc, se, pc))
+        skills, workload = tuple(skills or ()), (workload or "").strip()
+        # Account skills + workload feed the prompt, so fold them into the key.
+        extra = pc + "\x1e" + ",".join(skills) + "\x1e" + workload
+        key = (name, desc, se, extra, _COCO_INUSE_PIPELINE_VERSION)
+        rec = (uc_id, name, desc, se, pc, skills, workload, key)
+        if not (name or desc or se or pc):
+            result[uc_id] = dict(_COCO_INUSE_FALLBACK)
+        elif key in cache:
+            result[uc_id] = cache[key]
+            if call_log is not None:
+                call_log.cache_hit("CoCo In-Use", name)
+        else:
+            l2_pending[judge_cache.compute_hash(name, desc, se, extra, _COCO_INUSE_PIPELINE_TAG,
+                                                _COCO_INUSE_PIPELINE_VERSION)] = rec
+
+    if l2_pending:
+        try:
+            judge_cache.ensure_table(conn)
+            l2_hits = judge_cache.batch_lookup(conn, list(l2_pending.keys()), _COCO_INUSE_PIPELINE_TAG)
+        except Exception as e:
+            l2_hits = {}
+            st.session_state["_pse_hybrid_rest_cache_error"] = f"{type(e).__name__}: {e}"
+        for hash_key, rec in l2_pending.items():
+            if hash_key in l2_hits:
+                hit = l2_hits[hash_key]
+                entry = {"insight": hit.get("summary", ""),
+                         "skills": [s for s in hit.get("skills", []) if s in rec[5]]}
+                cache[rec[7]] = entry
+                result[rec[0]] = entry
+                if call_log is not None:
+                    call_log.cache_hit("CoCo In-Use", rec[1])
+            else:
+                to_fetch.append((hash_key, rec))
+
+    l2_to_insert = []
+    if to_fetch:
+        by_uc = {rec[0]: (hash_key, rec) for hash_key, rec in to_fetch}
+        with ThreadPoolExecutor(max_workers=min(_JUDGE_MAX_WORKERS, len(to_fetch))) as pool:
+            futures = [pool.submit(_coco_inuse_one, conn, rec[0], rec[1], rec[2], rec[3], rec[4],
+                                   rec[5], rec[6], call_log) for _, rec in to_fetch]
+            for future in as_completed(futures):
+                try:
+                    uc_id, entry = future.result()
+                except Exception:
+                    continue
+                hash_key, rec = by_uc[uc_id]
+                if entry.pop("error", None):
+                    result[uc_id] = entry
+                    continue
+                cache[rec[7]] = entry
+                result[uc_id] = entry
+                l2_to_insert.append((hash_key, partner, rec[1],
+                                     {"summary": entry["insight"], "skills": entry["skills"]}))
+    if l2_to_insert:
+        try:
+            judge_cache.batch_insert(conn, l2_to_insert, _COCO_INUSE_PIPELINE_TAG, _COCO_INUSE_PIPELINE_VERSION)
+        except Exception:
+            pass  # best-effort, session cache already holds the result
+    for _, rec in to_fetch:
+        result.setdefault(rec[0], dict(_COCO_INUSE_FALLBACK))
+    return result
+
+
+def _group_coco_inuse_by_region(coco_df: pd.DataFrame) -> dict:
+    """CoCo-attached UCs grouped/sorted exactly like the gap grid (reuses
+    _group_non_coco_by_region), plus each row's bundled account skills
+    (custom skills dropped, see bundled_inuse_skills) and workload."""
+    if coco_df is None or len(coco_df) == 0:
+        return {}
+    by_region = _group_non_coco_by_region(coco_df, extra_cols=("RELEVANT_SKILL_NAMES", "WORKLOAD_CATEGORY"))
+    for rows in by_region.values():
+        for row in rows:
+            row["account_skills"] = bundled_inuse_skills(row.pop("relevant_skill_names", None))
+            wl = row.pop("workload_category", None)
+            row["workload"] = "" if wl is None or (isinstance(wl, float) and math.isnan(wl)) else str(wl)
+            row["skills"], row["reasons"] = [], {}
+            row["insight"] = ""
+    return by_region
+
+
+def _build_coco_inuse_rows(conn, coco_df: pd.DataFrame, partner: str = "", call_log=None) -> dict:
+    """Per-region rows for the "CoCo In-Use Use Cases" grid: insight +
+    LLM-filtered bundled skills (max 4). Failures degrade to "" / []."""
+    by_region = _group_coco_inuse_by_region(coco_df)
+    all_rows = [r for rows in by_region.values() for r in rows]
+    items = [(r["uc_id"], r["name"], r["raw_desc"], r["raw_se_comments"], r["raw_partner_comments"],
+              r["account_skills"], r["workload"]) for r in all_rows]
+    try:
+        judged = _coco_inuse_batch(conn, items, partner=partner, call_log=call_log) if items else {}
+    except Exception:
+        judged = {}
+    for r in all_rows:
+        entry = judged.get(r["uc_id"]) or _COCO_INUSE_FALLBACK
+        r["insight"] = entry.get("insight", "") or ""
+        r["skills"] = [s for s in entry.get("skills", []) if s in r["account_skills"]][:4]
+        for k in ("raw_desc", "raw_se_comments", "raw_partner_comments", "aim_source"):
+            r.pop(k, None)
     return by_region
 
 
@@ -1139,9 +1279,78 @@ def _ws_intro_html(partner) -> str:
     return (f'<p style="font-size:12.5px;color:#0f172a;margin:0 0 10px;">{_h(_ws_intro_text(partner))}</p>')
 
 
+_TH_L = ('<th style="background:#f8fafc;text-align:left;padding:7px 10px;font-size:10.5px;'
+         'text-transform:uppercase;color:#6b7280;border-bottom:2px solid #e5e7eb;">')
+_TH_R = _TH_L.replace("text-align:left", "text-align:right")
+_TD = '<td style="padding:7px 10px;border-bottom:1px solid #f1f5f9;vertical-align:top;'
+COCO_INUSE_HEADERS = ["#", "Use Case", "Account", "Stage", "EACV", "CoCo Skills in Use", "Description (sanitized)"]
+# Shared column widths for the Non-CoCo gap grid and the CoCo In-Use grid
+# (HTML percentages / PDF inches) so both line up; last column gets the most.
+GRID_COL_PCT = (4, 14, 11, 9, 7, 20, 35)
+GRID_COL_IN = (0.30, 0.95, 0.78, 0.72, 0.45, 1.65, 2.60)
+_GRID_COLGROUP = "<colgroup>" + "".join(f'<col style="width:{p}%;">' for p in GRID_COL_PCT) + "</colgroup>"
+
+
+def _coco_inuse_totals(coco_rows_by_region) -> tuple:
+    rows = [u for r in ["NoAM", "EMEA", "APJ"] for u in (coco_rows_by_region or {}).get(r, [])]
+    return len(rows), sum(u["eacv"] for u in rows) / 1_000_000
+
+
+def _coco_inuse_section_html(coco_rows_by_region) -> str:
+    """"CoCo In-Use Use Cases" grid -- same markup/styling as the Non-CoCo
+    gap grid (region band, stage pill, chips). Empty string when no rows."""
+    n, eacv_m = _coco_inuse_totals(coco_rows_by_region)
+    if not n:
+        return ""
+    body, seq = "", 0
+    for region in ["NoAM", "EMEA", "APJ"]:
+        rows = coco_rows_by_region.get(region, [])
+        if not rows:
+            continue
+        region_eacv = sum(u["eacv"] for u in rows) / 1_000_000
+        body += (
+            f'<tr style="background:#eef2ff;"><td colspan="7" style="padding:7px 10px;font-weight:700;'
+            f'font-size:11px;color:#312e81;text-transform:uppercase;letter-spacing:.03em;">'
+            f'{_h(region)} &mdash; {len(rows)} use case{"s" if len(rows) != 1 else ""} &middot; ${region_eacv:.2f}M EACV</td></tr>'
+        )
+        for u in rows:
+            seq += 1
+            eacv = u["eacv"]
+            eacv_str = f"${eacv/1_000_000:.2f}M" if eacv >= 1_000_000 else f"${eacv/1000:.0f}K"
+            bg, fg = _STAGE_COLORS.get(u["stage_label"], ("#e5e7eb", "#374151"))
+            pill = (f'<span style="font-size:9px;font-weight:700;padding:1px 6px;border-radius:8px;'
+                    f'background:{bg};color:{fg};">{_h(u["stage_label"])}</span>')
+            chips = "".join(
+                f'<span style="display:inline-block;background:#fff;border:1.3px solid #29b5e8;'
+                f'border-radius:4px;padding:1.5px 6px;font-size:9px;font-family:monospace;'
+                f'color:#0369a1;font-weight:700;margin:1px 2px 1px 0;">{_h(_exec_table_skill_display(s))}</span>'
+                for s in u.get("skills") or []
+            ) or "&mdash;"
+            insight = _h(u["insight"]) if u.get("insight") else "&mdash;"
+            body += f"""
+<tr>{_TD}text-align:right;color:#9ca3af;">{seq}</td>
+  {_TD}">{_h(u['name'])}</td>
+  {_TD}">{_h(u['account'])}</td>
+  {_TD}">{pill}</td>
+  {_TD}text-align:right;">{eacv_str}</td>
+  {_TD}">{chips}</td>
+  {_TD}font-size:11.5px;color:#374151;">{insight}</td></tr>"""
+    head = "".join((_TH_R if t in ("#", "EACV") else _TH_L) + t + "</th>" for t in COCO_INUSE_HEADERS)
+    return f"""
+  <div style="font-size:14px;font-weight:800;color:#0f172a;margin:26px 0 8px;">CoCo In-Use Use Cases</div>
+  <p style="font-size:12.5px;color:#4b5563;margin:0 0 12px;">{n} use cases &middot; ${eacv_m:.2f}M EACV with CoCo in use.</p>
+  <div style="overflow-x:auto;">
+  <table style="border-collapse:collapse;width:100%;font-size:12px;table-layout:fixed;">{_GRID_COLGROUP}
+    <thead><tr>{head}</tr></thead>
+    <tbody>{body}</tbody>
+  </table>
+  </div>
+"""
+
+
 def _build_report_html(partner, q_start, q_end, target, coco_count, total_ucs, coco_pct,
                         non_coco_count, non_coco_eacv, peer_benchmark, regional_breakdown,
-                        gap_rows_by_region, action_plan, workshops=None) -> str:
+                        gap_rows_by_region, action_plan, workshops=None, coco_rows_by_region=None) -> str:
     eacv_m = non_coco_eacv / 1_000_000
     ws_scope_html, ws_section_html, ws_summary_html = "", "", ""
     if workshops is not None:
@@ -1268,7 +1477,7 @@ def _build_report_html(partner, q_start, q_end, target, coco_count, total_ucs, c
     return f"""<!DOCTYPE html>
 <html><head><meta name="color-scheme" content="light only"></head>
 <body style="color-scheme:light;background:#ffffff;font-family:-apple-system,'Hiragino Sans','Yu Gothic',Arial,sans-serif;
-  max-width:860px;margin:0 auto;padding:20px;line-height:1.5;color:#1f2430;">
+  max-width:none;margin:0;padding:20px 28px;line-height:1.5;color:#1f2430;">
 <div style="border:1px solid #e5e7eb;border-radius:12px;padding:20px 22px;">
   <p style="font-size:12px;color:#6b7280;text-transform:uppercase;letter-spacing:.06em;margin:0 0 6px;">
     {_h(partner)} &amp; Snowflake Partnership</p>
@@ -1301,7 +1510,7 @@ def _build_report_html(partner, q_start, q_end, target, coco_count, total_ucs, c
   <p style="font-size:12.5px;color:#4b5563;margin:0 0 12px;">{non_coco_count} use cases &middot; ${eacv_m:.2f}M EACV awaiting CoCo attribution.</p>
   {ws_section_html}{ws_summary_html}{_gpa_legend_html()}
   <div style="overflow-x:auto;">
-  <table style="border-collapse:collapse;width:100%;font-size:12px;">
+  <table style="border-collapse:collapse;width:100%;font-size:12px;table-layout:fixed;">{_GRID_COLGROUP}
     <thead><tr>
       <th style="background:#f8fafc;text-align:right;padding:7px 10px;font-size:10.5px;text-transform:uppercase;color:#6b7280;border-bottom:2px solid #e5e7eb;">#</th>
       <th style="background:#f8fafc;text-align:left;padding:7px 10px;font-size:10.5px;text-transform:uppercase;color:#6b7280;border-bottom:2px solid #e5e7eb;">Use Case</th>
@@ -1314,7 +1523,7 @@ def _build_report_html(partner, q_start, q_end, target, coco_count, total_ucs, c
     <tbody>{gap_table_rows}</tbody>
   </table>
   </div>
-
+{_coco_inuse_section_html(coco_rows_by_region)}
   <div style="font-size:14px;font-weight:800;color:#0f172a;margin:26px 0 8px;">Next Steps &amp; Action Plan</div>
   <ol style="padding-left:18px;font-size:12.5px;color:#374151;">{plan_html}</ol>
 
@@ -1500,6 +1709,68 @@ def _pdf_skill_chip_flowables(u, font):
     return flows
 
 
+def _pdf_coco_inuse_flowables(coco_rows_by_region, styles) -> list:
+    """PDF "CoCo In-Use Use Cases" grid -- same region band, stage badge,
+    chip and explicit-zebra styling as the Non-CoCo gap table. Empty list
+    when there are no rows (the caller's CondPageBreak precedes it)."""
+    n, eacv_m = _coco_inuse_totals(coco_rows_by_region)
+    if not n:
+        return []
+    cell, cell_c, cell_h = styles['cell'], styles['cell_center'], styles['cell_header']
+    flows = [Paragraph("CoCo In-Use Use Cases", styles['heading2']),
+             Paragraph(f"{n} use cases &middot; ${eacv_m:.2f}M EACV with CoCo in use.", styles['body'])]
+    col_widths = [w * inch for w in GRID_COL_IN]
+    chip_style = ParagraphStyle('InUseChip', fontName=cell.fontName, fontSize=8, leading=10,
+                                textColor=HexColor(_PDF_CHIP_TEXT))
+    band_style = ParagraphStyle('InUseRegionBand', fontName=cell.fontName, fontSize=9.5, leading=12,
+                                textColor=HexColor('#312e81'))
+    seq = 0
+    populated = [r for r in ["NoAM", "EMEA", "APJ"] if coco_rows_by_region.get(r)]
+    for idx, region in enumerate(populated):
+        rows = coco_rows_by_region[region]
+        region_eacv = sum(u["eacv"] for u in rows) / 1_000_000
+        band_text = (f"<b>{html_lib.escape(region)}</b> &mdash; {len(rows)} use case"
+                     f"{'s' if len(rows) != 1 else ''} &middot; ${region_eacv:.2f}M EACV")
+        band = Table([[Paragraph(band_text, band_style)]], colWidths=[sum(col_widths)])
+        band.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (0, 0), HexColor('#eef2ff')),
+            ('TOPPADDING', (0, 0), (0, 0), 5), ('BOTTOMPADDING', (0, 0), (0, 0), 5),
+            ('LEFTPADDING', (0, 0), (0, 0), 6),
+        ]))
+        flows.append(band)
+        data = [[_wrap_cell(t, cell_h) for t in COCO_INUSE_HEADERS]]
+        for u in rows:
+            seq += 1
+            eacv = u["eacv"]
+            eacv_str = f"${eacv/1_000_000:.2f}M" if eacv >= 1_000_000 else f"${eacv/1000:.0f}K"
+            chips = []
+            for s in u.get("skills") or []:
+                chip = Table([[Paragraph(f"<b>{html_lib.escape(_exec_table_skill_display(s))}</b>", chip_style)]],
+                             colWidths=[1.35 * inch])
+                chip.setStyle(TableStyle([
+                    ('BACKGROUND', (0, 0), (0, 0), HexColor('#f1f5f9')),
+                    ('BOX', (0, 0), (0, 0), 0.5, HexColor(_PDF_CHIP_BORDER)),
+                    ('TOPPADDING', (0, 0), (0, 0), 2), ('BOTTOMPADDING', (0, 0), (0, 0), 2),
+                    ('LEFTPADDING', (0, 0), (0, 0), 4), ('RIGHTPADDING', (0, 0), (0, 0), 4),
+                ]))
+                chips.append(chip)
+            data.append([
+                Paragraph(str(seq), cell_c), _wrap_cell(u["name"], cell), _wrap_cell(u["account"], cell),
+                _pdf_stage_badge(u["stage_label"], cell.fontName), Paragraph(eacv_str, cell_c),
+                chips or _wrap_cell("-", cell), _wrap_cell(u.get("insight") or "-", cell),
+            ])
+        table = Table(data, colWidths=col_widths, repeatRows=1)
+        cmds = [c for c in _pdf_table_style().getCommands() if c[0] != 'ROWBACKGROUNDS']
+        for i in range(1, len(data)):
+            cmds.append(('BACKGROUND', (0, i), (-1, i), white if i % 2 == 1 else HexColor('#F5F5F5')))
+        table.setStyle(TableStyle(cmds))
+        table.setStyle(TableStyle([('ALIGN', (3, 1), (3, -1), 'CENTER')]))
+        flows.append(table)
+        if idx < len(populated) - 1:
+            flows.append(Spacer(1, 0.1 * inch))
+    return flows
+
+
 def _pdf_footer(canvas, doc):
     canvas.saveState()
     canvas.setFont('Helvetica', 8)
@@ -1512,7 +1783,7 @@ def _pdf_footer(canvas, doc):
 
 def _build_report_pdf_bytes(partner, q_start, q_end, target, coco_count, total_ucs, coco_pct,
                              non_coco_count, non_coco_eacv, peer_benchmark, regional_breakdown,
-                             gap_rows_by_region, action_plan, workshops=None) -> bytes:
+                             gap_rows_by_region, action_plan, workshops=None, coco_rows_by_region=None) -> bytes:
     styles = _pdf_styles()
     cell, cell_c, cell_h = styles['cell'], styles['cell_center'], styles['cell_header']
 
@@ -1602,7 +1873,7 @@ def _build_report_pdf_bytes(partner, q_start, q_end, target, coco_count, total_u
         f'<font color="{bad}"><b>&#9632; &lt;0.40 weak</b></font>',
         legend_style,
     ))
-    gap_col_widths = [0.30 * inch, 1.0 * inch, 0.8 * inch, 0.75 * inch, 0.45 * inch, 2.1 * inch, 2.0 * inch]
+    gap_col_widths = [w * inch for w in GRID_COL_IN]
     seq = 0
     populated_regions = [r for r in ["NoAM", "EMEA", "APJ"] if gap_rows_by_region.get(r)]
     for region_idx, region in enumerate(populated_regions):
@@ -1670,6 +1941,8 @@ def _build_report_pdf_bytes(partner, q_start, q_end, target, coco_count, total_u
     # than the given height remains in the current frame, so Next Steps
     # flows right after the table whenever there's reasonable room, and only
     # jumps to a fresh page when there truly isn't enough space left.
+    story.append(CondPageBreak(1.5 * inch))
+    story.extend(_pdf_coco_inuse_flowables(coco_rows_by_region, styles))
     story.append(CondPageBreak(1.5 * inch))
     story.append(Paragraph("Next Steps &amp; Action Plan", styles['heading2']))
     for i, item in enumerate(action_plan, start=1):
@@ -1739,6 +2012,15 @@ if include_account_coco:
             detail["HAS_FEATURE_FLAG"] = detail["USE_CASE_ID"].map(
                 conf_scores[["USE_CASE_ID", "HAS_FEATURE_FLAG"]].set_index("USE_CASE_ID")["HAS_FEATURE_FLAG"]
             ).fillna(False)
+        # CoCo In-Use section inputs: account-level skill names + workload.
+        for _col in ("RELEVANT_SKILL_NAMES", "WORKLOAD_CATEGORY"):
+            if _col in conf_scores.columns:
+                detail[_col] = detail["USE_CASE_ID"].map(
+                    conf_scores.drop_duplicates("USE_CASE_ID").set_index("USE_CASE_ID")[_col])
+                if "ACCOUNT_NAME" in conf_scores.columns and "ACCOUNT_NAME" in detail.columns:
+                    _by_acct = (conf_scores.assign(_A=conf_scores["ACCOUNT_NAME"].astype(str).str.upper())
+                                .drop_duplicates("_A").set_index("_A")[_col])
+                    detail[_col] = detail[_col].fillna(detail["ACCOUNT_NAME"].astype(str).str.upper().map(_by_acct))
         # get_okr_coco_adoption's IS_COCO_ATTACHED is already just the raw
         # uc.IS_COCO flag (see _is_coco_expanded()'s docstring) -- rename it
         # so apply_coco_final (the SAME function _compute_peer_benchmark uses
@@ -1877,6 +2159,29 @@ else:
         _render_call_log(call_log_ph, call_log, done=True)
         gap_rows_by_region = _result["gap_rows_by_region"]
 
+        # CoCo In-Use section: same background-thread + polling pattern.
+        _inuse_status = st.empty()
+        _inuse_status.caption(f"Preparing CoCo In-Use insights for {coco_count} use cases…")
+        _inuse_result = {}
+        def _run_inuse_rows():
+            try:
+                _inuse_result["rows"] = _build_coco_inuse_rows(conn, coco_ucs, partner=selected_partner, call_log=call_log)
+            except Exception as e:
+                _inuse_result["error"] = e
+        _inuse_thread = threading.Thread(target=_run_inuse_rows, daemon=True)
+        add_script_run_ctx(_inuse_thread, get_script_run_ctx())
+        _inuse_thread.start()
+        while _inuse_thread.is_alive():
+            _render_call_log(call_log_ph, call_log, done=False)
+            time.sleep(0.4)
+        _inuse_thread.join()
+        _render_call_log(call_log_ph, call_log, done=True)
+        coco_rows_by_region = _inuse_result.get("rows") or {}
+        if "error" in _inuse_result:
+            _inuse_status.caption(f"CoCo In-Use insights unavailable this run: {_inuse_result['error']}")
+        else:
+            _inuse_status.caption(f"CoCo In-Use insights ready for {coco_count} use cases.")
+
         action_plan = _build_action_plan(regional_breakdown, gap_rows_by_region, selected_partner)
 
         # DEV only: hide already-deployed use cases from the report tables and
@@ -1922,6 +2227,15 @@ else:
                 workshops = []
             else:
                 workshops = _ws_result["workshops"]
+            # Tag each plan with its report region and order NoAM, EMEA, APJ
+            # (others last); within a region generation order is kept.
+            _ws_region = {r.get("uc_id"): reg for reg, rows in display_rows_by_region.items() for r in rows}
+            _ws_order = {"NoAM": 0, "EMEA": 1, "APJ": 2}
+            for _w in workshops:
+                if isinstance(_w, dict):
+                    _w["region"] = _ws_region.get(_w.get("uc_id"), "")
+            workshops = sorted(workshops, key=lambda w: _ws_order.get(
+                w.get("region", "") if isinstance(w, dict) else "", 3))
             _ws_degraded = [d for d in _ws_diagnostics if d.startswith("degraded: ")]
             if any(d.split(":")[0] in ("listed", "a360", "context") for d in _ws_diagnostics):
                 st.caption("Some account context was unavailable for your role; "
@@ -1935,6 +2249,7 @@ else:
             selected_partner, q_start, q_end, target, coco_count, total_ucs, coco_pct,
             non_coco_count, non_coco_eacv, peer_benchmark, regional_breakdown,
             display_rows_by_region, action_plan, workshops=workshops,
+            coco_rows_by_region=coco_rows_by_region,
         )
         if workshops is not None:
             # Email-copy variant: scope note kept, workshop section omitted.
@@ -1942,12 +2257,14 @@ else:
                 selected_partner, q_start, q_end, target, coco_count, total_ucs, coco_pct,
                 non_coco_count, non_coco_eacv, peer_benchmark, regional_breakdown,
                 display_rows_by_region, action_plan, workshops=[],
+                coco_rows_by_region=coco_rows_by_region,
             )
         with st.spinner("Building PDF…"):
             report_pdf = _build_report_pdf_bytes(
                 selected_partner, q_start, q_end, target, coco_count, total_ucs, coco_pct,
                 non_coco_count, non_coco_eacv, peer_benchmark, regional_breakdown,
                 display_rows_by_region, action_plan, workshops=workshops,
+                coco_rows_by_region=coco_rows_by_region,
             )
 
         st.session_state["_pse_hybrid_rest_report_html"] = report_html

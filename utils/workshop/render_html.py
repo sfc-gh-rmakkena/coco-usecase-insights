@@ -204,6 +204,17 @@ def _session2(s2, w=None, slug="sgx", partner=""):
 
 
 
+REGION_COLORS = {"NoAM": "#2563eb", "EMEA": "#7c3aed", "APJ": "#059669", "LATAM": "#d97706"}
+
+
+def _region_chip(reg):
+    if not reg:
+        return ""
+    c = REGION_COLORS.get(reg, "#64748b")
+    return (f'<span style="display:inline-block;font-size:10.5px;font-weight:700;color:{c};'
+            f'border:1px solid {c};border-radius:10px;padding:1px 8px;margin-bottom:6px;">{_h(reg)}</span>')
+
+
 def render_workshop_html(workshops: list, partner: str = "") -> str:
     if not workshops:
         return ""
@@ -212,10 +223,23 @@ def render_workshop_html(workshops: list, partner: str = "") -> str:
            ".ws-tabs label{display:inline-block;padding:6px 12px;margin-right:4px;border-bottom:2px solid transparent;cursor:pointer;font-size:12.5px}",
            ".ws input{display:none}"]
     radios, side, panes = "", "", ""
+    counts = {}
+    for w in workshops:
+        reg = _dict(w).get("region") or ""
+        counts[reg] = counts.get(reg, 0) + 1
+    prev_reg = None
     for i, w in enumerate(workshops):
         w = _dict(w)
+        reg = w.get("region") or ""
+        color = REGION_COLORS.get(reg, "#94a3b8")
         radios += f'<input type="radio" name="ws-uc" id="ws-uc-{i}"{" checked" if i == 0 else ""}>'
-        side += f'<label for="ws-uc-{i}"><b>{_h(w.get("account"))}</b><br>{_h(w.get("name"))}</label>'
+        if reg and reg != prev_reg:
+            side += (f'<div style="font-size:11px;font-weight:800;letter-spacing:.04em;color:{color};'
+                     f'text-transform:uppercase;margin:{"0" if prev_reg is None else "12px"} 0 4px;'
+                     f'padding-left:6px;">{_h(reg)} ({counts[reg]})</div>')
+        prev_reg = reg
+        side += (f'<label for="ws-uc-{i}" style="border-left:3px solid {color};">'
+                 f'<b>{_h(w.get("account"))}</b><br>{_h(w.get("name"))}</label>')
         css.append(f"#ws-uc-{i}:checked~.ws-body .ws-p{i}{{display:block}}")
         css.append(f"#ws-uc-{i}:checked~.ws-body .ws-side label[for=ws-uc-{i}]{{background:#e0f2fe;color:#0c4a6e}}")
         tabs = "".join(f'<input type="radio" name="ws-t-{i}" id="ws-t-{i}-{k}"{" checked" if k == "a" else ""}>'
@@ -227,7 +251,7 @@ def render_workshop_html(workshops: list, partner: str = "") -> str:
             css.append(f"#ws-t-{i}-{k}:checked~.ws-tabs label[for=ws-t-{i}-{k}]{{border-bottom-color:#29b5e8;font-weight:700}}")
         skills = ", ".join(_h(s) for s in _list(w.get("skills")))
         panes += (f'<div class="ws-pane ws-p{i}">{tabs}<div class="ws-tabs" style="border-bottom:1px solid #e5e7eb;margin-bottom:12px;">{bar}</div>'
-                  f'<div class="ws-sec ws-sa"><h3 style="margin:0 0 6px;">{_h(w.get("name"))}</h3>'
+                  f'<div class="ws-sec ws-sa">{_region_chip(reg)}<h3 style="margin:0 0 6px;">{_h(w.get("name"))}</h3>'
                   f'<p style="font-size:12.5px;">{_h(w.get("brief"))}</p><p style="font-size:12px;"><b>Proposed CoCo skills:</b> {skills}</p></div>'
                   f'<div class="ws-sec ws-sb"><h3 style="margin:0 0 6px;">Session 1 — Get started with CoCo</h3>{_session1(w.get("session1"))}</div>'
                   f'<div class="ws-sec ws-sc"><h3 style="margin:0 0 6px;">Session 2 — Co-build</h3>{_session2(w.get("session2"), w, uc_slug(w, i), partner)}</div></div>')
