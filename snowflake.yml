@@ -6,10 +6,34 @@ entities:
       name: COCO_USECASE_INSIGHTS
     stage: STREAMLIT
     query_warehouse: COCO_PARTNER_ADOPTION_WH
+    runtime_name: SYSTEM$ST_CONTAINER_RUNTIME_PY3_11
+    compute_pool: STREAMLIT_DEDICATED_POOL_L
+    external_access_integrations:
+      - PYPI_ACCESS_INTEGRATION
     main_file: streamlit_app.py
     artifacts:
       - streamlit_app.py
-      - environment.yml
+      - pyproject.toml
+      - app_pages/
+      - utils/
+  # Rehearsal copy of the PROD config, deployed in the PROD schema so it reads
+  # PROD data. Validate the test matrix here before replacing PROD, then drop it.
+  coco_usecase_insights_cr:
+    type: streamlit
+    identifier:
+      name: COCO_USECASE_INSIGHTS_CR
+      database: TEMP
+      schema: COCO_PARTNER_ADOPTION
+    stage: STREAMLIT
+    query_warehouse: COCO_PARTNER_ADOPTION_WH
+    runtime_name: SYSTEM$ST_CONTAINER_RUNTIME_PY3_11
+    compute_pool: STREAMLIT_DEDICATED_POOL_L
+    external_access_integrations:
+      - PYPI_ACCESS_INTEGRATION
+    main_file: streamlit_app.py
+    artifacts:
+      - streamlit_app.py
+      - pyproject.toml
       - app_pages/
       - utils/
   coco_usecase_insights_dev:

@@ -18,7 +18,6 @@ import streamlit as st
 from utils.queries import get_distinct_partners, get_distinct_subregions
 from utils import PARTNER_GROUPS
 from utils.ask_ai import ask_ai, ask_ai_agent
-from utils.config import get_env
 from datetime import date
 
 st.set_page_config(
@@ -31,31 +30,28 @@ st.set_page_config(
 if "conn" not in st.session_state:
     st.session_state.conn = st.connection("snowflake")
 
-# Restricted caller's-rights connection: only way to get the actual VIEWER's
-# CURRENT_USER() on container runtime (the default owner's-rights connection
-# above returns the app OWNER's context in container runtime -- see
-# "Restricted caller's rights and Streamlit in Snowflake" docs). Only
-# supported on container runtime, so this errors out on warehouse runtime
-# (PROD) / local dev -- caught once here since the token is short-lived and
-# must be created at the top of the script, not lazily.
+# Restricted caller's-rights connection, shared by every page that must run as
+# the VIEWER: the viewer lookup (owner's-rights CURRENT_USER() returns the app
+# OWNER on container runtime), ACQ Theatre (row access policies evaluate the
+# executing identity) and workshop account-context reads. Both PROD and DEV run
+# on container runtime; caller grants come from SNOWHOUSE_CALLER_RL, inherited
+# by the owner role. Secondary roles make the viewer's other roles count, since
+# these connections use the viewer's DEFAULT role, not the Snowsight one.
+# Locally (and on warehouse runtime) the connection errors out and every caller
+# falls back to the owner connection. Created once at the top of the script
+# because its token is short-lived.
 if "_callers_rights_conn" not in st.session_state:
-    try:
-        st.session_state._callers_rights_conn = st.connection("snowflake-callers-rights")
-    except Exception:
-        st.session_state._callers_rights_conn = None
-
-# DEV only: caller's-rights connection for workshop data reads (the owner role
-# lacks SELECT on the account-context tables; viewers get it via secondary
-# roles). Created at the top of the script because the token is short-lived.
-if get_env() == "dev" and "caller_conn" not in st.session_state:
     try:
         cconn = st.connection("snowflake-callers-rights")
         with cconn.cursor() as cur:
             cur.execute("USE SECONDARY ROLES ALL")
-        st.session_state.caller_conn = cconn
+        st.session_state._callers_rights_conn = cconn
     except Exception as e:
-        st.session_state.caller_conn = None
+        st.session_state._callers_rights_conn = None
         st.session_state.caller_conn_error = str(e)
+# Workshop code reads the same connection under its original name.
+if "caller_conn" not in st.session_state:
+    st.session_state.caller_conn = st.session_state._callers_rights_conn
 
 if "_ui_region" not in st.session_state:
     st.session_state._ui_region = "Global"
@@ -68,9 +64,9 @@ if "selected_subregions" not in st.session_state:
 if "selected_partners" not in st.session_state:
     st.session_state.selected_partners = list(PARTNER_GROUPS)
 if "okr_start_date" not in st.session_state:
-    st.session_state.okr_start_date = date(2026, 8, 1)
+    st.session_state.okr_start_date = date(2026, 11, 1)
 if "okr_end_date" not in st.session_state:
-    st.session_state.okr_end_date = date(2026, 10, 31)
+    st.session_state.okr_end_date = date(2027, 1, 31)
 if "include_account_coco" not in st.session_state:
     st.session_state.include_account_coco = "Yes"
 if "confidence_filter" not in st.session_state:
