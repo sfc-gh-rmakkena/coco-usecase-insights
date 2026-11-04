@@ -18,6 +18,7 @@ import streamlit as st
 from utils.queries import get_distinct_partners, get_distinct_subregions
 from utils import PARTNER_GROUPS
 from utils.ask_ai import ask_ai, ask_ai_agent
+from utils.config import get_env
 from datetime import date
 
 st.set_page_config(
@@ -42,6 +43,19 @@ if "_callers_rights_conn" not in st.session_state:
         st.session_state._callers_rights_conn = st.connection("snowflake-callers-rights")
     except Exception:
         st.session_state._callers_rights_conn = None
+
+# DEV only: caller's-rights connection for workshop data reads (the owner role
+# lacks SELECT on the account-context tables; viewers get it via secondary
+# roles). Created at the top of the script because the token is short-lived.
+if get_env() == "dev" and "caller_conn" not in st.session_state:
+    try:
+        cconn = st.connection("snowflake-callers-rights")
+        with cconn.cursor() as cur:
+            cur.execute("USE SECONDARY ROLES ALL")
+        st.session_state.caller_conn = cconn
+    except Exception as e:
+        st.session_state.caller_conn = None
+        st.session_state.caller_conn_error = str(e)
 
 if "_ui_region" not in st.session_state:
     st.session_state._ui_region = "Global"

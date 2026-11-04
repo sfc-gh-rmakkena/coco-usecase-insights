@@ -7,3 +7,4 @@ output/
 
 # Cortex Code local tooling artifacts
 .snowflake/
+.superpowers/
