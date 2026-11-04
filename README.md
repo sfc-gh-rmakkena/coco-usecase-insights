@@ -17,8 +17,21 @@ A Streamlit-in-Snowflake (SiS) application for tracking Cortex Code (CoCo) adopt
 | App | `COCO_USECASE_INSIGHTS` | `COCO_USECASE_INSIGHTS_DEV` |
 | Task | Running (daily) | Suspended (manual only) |
 | Data | Live | Cloned from PROD at bootstrap time |
+| Runtime | Container (`SYSTEM$ST_CONTAINER_RUNTIME_PY3_11`, pool `STREAMLIT_DEDICATED_POOL_L`) | Same |
+| Packages | `pyproject.toml` via `PYPI_ACCESS_INTEGRATION` | Same |
 
-DEV is fully isolated — changes to DEV data, tasks, or the app cannot affect PROD.
+DEV writes cannot affect PROD. Reads are isolated except for Ask AI: `COCO_AGENT`
+exists only in `TEMP.COCO_PARTNER_ADOPTION`, so DEV's Ask AI queries the PROD agent.
+
+### Caller's rights
+
+Both apps run on container runtime with owner's rights plus one restricted
+caller's-rights connection (`st.session_state._callers_rights_conn`, created at the
+top of `streamlit_app.py` with `USE SECONDARY ROLES ALL`). It serves the viewer
+lookup, ACQ Theatre (row access policies) and workshop account-context reads.
+Caller grants come from `SNOWHOUSE_CALLER_RL`, which `SALES_ENGINEER` inherits.
+Container runtime shares `st.cache_*` across all viewers, so never cache results
+read through the caller's-rights connection unless the decorator has `scope="session"`.
 
 ## Pages
 

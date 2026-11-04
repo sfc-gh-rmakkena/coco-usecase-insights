@@ -2269,7 +2269,7 @@ def get_partner_velocity_data(_conn, partners_sql: str):
         ):labels[0]::STRING                                                       AS WORKLOAD_CATEGORY,
         LEFT(COALESCE(sf.DESCRIPTION_C, sf.USE_CASE_COMMENTS_C,''), 180)         AS DESCRIPTION_PREVIEW,
         d.IS_COCO
-    FROM TEMP.COCO_PARTNER_ADOPTION.DT_OKR_USE_CASES d
+    FROM {SCHEMA}.DT_OKR_USE_CASES d
     JOIN FIVETRAN.SALESFORCE.USE_CASE_C sf ON sf.ID = d.USE_CASE_ID
     WHERE d.PARTNER_NAME IN ({partners_sql})
       AND sf.STAGE_C = '7 - Deployed'

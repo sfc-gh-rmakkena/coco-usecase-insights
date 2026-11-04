@@ -3,6 +3,7 @@ import re as _re
 import pandas as pd
 import plotly.graph_objects as go
 from datetime import datetime, date
+from utils.config import get_schema
 
 def _sf_link(uc_id, uc_name):
     """Salesforce record URL with the UC name embedded in the URL fragment —
@@ -479,7 +480,7 @@ if _partner_list:
         SUM(CASE WHEN uc.IS_COCO AND uc.COCO_SOURCE = 'SE_COMMENTS'      THEN 1 ELSE 0 END) AS SE_COMMENTS,
         SUM(CASE WHEN uc.IS_COCO AND uc.COCO_SOURCE = 'PARTNER_COMMENTS' THEN 1 ELSE 0 END) AS PSE_COMMENTS,
         SUM(CASE WHEN uc.IS_COCO AND uc.COCO_SOURCE = 'FEATURE_FLAG'     THEN 1 ELSE 0 END) AS FEATURE_FLAG
-    FROM TEMP.COCO_PARTNER_ADOPTION.DT_OKR_USE_CASES uc
+    FROM {get_schema()}.DT_OKR_USE_CASES uc
     WHERE uc.PARTNER_NAME IN ('{_partners_sql}')
     AND (
         (uc.USE_CASE_STAGE IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan')

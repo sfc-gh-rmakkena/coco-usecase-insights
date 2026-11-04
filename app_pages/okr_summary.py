@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
+from utils.config import get_schema
 from utils.queries import get_partner_coco_coverage, get_okr_stage_breakdown, get_partner_credit_consumption, get_bulk_confidence_scores, get_coco_final_wow
 from utils import apply_coco_final
 try:
@@ -306,7 +307,7 @@ with tab_summary:
                 SUM(CASE WHEN uc.IS_COCO AND uc.COCO_SOURCE = 'FEATURE_FLAG' THEN 1 ELSE 0 END) AS FEATURE_FLAG,
                 SUM(CASE WHEN NOT uc.IS_COCO AND caa.ACCOUNT_NAME_UPPER IS NOT NULL THEN 1 ELSE 0 END) AS ACCOUNT_HIGH,
                 SUM(CASE WHEN NOT uc.IS_COCO AND caa.ACCOUNT_NAME_UPPER IS NULL THEN 1 ELSE 0 END) AS NOT_COCO
-            FROM TEMP.COCO_PARTNER_ADOPTION.DT_OKR_USE_CASES uc
+            FROM {get_schema()}.DT_OKR_USE_CASES uc
             LEFT JOIN coco_active_accounts caa ON UPPER(uc.ACCOUNT_NAME) = caa.ACCOUNT_NAME_UPPER
             WHERE (
                 (uc.USE_CASE_STAGE IN ('3 - Technical / Business Validation', '4 - Use Case Won / Migration Plan') AND uc.DECISION_DATE >= '{sd}' AND uc.DECISION_DATE <= '{ed}')
@@ -399,7 +400,7 @@ with tab_summary:
             SUM(CASE WHEN uc.IS_COCO AND uc.COCO_SOURCE = 'SE_COMMENTS' THEN 1 ELSE 0 END) AS SE_COMMENTS,
             SUM(CASE WHEN uc.IS_COCO AND uc.COCO_SOURCE = 'PARTNER_COMMENTS' THEN 1 ELSE 0 END) AS PSE_COMMENTS,
             SUM(CASE WHEN uc.IS_COCO AND uc.COCO_SOURCE = 'FEATURE_FLAG' THEN 1 ELSE 0 END) AS FEATURE_FLAG
-        FROM TEMP.COCO_PARTNER_ADOPTION.DT_OKR_USE_CASES uc
+        FROM {get_schema()}.DT_OKR_USE_CASES uc
         LEFT JOIN coco_active_accounts caa ON UPPER(uc.ACCOUNT_NAME) = caa.ACCOUNT_NAME_UPPER
         WHERE uc.PARTNER_NAME IN ('{partners_sql}')
         AND (
@@ -442,8 +443,8 @@ with tab_summary:
                 CASE WHEN SUM(PREV_WEEK_REQUESTS) > 0
                     THEN ROUND((SUM(TOTAL_REQUESTS) - SUM(PREV_WEEK_REQUESTS)) * 100.0 / SUM(PREV_WEEK_REQUESTS), 1)
                 END AS WOW_REQUESTS_PCT
-            FROM TEMP.COCO_PARTNER_ADOPTION.PARTNER_WEEKLY_METRICS
-            WHERE WEEK_START = (SELECT MAX(WEEK_START) FROM TEMP.COCO_PARTNER_ADOPTION.PARTNER_WEEKLY_METRICS)
+            FROM {get_schema()}.PARTNER_WEEKLY_METRICS
+            WHERE WEEK_START = (SELECT MAX(WEEK_START) FROM {get_schema()}.PARTNER_WEEKLY_METRICS)
             AND PARTNER_NAME IN ('{partners_sql_wow}')
             GROUP BY PARTNER_NAME
         )

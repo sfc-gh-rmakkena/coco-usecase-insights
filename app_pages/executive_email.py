@@ -966,7 +966,7 @@ with st.spinner("Loading data..."):
             END AS STAGE_GROUP,
             COUNT(*) AS UC_COUNT,
             COALESCE(SUM(USE_CASE_EACV), 0) AS TOTAL_EACV
-        FROM TEMP.COCO_PARTNER_ADOPTION.DT_OKR_USE_CASES uc
+        FROM {get_schema()}.DT_OKR_USE_CASES uc
         WHERE uc.PARTNER_NAME IN ('{managed_partners_sql}')
         AND uc.USE_CASE_STAGE IN ('3 - Technical / Business Validation','4 - Use Case Won / Migration Plan','5 - Implementation In Progress','6 - Implementation Complete','7 - Deployed')
         AND (
@@ -2224,7 +2224,7 @@ if len(managed_bulk_conf) > 0:
                 TRY_CAST(u.USE_CASE_EACV AS FLOAT)   AS USE_CASE_EACV,
                 TRY_CAST(u.DAYS_IN_STAGE AS INTEGER)  AS DAYS_IN_STAGE,
                 u.IS_COCO
-            FROM TEMP.COCO_PARTNER_ADOPTION.DT_OKR_USE_CASES u
+            FROM {get_schema()}.DT_OKR_USE_CASES u
             WHERE u.PARTNER_NAME IN ('{_mp_sql}')
               AND u.USE_CASE_STAGE IN (
                     '3 - Technical / Business Validation',
@@ -2309,10 +2309,16 @@ _NARRATIVE_INSTRUCTIONS = {
 }
 
 current_user = "rithesh.makkena"
-try:
-    current_user = conn.query("SELECT CURRENT_USER()").iloc[0][0].lower()
-except Exception:
-    pass
+# The viewer is resolved once per session in streamlit_app.py through the
+# caller's-rights connection. CURRENT_USER() on the owner's-rights `conn`
+# returns the app OWNER on container runtime, so it is only a local fallback.
+if st.session_state.get("_current_user_upper"):
+    current_user = st.session_state._current_user_upper.lower()
+else:
+    try:
+        current_user = conn.query("SELECT CURRENT_USER()").iloc[0][0].lower()
+    except Exception:
+        pass
 
 recipients_input = st.text_area(
     "To (one name per line, e.g. 'John Smith' → john.smith@snowflake.com)",
