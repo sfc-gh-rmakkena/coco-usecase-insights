@@ -781,6 +781,11 @@ if selected_partner:
                 if abs(n) >= 1_000_000:     return f"{n/1_000_000:+.1f}M"
                 if abs(n) >= 1_000:         return f"{n/1_000:+.1f}K"
                 return f"{int(n):+d}"
+            # Prior-week values are missing for partners with no usage last week.
+            def _fmt_cred(n):
+                return "N/A" if n is None else f"${n:,.0f}"
+            def _fmt_pct(n):
+                return "N/A" if n is None else f"{n:+.1f}%"
             _l7c  = float(_ps['LAST7_CREDITS'])  if pd.notna(_ps.get('LAST7_CREDITS'))  else None
             _p7c  = float(_ps['PRIOR7_CREDITS']) if pd.notna(_ps.get('PRIOR7_CREDITS')) else None
             _l7t  = float(_ps['LAST7_TOKENS'])   if pd.notna(_ps.get('LAST7_TOKENS'))   else None
@@ -807,10 +812,10 @@ if selected_partner:
                 f"${float(_ps['Q2_CREDITS']):,.0f}" if pd.notna(_ps.get('Q2_CREDITS')) else "N/A",
                 help=(f"Credit Spend — IS_COCO_FINAL Accounts{_sep}\n"
                       f"Period:   May 1, 2026 – today\n"
-                      f"Last 7d:  ${_l7c:,.0f}\n"
-                      f"Prior 7d: ${_p7c:,.0f}\n"
+                      f"Last 7d:  {_fmt_cred(_l7c)}\n"
+                      f"Prior 7d: {_fmt_cred(_p7c)}\n"
                       f"WoW Δ:    {_fmt_delta_cred(_dcred)}\n"
-                      f"WoW%:     {_cwow:+.1f}%"
+                      f"WoW%:     {_fmt_pct(_cwow)}"
                       f"{_stage_note}") if _l7c else
                      "Cumulative credit spend on IS_COCO_FINAL accounts")
 
@@ -818,10 +823,10 @@ if selected_partner:
                 f"${_l7c:,.0f}" if _l7c is not None else "N/A",
                 delta=_cred_delta,
                 help=(f"Credit Spend \u2014 Last 7 Rolling Days{_sep}\n"
-                      f"Last 7d:   ${_l7c:,.0f}  \u2190 shown above\n"
-                      f"Prior 7d:  ${_p7c:,.0f}\n"
+                      f"Last 7d:   {_fmt_cred(_l7c)}  \u2190 shown above\n"
+                      f"Prior 7d:  {_fmt_cred(_p7c)}\n"
                       f"WoW Delta: {_fmt_delta_cred(_dcred)}\n"
-                      f"WoW%:      {_cwow:+.1f}%\n\n"
+                      f"WoW%:      {_fmt_pct(_cwow)}\n\n"
                       f"Formula: (Last 7d \u2212 Prior 7d) \u00f7 Prior 7d \u00d7 100") if _l7c else
                      "Last 7d credit spend")
 
@@ -832,7 +837,7 @@ if selected_partner:
                       f"Last 7d:  {_fmt_tok(_l7t)}\n"
                       f"Prior 7d: {_fmt_tok(_p7t)}\n"
                       f"WoW \u0394:    {_fmt_delta_tok(_dtok)}\n"
-                      f"WoW%:     {_twow:+.1f}%"
+                      f"WoW%:     {_fmt_pct(_twow)}"
                       f"{_stage_note}") if _l7t else
                      "Cumulative token usage on IS_COCO_FINAL accounts")
 
@@ -843,7 +848,7 @@ if selected_partner:
                       f"Last 7d:   {_fmt_tok(_l7t)}  \u2190 shown above\n"
                       f"Prior 7d:  {_fmt_tok(_p7t)}\n"
                       f"WoW Delta: {_fmt_delta_tok(_dtok)}\n"
-                      f"WoW%:      {_twow:+.1f}%\n\n"
+                      f"WoW%:      {_fmt_pct(_twow)}\n\n"
                       f"Formula: (Last 7d \u2212 Prior 7d) \u00f7 Prior 7d \u00d7 100") if _l7t else
                      "Last 7d token usage")
         elif len(credit_data[credit_data['PARTNER_NAME'] == selected_partner]) > 0:
