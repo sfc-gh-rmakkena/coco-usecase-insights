@@ -6,8 +6,13 @@ SCHEMA = get_schema()
 DT_OKR = f"{SCHEMA}.DT_OKR_USE_CASES"
 
 # Q3 FY27 snapshot tables (fresh start Aug 1 2026)
-_OKR_TARGET_TABLE       = f"{SCHEMA}.COCO_OKR_TARGET_WEEKLY_Q3"
-_SNAPSHOT_TABLE         = f"{SCHEMA}.IS_COCO_FINAL_WEEKLY_SNAPSHOT_Q3"
+_OKR_TARGET_TABLE       = f"{SCHEMA}.COCO_OKR_TARGET_WEEKLY_Q4"   # current OKR quarter (Q3 table kept as history)
+# Weekly IS_COCO_FINAL snapshot of the current OKR quarter's use-case stock (Q4 FY27,
+# Nov 1 2026 - Jan 31 2027). Saved weekly by Overview and Executive Email; all WoW
+# deltas read it. The Q3 table is kept as history and is no longer written.
+SNAPSHOT_TABLE_Q3       = f"{SCHEMA}.IS_COCO_FINAL_WEEKLY_SNAPSHOT_Q3"
+SNAPSHOT_TABLE_Q4       = f"{SCHEMA}.IS_COCO_FINAL_WEEKLY_SNAPSHOT_Q4"
+_SNAPSHOT_TABLE         = SNAPSHOT_TABLE_Q4
 _UC_COCO_WEEKLY_TABLE   = f"{SCHEMA}.UC_COCO_STATUS_WEEKLY"
 
 def _use_case_base(start_date=None, end_date=None):
@@ -526,7 +531,7 @@ _NOAM_RSI_PARTNERS_SQL = (
     "'Spaulding Ridge','TEKsystems Global Services, LLC.','Blend360, LLC',"
     "'Tiger Analytics Inc.','Atrium','Perficient Inc.','Ateko','SDK Tek Services Ltd.',"
     "'Merkle','Archetype Consulting','Everforth Apex Systems','Tata Consultancy Services',"
-    "'OneSix','Icon Analytics','Sparq Holdings, Inc.','CitiusTech Inc.','Hexaware Technologies'"
+    "'OneSix','Sparq Holdings, Inc.','CitiusTech Inc.','Hexaware Technologies'"
 )
 
 _RSI_STAGE_COLS = """
@@ -603,28 +608,25 @@ def get_noam_rsi_adoption(_conn, start_date: str, end_date: str, theaters: tuple
     ORDER BY TOTAL_UCS DESC
     """)
 
-@st.cache_data(ttl=timedelta(minutes=30))
-def get_apj_rsi_adoption(_conn, start_date: str, end_date: str):
-    """Per-partner CoCo adoption for the 5 APJ RSIs, each restricted to their assigned REGION_NAME.
-    Returns one row per canonical partner label with IS_COCO-based counts.
+def _rsi_adoption(_conn, region_map, start_date: str, end_date: str):
+    """Per-partner CoCo adoption for one RSI group, each partner restricted to its
+    REGION_NAME in `region_map`. One row per partner label with IS_COCO-based counts;
     IS_COCO_FINAL enrichment is applied in Python by the caller via bulk_conf.
     """
+    from utils import region_map_sql
     date_filter = f"""(
         (uc.USE_CASE_STAGE IN ('3 - Technical / Business Validation','4 - Use Case Won / Migration Plan')
          AND uc.DECISION_DATE >= '{start_date}' AND uc.DECISION_DATE <= '{end_date}')
         OR (uc.USE_CASE_STAGE IN ('5 - Implementation In Progress','6 - Implementation Complete','7 - Deployed')
          AND uc.GO_LIVE_DATE >= '{start_date}' AND uc.GO_LIVE_DATE <= '{end_date}')
     )"""
+    _esc = lambda v: v.replace("'", "''")
+    label_case = "CASE " + " ".join(
+        f"WHEN uc.PARTNER_NAME = '{_esc(p)}' THEN '{_esc(label)}'"
+        for p, (label, _) in region_map.items()) + " END"
     return _conn.query(f"""
     SELECT
-        CASE
-            WHEN uc.PARTNER_NAME = 'NTT DATA Group Corporation'                         THEN 'NTT Data'
-            WHEN uc.PARTNER_NAME = 'MegazoneCloud Corporation'                          THEN 'Megazone'
-            WHEN uc.PARTNER_NAME IN ('Infinite Lambda Limited','Infinite Lambda Inc',
-                                     'INFINITE LAMBDA (SINGAPORE) PTE. LTD.')           THEN 'Infinite Lambda'
-            WHEN uc.PARTNER_NAME IN ('Altis Global Limited','Altis Consulting, ANZ')    THEN 'Altis'
-            WHEN uc.PARTNER_NAME = 'PROLIM Global Corporation'                          THEN 'Prolim'
-        END                                                         AS PARTNER_LABEL,
+        {label_case}                                                AS PARTNER_LABEL,
         uc.REGION_NAME                                              AS COUNTRY,
         COUNT(*)                                                    AS TOTAL_UCS,
         SUM(CASE WHEN uc.IS_COCO THEN 1 ELSE 0 END)                AS COCO_UCS,
@@ -639,62 +641,23 @@ def get_apj_rsi_adoption(_conn, start_date: str, end_date: str):
         COALESCE(SUM(CASE WHEN uc.IS_COCO THEN uc.USE_CASE_EACV ELSE 0 END), 0)   AS COCO_EACV
     FROM {DT_OKR} uc
     WHERE {date_filter}
-      AND (
-          (uc.PARTNER_NAME = 'NTT DATA Group Corporation'                          AND uc.REGION_NAME = 'Japan')
-          OR (uc.PARTNER_NAME = 'MegazoneCloud Corporation'                        AND uc.REGION_NAME = 'Korea')
-          OR (uc.PARTNER_NAME IN ('Infinite Lambda Limited','Infinite Lambda Inc',
-                                  'INFINITE LAMBDA (SINGAPORE) PTE. LTD.')         AND uc.REGION_NAME = 'ASEAN')
-          OR (uc.PARTNER_NAME IN ('Altis Global Limited','Altis Consulting, ANZ')  AND uc.REGION_NAME = 'ANZ')
-          OR (uc.PARTNER_NAME = 'PROLIM Global Corporation'                        AND uc.REGION_NAME = 'India')
-      )
+      AND {region_map_sql(region_map)}
       AND COALESCE(uc.IS_NOT_INVOLVED, FALSE) = FALSE
     GROUP BY PARTNER_LABEL, uc.REGION_NAME
     ORDER BY PARTNER_LABEL
     """)
 
 @st.cache_data(ttl=timedelta(minutes=30))
+def get_apj_rsi_adoption(_conn, start_date: str, end_date: str):
+    """APJ RSIs, each restricted to its REGION_NAME in APJ_RSI_REGION_MAP."""
+    from utils import APJ_RSI_REGION_MAP
+    return _rsi_adoption(_conn, APJ_RSI_REGION_MAP, start_date, end_date)
+
+@st.cache_data(ttl=timedelta(minutes=30))
 def get_emea_rsi_adoption(_conn, start_date: str, end_date: str):
-    """Per-partner CoCo adoption for the 4 EMEA RSIs, each restricted to their assigned REGION_NAME.
-    Infomotion→CentralEMEA | Civica→SouthEMEA | Kubrick→UK | KPC→SouthEMEA
-    """
-    date_filter = f"""(
-        (uc.USE_CASE_STAGE IN ('3 - Technical / Business Validation','4 - Use Case Won / Migration Plan')
-         AND uc.DECISION_DATE >= '{start_date}' AND uc.DECISION_DATE <= '{end_date}')
-        OR (uc.USE_CASE_STAGE IN ('5 - Implementation In Progress','6 - Implementation Complete','7 - Deployed')
-         AND uc.GO_LIVE_DATE >= '{start_date}' AND uc.GO_LIVE_DATE <= '{end_date}')
-    )"""
-    return _conn.query(f"""
-    SELECT
-        CASE
-            WHEN uc.PARTNER_NAME ILIKE '%Infomotion%'  THEN 'Infomotion'
-            WHEN uc.PARTNER_NAME ILIKE '%Civica%'      THEN 'Civica'
-            WHEN uc.PARTNER_NAME ILIKE '%Kubrick%'     THEN 'Kubrick'
-            WHEN uc.PARTNER_NAME ILIKE '%KPC%'         THEN 'KPC'
-        END                                                         AS PARTNER_LABEL,
-        uc.REGION_NAME                                              AS COUNTRY,
-        COUNT(*)                                                    AS TOTAL_UCS,
-        SUM(CASE WHEN uc.IS_COCO THEN 1 ELSE 0 END)                AS COCO_UCS,
-        ROUND(SUM(CASE WHEN uc.IS_COCO THEN 1 ELSE 0 END) * 100.0
-              / NULLIF(COUNT(*), 0), 1)                             AS COCO_PCT,
-        SUM(CASE WHEN uc.USE_CASE_STAGE IN ('3 - Technical / Business Validation','4 - Use Case Won / Migration Plan') AND uc.IS_COCO THEN 1 ELSE 0 END) AS VALIDATION_COCO,
-        SUM(CASE WHEN uc.USE_CASE_STAGE = '5 - Implementation In Progress' AND uc.IS_COCO THEN 1 ELSE 0 END) AS IN_PROGRESS_COCO,
-        SUM(CASE WHEN uc.USE_CASE_STAGE IN ('6 - Implementation Complete','7 - Deployed') AND uc.IS_COCO THEN 1 ELSE 0 END) AS IMPL_COMPLETE_DEPLOYED_COCO,
-        SUM(CASE WHEN uc.USE_CASE_STAGE = '7 - Deployed' THEN 1 ELSE 0 END)       AS DEPLOYED_ALL,
-        SUM(CASE WHEN uc.USE_CASE_STAGE = '7 - Deployed' AND uc.IS_COCO THEN 1 ELSE 0 END) AS DEPLOYED_COCO,
-        COALESCE(SUM(uc.USE_CASE_EACV), 0)                                         AS TOTAL_EACV,
-        COALESCE(SUM(CASE WHEN uc.IS_COCO THEN uc.USE_CASE_EACV ELSE 0 END), 0)   AS COCO_EACV
-    FROM {DT_OKR} uc
-    WHERE {date_filter}
-      AND (
-          (uc.PARTNER_NAME ILIKE '%Infomotion%' AND uc.REGION_NAME = 'CentralEMEA')
-          OR (uc.PARTNER_NAME ILIKE '%Civica%'  AND uc.REGION_NAME = 'SouthEMEA')
-          OR (uc.PARTNER_NAME ILIKE '%Kubrick%' AND uc.REGION_NAME = 'UK')
-          OR (uc.PARTNER_NAME ILIKE '%KPC%'     AND uc.REGION_NAME = 'SouthEMEA')
-      )
-      AND COALESCE(uc.IS_NOT_INVOLVED, FALSE) = FALSE
-    GROUP BY PARTNER_LABEL, uc.REGION_NAME
-    ORDER BY PARTNER_LABEL
-    """)
+    """EMEA RSIs, each restricted to its REGION_NAME in EMEA_RSI_REGION_MAP."""
+    from utils import EMEA_RSI_REGION_MAP
+    return _rsi_adoption(_conn, EMEA_RSI_REGION_MAP, start_date, end_date)
 
 @st.cache_data(ttl=timedelta(minutes=30))
 def get_latam_rsi_adoption(_conn, start_date: str, end_date: str):
@@ -1716,7 +1679,7 @@ def get_segment_by_impl_start(_conn):
             'Spaulding Ridge','TEKsystems Global Services, LLC.','Blend360, LLC',
             'Tiger Analytics Inc.','Atrium','Perficient Inc.','Ateko','SDK Tek Services Ltd.',
             'Merkle','Archetype Consulting','Everforth Apex Systems','Tata Consultancy Services',
-            'OneSix','Icon Analytics','Sparq Holdings, Inc.','CitiusTech Inc.',
+            'OneSix','Sparq Holdings, Inc.','CitiusTech Inc.',
             'Hexaware Technologies'
         )))
     ),
@@ -1794,7 +1757,7 @@ def get_segment_velocity(_conn):
             'Spaulding Ridge','TEKsystems Global Services, LLC.','Blend360, LLC',
             'Tiger Analytics Inc.','Atrium','Perficient Inc.','Ateko','SDK Tek Services Ltd.',
             'Merkle','Archetype Consulting','Everforth Apex Systems','Tata Consultancy Services',
-            'OneSix','Icon Analytics','Sparq Holdings, Inc.','CitiusTech Inc.',
+            'OneSix','Sparq Holdings, Inc.','CitiusTech Inc.',
             'Hexaware Technologies'
         )))
     ),
@@ -2444,26 +2407,34 @@ def save_okr_target_count(_conn, partners_at_target: int, total_partners: int) -
 _GROUP_TO_REGION = {'GSI': 'Global', 'NOAM RSI': 'NoAM', 'APJ RSI': 'APJ', 'EMEA RSI': 'EMEA', 'LATAM RSI': 'LATAM'}
 
 
-def save_coco_final_snapshot(_conn, bulk_conf_df, region='NoAM') -> bool:
+def save_coco_final_snapshot(_conn, bulk_conf_df, region='NoAM', table=None) -> bool:
     """Save this week's IS_COCO_FINAL (Def C) snapshot. Idempotent — skips if already saved this week.
     bulk_conf_df must have IS_COCO_FINAL, PARTNER_NAME, USE_CASE_ID, USE_CASE_EACV columns.
     If bulk_conf_df has a _GROUP column, each partner is saved with its correct REGION
     (GSI=Global, NOAM RSI=NoAM, APJ RSI=APJ, EMEA RSI=EMEA). Otherwise falls back to `region` param.
     Returns True if saved, False if already exists for this week.
+    `table` overrides the snapshot table (default: the current quarter's table).
     """
     import pandas as pd
+    table = table or _SNAPSHOT_TABLE
     week_start = pd.Timestamp.now().to_period('W').start_time.date().strftime('%Y-%m-%d')
 
+    # ttl=0: never reuse a cached count, or a later run in the same week saves again.
     existing = _conn.query(f"""
-        SELECT COUNT(*) AS CNT FROM {_SNAPSHOT_TABLE}
+        SELECT COUNT(*) AS CNT FROM {table}
         WHERE WEEK_START = '{week_start}'
-    """)
+    """, ttl=0)
     if existing.iloc[0]['CNT'] > 0:
         return False
 
     has_group = '_GROUP' in bulk_conf_df.columns
+    # One row per (partner, group) so a multi-group partner's NOAM, APJ and EMEA use
+    # cases land under their own REGION and match the per-group gauges.
+    split_groups = has_group
+    keys = ['PARTNER_NAME', '_GROUP'] if split_groups else 'PARTNER_NAME'
     rows = []
-    for partner, grp in bulk_conf_df.groupby('PARTNER_NAME'):
+    for key, grp in bulk_conf_df.groupby(keys):
+        partner = key[0] if split_groups else key
         coco = int(grp['IS_COCO_FINAL'].sum())
         total = len(grp)
         pct = round(coco * 100.0 / total, 1) if total > 0 else 0.0
@@ -2486,11 +2457,13 @@ def save_coco_final_snapshot(_conn, bulk_conf_df, region='NoAM') -> bool:
     # Overall row always saved as 'Global' (spans all partner groups)
     rows.append(f"('{week_start}', NULL, {total_all}, {coco_all}, {pct_all}, {eacv_all}, {coco_eacv_all}, 'Global')")
 
+    # The insert also refuses a week that already exists, in case two sessions race.
     _conn.query(f"""
-        INSERT INTO {_SNAPSHOT_TABLE}
+        INSERT INTO {table}
             (WEEK_START, PARTNER_NAME, TOTAL_UCS, COCO_UCS, COCO_PCT, TOTAL_EACV, COCO_EACV, REGION)
-        VALUES {', '.join(rows)}
-    """)
+        SELECT * FROM (VALUES {', '.join(rows)})
+        WHERE NOT EXISTS (SELECT 1 FROM {table} WHERE WEEK_START = '{week_start}')
+    """, ttl=0)
     return True
 
 

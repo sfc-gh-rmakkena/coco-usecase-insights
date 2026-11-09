@@ -104,7 +104,6 @@ PARTNER_ALIASES = {
     'Archetype Consulting':   ['Archetype Consulting'],
     'Everforth Apex Systems': ['Everforth Apex Systems'],
     'OneSix':                 ['OneSix'],
-    'Icon Analytics':         ['Icon Analytics'],
     'Sparq Holdings, Inc.':   ['Sparq Holdings, Inc.'],
     '--- GSIs ---': [
         'Accenture', 'Capgemini Technologies LLC',
@@ -122,26 +121,30 @@ PARTNER_ALIASES = {
         'Spaulding Ridge', 'TEKsystems Global Services, LLC.', 'Blend360, LLC',
         'Tiger Analytics Inc.', 'Atrium', 'Perficient Inc.', 'Ateko', 'SDK Tek Services Ltd.',
         'Merkle', 'Archetype Consulting', 'Everforth Apex Systems',  'Tata Consultancy Services',
-        'OneSix', 'Icon Analytics', 'Sparq Holdings, Inc.', 'CitiusTech Inc.',
+        'OneSix', 'Sparq Holdings, Inc.', 'CitiusTech Inc.',
         'Hexaware Technologies',
     ],
     '--- APJ RSIs ---': [
-        'NTT DATA Group Corporation',       # Japan
-        'MegazoneCloud Corporation',         # Korea
-        'Infinite Lambda Limited',           # ASEAN
-        'Infinite Lambda Inc',               # ASEAN (alias)
-        'INFINITE LAMBDA (SINGAPORE) PTE. LTD.',  # ASEAN (alias)
-        'Altis Global Limited',              # ANZ (PARTNER_HIERARCHY rolls Altis up to this)
-        'Altis Consulting, ANZ',             # ANZ (alias - MDM raw name, consultant tables)
-        'PROLIM Global Corporation',         # India
+        # Partner names as stored in DT_OKR_USE_CASES; region per APJ_RSI_REGION_MAP.
+        'NTT DATA Group Corporation', 'Altis Global Limited', 'Mantel', 'Slalom, LLC.',
+        'Vivanti USA LLC', 'Bitek Information & Communication Inc.', 'DATUM STUDIO Co. Ltd.',
+        'Billigence APAC', 'MegazoneCloud Corporation', 'NS Solutions Corporation',
+        'InterWorks, Inc', 'ZEAL Corporation', 'ZEAL CORPORATION',
+        'ITOCHU Techno-Solutions Corporation', 'Hitachi Solutions, Ltd.',
+        'Intage Technosphere inc.', 'iZeno Pte Ltd', 'SHI Solutions India Private Limited',
+        'PROLIM Global Corporation', 'SoftwareONE Pte Ltd (Singapore)', 'Infosys',
+        'Quantiphi Inc.', 'ITGN OPS CO PTY LTD.', 'Infinite Lambda Limited', 'NEC Corporation',
+        'Nomura Research Institute, Ltd.', 'Classmethod',
     ],
     '--- EMEA RSIs ---': [
-        'INFOMOTION GMBH',                   # CentralEMEA
-        'INFOMOTION GMBH, BearingPoint',     # CentralEMEA (alias)
-        'CIVICA SOFTWARE, S.L.',             # SouthEMEA (Spain)
-        'Kubrick Group',                     # UK
-        'KPC (Key Performance Consulting)',  # SouthEMEA (France)
-        'KPC',                               # SouthEMEA (alias)
+        # Partner names as stored in DT_OKR_USE_CASES; region per EMEA_RSI_REGION_MAP.
+        'Aimpoint Digital', 'Lumilinks Group Ltd', 'Slalom, LLC.',
+        'SDG Consulting (EMEA) Consolidated', 'CIVICA SOFTWARE, S.L.', 'Devoteam',
+        'KPC (Key Performance Consulting)', 'Twoday Oy', 'Recordly Oy', 'Solita Oy',
+        'Navara Consulting Services BV', 'IN516HT TECHNOLOGIES CO. L.L.C',
+        'Datalab Solutions (Pty) Ltd', '8Insights Consulting LLC', 'INFOMOTION GMBH',
+        'Billigence APAC', 'b.telligent Group', 'synvert GmbH', 'CACI Limited',
+        'Vivanti USA LLC',
     ],
     '--- LATAM RSIs ---': [
         'Viewnear - Partner',                                   # Mexico
@@ -157,15 +160,37 @@ PARTNER_GROUPS = ['--- GSIs ---', '--- NOAM RSIs ---', '--- APJ RSIs ---', '--- 
 
 # Per-partner country restriction for APJ RSIs (REGION_NAME in DT_OKR / MDM)
 # Key = canonical DT_OKR PARTNER_NAME, Value = (display_label, REGION_NAME)
+# Slalom and Infosys are also NOAM RSIs: their NoAM-theater use cases count for
+# NOAM and their ANZ ones for APJ. Decide a row's group with managed_group(), never
+# by `partner in APJ_RSI_REGION_MAP` alone.
 APJ_RSI_REGION_MAP = {
-    'NTT DATA Group Corporation':               ('NTT Data',          'Japan'),
-    'MegazoneCloud Corporation':                ('Megazone',          'Korea'),
-    'Infinite Lambda Limited':                  ('Infinite Lambda',   'ASEAN'),
-    'Infinite Lambda Inc':                      ('Infinite Lambda',   'ASEAN'),
-    'INFINITE LAMBDA (SINGAPORE) PTE. LTD.':   ('Infinite Lambda',   'ASEAN'),
+    'NTT DATA Group Corporation':               ('NTT DATA',          'ASEAN'),
     'Altis Global Limited':                     ('Altis',             'ANZ'),
-    'Altis Consulting, ANZ':                    ('Altis',             'ANZ'),
-    'PROLIM Global Corporation':                ('Prolim',            'India'),
+    'Mantel':                                   ('Mantel',            'ANZ'),
+    'Slalom, LLC.':                             ('Slalom (ANZ)',      'ANZ'),
+    'Vivanti USA LLC':                          ('Vivanti',           'ANZ'),
+    'Bitek Information & Communication Inc.':   ('Bitek',             'Korea'),
+    'DATUM STUDIO Co. Ltd.':                    ('DATUM STUDIO',      'Japan'),
+    'Billigence APAC':                          ('Billigence (ANZ)',  'ANZ'),
+    'MegazoneCloud Corporation':                ('Megazone',          'Korea'),
+    'NS Solutions Corporation':                 ('NS Solutions',      'Japan'),
+    'InterWorks, Inc':                          ('InterWorks',        'ANZ'),
+    'ZEAL Corporation':                         ('ZEAL Corporation',  'Japan'),
+    'ZEAL CORPORATION':                         ('ZEAL Corporation',  'Japan'),
+    'ITOCHU Techno-Solutions Corporation':      ('CTC (ITOCHU)',      'Japan'),
+    'Hitachi Solutions, Ltd.':                  ('Hitachi Solutions', 'Japan'),
+    'Intage Technosphere inc.':                 ('Intage',            'Japan'),
+    'iZeno Pte Ltd':                            ('iZeno',             'ASEAN'),
+    'SHI Solutions India Private Limited':      ('SHI Solutions',     'India'),
+    'PROLIM Global Corporation':                ('PROLIM',            'India'),
+    'SoftwareONE Pte Ltd (Singapore)':          ('SoftwareONE',       'ASEAN'),
+    'Infosys':                                  ('Infosys (ANZ)',     'ANZ'),
+    'Quantiphi Inc.':                           ('Quantiphi',         'India'),
+    'ITGN OPS CO PTY LTD.':                     ('ITGN',              'ANZ'),
+    'Infinite Lambda Limited':                  ('Infinite Lambda',   'ASEAN'),
+    'NEC Corporation':                          ('NEC',               'Japan'),
+    'Nomura Research Institute, Ltd.':          ('NRI',               'Japan'),
+    'Classmethod':                              ('Classmethod',       'Japan'),
 }
 
 # Per-partner geo restriction for LATAM RSIs (REGION_NAME in DT_OKR)
@@ -178,14 +203,145 @@ LATAM_RSI_REGION_MAP = {
 }
 
 # Per-partner country restriction for EMEA RSIs (REGION_NAME in DT_OKR)
+# Some partners are in several groups (Aimpoint, Slalom: NOAM; Billigence, Vivanti,
+# Slalom: APJ). Each use case still lands in one group via managed_group().
 EMEA_RSI_REGION_MAP = {
-    'INFOMOTION GMBH':                      ('Infomotion',  'CentralEMEA'),
-    'INFOMOTION GMBH, BearingPoint':        ('Infomotion',  'CentralEMEA'),
-    'CIVICA SOFTWARE, S.L.':               ('Civica',      'SouthEMEA'),
-    'Kubrick Group':                        ('Kubrick',     'UK'),
-    'KPC (Key Performance Consulting)':     ('KPC',         'SouthEMEA'),
-    'KPC':                                  ('KPC',         'SouthEMEA'),
+    'Aimpoint Digital':                    ('Aimpoint Digital (UK)', 'UK'),
+    'Lumilinks Group Ltd':                 ('Lumilinks',            'UK'),
+    'Slalom, LLC.':                        ('Slalom (UK)',          'UK'),
+    'SDG Consulting (EMEA) Consolidated':  ('SDG Consulting',       'SouthEMEA'),
+    'CIVICA SOFTWARE, S.L.':               ('Civica',               'SouthEMEA'),
+    'Devoteam':                            ('Devoteam',             'SouthEMEA'),
+    'KPC (Key Performance Consulting)':    ('KPC',                  'SouthEMEA'),
+    'Twoday Oy':                           ('Twoday',               'NorthEMEA'),
+    'Recordly Oy':                         ('Recordly',             'NorthEMEA'),
+    'Solita Oy':                           ('Solita',               'NorthEMEA'),
+    'Navara Consulting Services BV':       ('Navara',               'NorthEMEA'),
+    'IN516HT TECHNOLOGIES CO. L.L.C':      ('IN516HT',              'META'),
+    'Datalab Solutions (Pty) Ltd':         ('Datalab Solutions',    'META'),
+    '8Insights Consulting LLC':            ('8Insights',            'META'),
+    'INFOMOTION GMBH':                     ('Infomotion',           'CentralEMEA'),
+    'Billigence APAC':                     ('Billigence (EMEA)',    'CentralEMEA'),
+    'b.telligent Group':                   ('b.telligent',          'CentralEMEA'),
+    'synvert GmbH':                        ('synvert',              'CentralEMEA'),
+    'CACI Limited':                        ('CACI',                 'UK'),
+    'Vivanti USA LLC':                     ('Vivanti (UK)',         'UK'),
 }
+
+
+GROUP_GSI, GROUP_NOAM, GROUP_APJ, GROUP_EMEA, GROUP_LATAM = (
+    'GSI', 'NOAM RSI', 'APJ RSI', 'EMEA RSI', 'LATAM RSI')
+
+# Current OKR quarter. Change these (and the targets below) at each quarter roll-over.
+OKR_QUARTER = 'Q4'
+OKR_QUARTER_LABEL = 'Q4 FY27'
+OKR_Q_START = '2026-11-01'
+OKR_Q_END = '2027-01-31'
+OKR_Q_MONTHS = 'Nov 2026 – Jan 2027'
+
+# Q4 FY27 OKR CoCo adoption targets (%): GSI and NOAM RSI 90, regional RSIs 50.
+GSI_NOAM_TARGET = 90
+REGIONAL_RSI_TARGET = 50
+GROUP_TARGET_PCT = {
+    GROUP_GSI: GSI_NOAM_TARGET, GROUP_NOAM: GSI_NOAM_TARGET,
+    GROUP_APJ: REGIONAL_RSI_TARGET, GROUP_EMEA: REGIONAL_RSI_TARGET, GROUP_LATAM: REGIONAL_RSI_TARGET,
+}
+
+
+def managed_group(partner, theater, region):
+    """Managed group a single use-case row counts toward, or None.
+
+    Decided per row, not per partner: a partner can be in more than one group
+    (Slalom and Infosys are NOAM RSIs and APJ RSIs), and each of its use cases
+    lands in exactly one group by geography, so group totals never double-count.
+    """
+    if partner in PARTNER_ALIASES['--- GSIs ---']:
+        return GROUP_GSI
+    if partner in PARTNER_ALIASES['--- NOAM RSIs ---'] and theater in _NOAM_THEATERS:
+        return GROUP_NOAM
+    for group, region_map in ((GROUP_APJ, APJ_RSI_REGION_MAP),
+                              (GROUP_EMEA, EMEA_RSI_REGION_MAP),
+                              (GROUP_LATAM, LATAM_RSI_REGION_MAP)):
+        if partner in region_map and region == region_map[partner][1]:
+            return group
+    return None
+
+
+def add_managed_group(df, partner_col='PARTNER_NAME', theater_col='THEATER_NAME',
+                      region_col='REGION_NAME', out_col='_GROUP'):
+    """Return a copy of df with `out_col` set by managed_group() for each row."""
+    df = df.copy()
+    df[out_col] = [
+        managed_group(p, t, r) for p, t, r in
+        zip(df[partner_col], df.get(theater_col, [None] * len(df)),
+            df.get(region_col, [None] * len(df)))
+    ]
+    return df
+
+
+def partner_groups(partner):
+    """All managed groups a partner name belongs to (several for e.g. Slalom)."""
+    out = []
+    if partner in PARTNER_ALIASES['--- GSIs ---']:
+        out.append(GROUP_GSI)
+    if partner in PARTNER_ALIASES['--- NOAM RSIs ---']:
+        out.append(GROUP_NOAM)
+    for group, region_map in ((GROUP_APJ, APJ_RSI_REGION_MAP),
+                              (GROUP_EMEA, EMEA_RSI_REGION_MAP),
+                              (GROUP_LATAM, LATAM_RSI_REGION_MAP)):
+        if partner in region_map:
+            out.append(group)
+    return out
+
+
+def group_target_for(partner, rename_map=None):
+    """OKR goal (%) for a partner from its first group (GSI/NOAM 90, regional RSIs 50),
+    or None for a partner in no managed group. `rename_map` maps raw -> display names,
+    so a display name like 'LTM' resolves through its raw alias."""
+    groups = partner_groups(partner)
+    if not groups and rename_map:
+        raw = next((k for k, v in rename_map.items() if v == partner and partner_groups(k)), None)
+        groups = partner_groups(raw) if raw else []
+    return GROUP_TARGET_PCT[groups[0]] if groups else None
+
+
+def scope_rsi_rows(df, partner_col='PARTNER_NAME', theater_col='THEATER_NAME',
+                   region_col='REGION_NAME'):
+    """Geo-scope rows for a custom partner selection.
+
+    Partners only in region-scoped groups (APJ/EMEA/LATAM) keep rows in one of
+    their mapped regions. Partners that are also GSIs or NOAM RSIs keep every row
+    outside the APJ and EMEA theaters too (their unscoped view, as before), plus
+    their mapped-region rows inside them. Partners in no RSI group are untouched.
+    """
+    if df is None or len(df) == 0 or region_col not in df.columns:
+        return df
+
+    def keep(partner, theater, region):
+        groups = partner_groups(partner)
+        regional = [g for g in groups if g in (GROUP_APJ, GROUP_EMEA, GROUP_LATAM)]
+        if not regional:
+            return True
+        if managed_group(partner, theater, region) in regional:
+            return True
+        unscoped = GROUP_GSI in groups or GROUP_NOAM in groups
+        return unscoped and theater not in ('APJ', 'EMEA')
+
+    theaters = df[theater_col] if theater_col in df.columns else [None] * len(df)
+    return df[[keep(p, t, r) for p, t, r in zip(df[partner_col], theaters, df[region_col])]]
+
+
+def region_map_sql(region_map, alias='uc'):
+    """OR'd SQL condition: each partner's rows in its own region only."""
+    by_region = {}
+    for partner, (_, region) in region_map.items():
+        by_region.setdefault(region, []).append(partner.replace("'", "''"))
+    terms = [
+        f"({alias}.PARTNER_NAME IN ('" + "','".join(sorted(names)) + f"') "
+        f"AND {alias}.REGION_NAME = '{region}')"
+        for region, names in sorted(by_region.items())
+    ]
+    return "(" + " OR ".join(terms) + ")" if terms else "FALSE"
 
 # Flat alias→canonical map for DataFrame PARTNER_NAME .replace() operations
 # Derived from PARTNER_ALIASES: each non-group entry's aliases beyond the first

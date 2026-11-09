@@ -139,9 +139,9 @@ def _peer_group_for(partner: str):
     for the group `partner` belongs to. region_filter_kind is one of
     'none' (global), 'theater' (NoAM RSIs), 'region' (APJ/EMEA/LATAM RSIs)."""
     if partner in GSI_NAMES:
-        return ([p for p in GSI_LIST if p != partner], "none", None, 75, "GSIs")
+        return ([p for p in GSI_LIST if p != partner], "none", None, 90, "GSIs")
     if partner in NOAM_RSI_NAMES:
-        return ([p for p in NOAM_RSI_NAMES if p != partner], "theater", NOAM_THEATERS, 75, "NoAM RSIs")
+        return ([p for p in NOAM_RSI_NAMES if p != partner], "theater", NOAM_THEATERS, 90, "NoAM RSIs")
     if partner in APJ_RSI_REGION_MAP:
         label, region = APJ_RSI_REGION_MAP[partner]
         # Skip aliases of the same partner (same display label), e.g. both Altis names
@@ -154,7 +154,7 @@ def _peer_group_for(partner: str):
     if partner in LATAM_RSI_REGION_MAP:
         peers = [p for p in LATAM_RSI_REGION_MAP if p != partner]
         return (peers, "region", "LATAM", 50, "LATAM RSIs")
-    return ([], "none", None, 75, "partners")
+    return ([], "none", None, 90, "partners")
 
 
 def _compute_peer_benchmark(conn, partner, q_start, q_end, coco_pct, bands):
@@ -2052,8 +2052,9 @@ non_coco_count = len(non_coco)
 coco_pct = round(coco_count * 100.0 / total_ucs, 1) if total_ucs > 0 else 0.0
 non_coco_eacv = non_coco["USE_CASE_EACV"].sum()
 
-_apj_emea_latam = set(APJ_RSI_REGION_MAP) | set(EMEA_RSI_REGION_MAP) | set(LATAM_RSI_REGION_MAP)
-target = 50 if selected_partner in _apj_emea_latam else 75
+# Same group resolution as the peer benchmark, so partners in both NOAM and APJ
+# (Slalom, Infosys) keep the NoAM 90% target.
+target = _peer_group_for(selected_partner)[3]
 
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("CoCo Attach Rate", f"{coco_pct}%", f"{'MET' if coco_pct >= target else 'BELOW'} {target}% target")
