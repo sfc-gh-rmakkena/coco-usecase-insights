@@ -19,12 +19,20 @@ except ImportError:
     def new_coco_wow(df, **kw): return {"LAST_WK_NEW_COCO": 0, "PRIOR_WK_NEW_COCO": 0, "WOW_PCT": None, "WOW_DELTA": 0, "LAST_WK_START": None, "PRIOR_WK_START": None, "BY_PARTNER": __import__('pandas').DataFrame()}
     NEW_COCO_WOW_HELP = "Newly created CoCo use cases week-over-week (unavailable on this runtime version)."
 from utils import APJ_RSI_REGION_MAP, EMEA_RSI_REGION_MAP, LATAM_RSI_REGION_MAP, PARTNER_ALIASES as _PA_OKR
+from utils import scope_rsi_rows
+from utils import GSI_NOAM_TARGET, REGIONAL_RSI_TARGET, group_target_for
 
 # Managed partner universe — same as Adoption Metrics default scope
 _GSI_OKR = {'Accenture','Capgemini Technologies LLC','Cognizant Technology Solutions US Corp',
             'Deloitte Consulting','EY','Ernst & Young (EY)','IBM','IBM Consulting'}
 _NOAM_OKR = set(p for p in _PA_OKR.get('--- NOAM RSIs ---', []) if not p.startswith('---')) | {'LTI Mindtree','Kipi.ai'}
 _ALL_MANAGED_OKR = _GSI_OKR | _NOAM_OKR | set(APJ_RSI_REGION_MAP.keys()) | set(EMEA_RSI_REGION_MAP.keys()) | set(LATAM_RSI_REGION_MAP.keys())
+# Partners in several groups (e.g. Slalom: NOAM, APJ, EMEA) are scoped per row by
+# utils.scope_rsi_rows / managed_group, never by name alone.
+_UNSCOPED_OKR = _GSI_OKR | _NOAM_OKR
+_REGIONAL_ONLY_OKR = (set(APJ_RSI_REGION_MAP) | set(EMEA_RSI_REGION_MAP)
+                      | set(LATAM_RSI_REGION_MAP)) - _UNSCOPED_OKR
+_UNSCOPED_APJ_EMEA_OKR = _UNSCOPED_OKR & (set(APJ_RSI_REGION_MAP) | set(EMEA_RSI_REGION_MAP))
 
 conn = st.session_state.conn
 region = st.session_state.get("selected_region", "Global")
@@ -39,13 +47,26 @@ exclude_not_coco = st.session_state.get("exclude_not_coco", True)
 
 st.title(":material/check_circle: OKR: CoCo Adoption per Partner")
 
-TARGET_PCT = 75
+TARGET_PCT = GSI_NOAM_TARGET
 
-# Auto-set target based on region: EMEA/APJ → 50%, all others → 75%
+# Auto-set target based on region: EMEA/APJ/LATAM → 50%, all others (GSI/NOAM) → 90%
 _apj_emea_regions = {'EMEA', 'APJ', 'Korea', 'Japan', 'ASEAN', 'ANZ', 'India',
                      'CentralEMEA', 'SouthEMEA', 'NorthEMEA', 'UK', 'META', 'EMEACommercial',
                      'LATAM'}
-target = 50 if region in _apj_emea_regions else TARGET_PCT
+target = REGIONAL_RSI_TARGET if region in _apj_emea_regions else TARGET_PCT
+_uniform_target = region in _apj_emea_regions
+
+
+def _partner_target(name):
+    """OKR goal for one partner row: the region's goal when a regional view is selected,
+    otherwise the partner's group goal (GSI/NOAM 90%, APJ/EMEA/LATAM 50%).
+    Multi-group partners use their first group (Slalom/Aimpoint/Infosys -> NOAM)."""
+    if _uniform_target:
+        return target
+    return group_target_for(name, PARTNER_RENAME_MAP) or target
+
+
+_target_label = f"{target}%" if _uniform_target else "goal"
 min_use_cases = 1
 
 st.caption(f"Track CoCo attachment target for partner use cases (Stages 3-7) | Region: {region} | {start_date} to {end_date}")
@@ -71,11 +92,14 @@ def _okr_geo_filter_sql(alias=''):
     th = f"{alias}.THEATER_NAME"  if alias else "THEATER_NAME"
     _noam_th = "'AMSExpansion','USMajors','AMSAcquisition','USPubSec'"
     def _sl(vals): return "','".join(str(v).replace("'","''") for v in sorted(set(vals)))
-    _apj_latam_emea = set(APJ_RSI_REGION_MAP.keys()) | set(EMEA_RSI_REGION_MAP.keys()) | set(LATAM_RSI_REGION_MAP.keys())
+    # No REGION_NAME here. Regional-only RSIs are scoped by name; partners that are also
+    # GSI/NOAM get their NoAM rows from the NOAM term and APJ/EMEA rows by theater.
     parts = [
         f"{p} IN ('{_sl(_GSI_OKR)}')",
         f"({p} IN ('{_sl(_NOAM_OKR)}') AND {th} IN ({_noam_th}))",
-        f"{p} IN ('{_sl(_apj_latam_emea)}')",
+        f"{p} IN ('{_sl(_REGIONAL_ONLY_OKR)}')",
+        f"({p} IN ('{_sl(_UNSCOPED_APJ_EMEA_OKR & set(APJ_RSI_REGION_MAP))}') AND {th} = 'APJ')",
+        f"({p} IN ('{_sl(_UNSCOPED_APJ_EMEA_OKR & set(EMEA_RSI_REGION_MAP))}') AND {th} = 'EMEA')",
     ]
     return "(\n              " + "\n              OR ".join(parts) + "\n            )"
 
@@ -144,7 +168,11 @@ if len(base_summary) == 0:
     st.stop()
 
 # Apply sidebar partner filter; default to managed partners when none selected
-_using_default_managed = not selected_partners
+# Selecting only group headers ('--- NOAM RSIs ---', ...) means "these groups", so use
+# the same group geo scoping as no selection (and as Overview). Picking individual
+# partners keeps the per-partner view.
+_using_default_managed = (not selected_partners
+                          or all(str(p).startswith('---') for p in selected_partners))
 if selected_partners:
     partner_names = resolve_partner_filter(selected_partners)
     base_summary = base_summary[base_summary['PARTNER_NAME'].isin(partner_names)]
@@ -174,9 +202,8 @@ def _apply_managed_geo_filter(bc):
         _latam = bc[bc['PARTNER_NAME'].isin(set(LATAM_RSI_REGION_MAP.keys()))].copy()
         parts.append(_latam[_latam['REGION_NAME'] == 'LATAM'] if 'REGION_NAME' in _latam.columns else _latam)
     else:
-        parts.append(bc[bc['PARTNER_NAME'].isin(set(APJ_RSI_REGION_MAP.keys()))])
-        parts.append(bc[bc['PARTNER_NAME'].isin(set(EMEA_RSI_REGION_MAP.keys()))])
-        parts.append(bc[bc['PARTNER_NAME'].isin(set(LATAM_RSI_REGION_MAP.keys()))])
+        # No REGION_NAME: name-only scoping; partners also in GSI/NOAM are already counted.
+        parts.append(bc[bc['PARTNER_NAME'].isin(_REGIONAL_ONLY_OKR)])
     return pd.concat([p for p in parts if len(p) > 0], ignore_index=True) if parts else bc
 
 # Compute CoCo using full confidence scoring when account-level is enabled
@@ -197,21 +224,8 @@ if include_account_coco:
         if _using_default_managed:
             bulk_conf = _apply_managed_geo_filter(bulk_conf)
         else:
-            # Even in a custom partner selection, APJ/EMEA must stay country-scoped
-            _apj_names  = set(APJ_RSI_REGION_MAP.keys())
-            _emea_names = set(EMEA_RSI_REGION_MAP.keys())
-            _latam_names = set(LATAM_RSI_REGION_MAP.keys())
-            if 'REGION_NAME' in bulk_conf.columns:
-                _non_rsi = bulk_conf[~bulk_conf['PARTNER_NAME'].isin(_apj_names | _emea_names | _latam_names)]
-                _apj  = bulk_conf[bulk_conf['PARTNER_NAME'].isin(_apj_names)].copy()
-                _apj['_c']  = _apj['PARTNER_NAME'].map({k: v[1] for k, v in APJ_RSI_REGION_MAP.items()})
-                _apj  = _apj[_apj['REGION_NAME'] == _apj['_c']].drop(columns=['_c'])
-                _emea = bulk_conf[bulk_conf['PARTNER_NAME'].isin(_emea_names)].copy()
-                _emea['_c'] = _emea['PARTNER_NAME'].map({k: v[1] for k, v in EMEA_RSI_REGION_MAP.items()})
-                _emea = _emea[_emea['REGION_NAME'] == _emea['_c']].drop(columns=['_c'])
-                _latam = bulk_conf[bulk_conf['PARTNER_NAME'].isin(_latam_names)].copy()
-                _latam = _latam[_latam['REGION_NAME'] == 'LATAM']
-                bulk_conf = pd.concat([p for p in [_non_rsi, _apj, _emea, _latam] if len(p) > 0], ignore_index=True)
+            # Even in a custom partner selection, APJ/EMEA/LATAM rows stay region-scoped.
+            bulk_conf = scope_rsi_rows(bulk_conf)
         # Apply sidebar region filter
         if region and region != 'Global':
             _theaters = resolve_region_theaters(region)
@@ -353,7 +367,7 @@ if include_account_coco:
             ).reset_index()
             _agg['non_coco_use_cases'] = _agg['total_use_cases'] - _agg['coco_use_cases']
             _agg['coco_pct'] = round(_agg['coco_use_cases'] * 100.0 / _agg['total_use_cases'].replace(0, float('nan')), 1).fillna(0)
-            _agg['MEETS_TARGET'] = _agg['coco_pct'] >= target
+            _agg['MEETS_TARGET'] = _agg['coco_pct'] >= _agg['PARTNER_NAME'].map(_partner_target)
             base_summary = _agg
         summary = base_summary
         bulk_conf = pd.DataFrame()
@@ -363,7 +377,8 @@ else:
     bulk_conf = pd.DataFrame()
     high_conf_coco = 0
 
-summary['MEETS_TARGET'] = summary['COCO_PCT'] >= target
+summary['TARGET_PCT'] = summary['PARTNER_NAME'].map(_partner_target)
+summary['MEETS_TARGET'] = summary['COCO_PCT'] >= summary['TARGET_PCT']
 filtered = summary[summary['TOTAL_USE_CASES'] >= min_use_cases].copy()
 
 st.divider()
@@ -384,7 +399,7 @@ _bot_partners = filtered[~filtered['MEETS_TARGET']].sort_values('COCO_PCT', asce
 _bot_str = "; ".join(f"{r.PARTNER_NAME} {r.COCO_PCT:.1f}%" for _, r in _bot_partners.iterrows())
 _st_ctx.session_state.ask_ai_context = (
     f"Current page: OKR CoCo Adoption. Region: {region}. Period: {start_date} to {end_date}.\n"
-    f"Partners tracked: {total_partners}. Meeting {target}% target: {int(meeting_target)}. Below target: {int(not_meeting)}.\n"
+    f"Partners tracked: {total_partners}. Meeting {_target_label} (GSI/NOAM {GSI_NOAM_TARGET}%, APJ/EMEA/LATAM {REGIONAL_RSI_TARGET}%): {int(meeting_target)}. Below target: {int(not_meeting)}.\n"
     f"Overall CoCo%: {overall_pct}% ({int(overall_coco)}/{int(overall_total)} UCs).\n"
     f"Top partners by CoCo%: {_top_str}.\n"
     f"Partners below target (closest first): {_bot_str}."
@@ -395,8 +410,8 @@ _st_ctx.session_state.ask_ai_context = (
 
 c1, c2, c3, c4, c5, c6 = st.columns(6)
 c1.metric("Partners Tracked", total_partners)
-c2.metric(f"Meeting {target}%", int(meeting_target), f"{round(meeting_target*100/total_partners)}%" if total_partners else "0%")
-c3.metric(f"Below {target}%", int(not_meeting), delta_color="inverse")
+c2.metric(f"Meeting {_target_label}", int(meeting_target), f"{round(meeting_target*100/total_partners)}%" if total_partners else "0%")
+c3.metric(f"Below {_target_label}", int(not_meeting), delta_color="inverse")
 
 # WoW deltas from IS_COCO_FINAL weekly snapshot (same as Coverage page)
 wow_overall = adoption_wow[adoption_wow['PARTNER_NAME'].isna()] if len(adoption_wow) > 0 else None
@@ -410,7 +425,7 @@ if wow_overall is not None and len(wow_overall) > 0:
         wow_coco_pct_delta = f"{float(row['WOW_COCO_PCT']):+.1f}% vs last week"
 
 conf_desc = 'High' if confidence_filter == ['High'] else 'High + Medium' if confidence_filter else 'All account-level'
-c4.metric("Overall CoCo %", f"{overall_pct}%", wow_coco_pct_delta if wow_coco_pct_delta else f"Target: {target}%",
+c4.metric("Overall CoCo %", f"{overall_pct}%", wow_coco_pct_delta if wow_coco_pct_delta else (f"Target: {target}%" if _uniform_target else f"Targets: GSI/NOAM {GSI_NOAM_TARGET}%, RSIs {REGIONAL_RSI_TARGET}%"),
     help=f"SE/PSE/Flag always + Account Level at {conf_desc} confidence (full scoring)")
 c5.metric("CoCo Use Cases", f"{int(overall_coco)}/{int(overall_total)}", wow_coco_ucs_delta,
     help=f"Total IS_COCO_FINAL use cases vs total tracked")
@@ -501,7 +516,7 @@ display_df = filtered_sorted[['PARTNER_NAME', 'TOTAL_USE_CASES', 'COCO_USE_CASES
 display_df['TOTAL_EACV'] = display_df['TOTAL_EACV'].apply(lambda x: f"${(x or 0)/1000:.0f}K" if (x or 0) < 1_000_000 else f"${(x or 0)/1_000_000:.1f}M")
 display_df['COCO_EACV'] = display_df['COCO_EACV'].apply(lambda x: f"${(x or 0)/1000:.0f}K" if (x or 0) < 1_000_000 else f"${(x or 0)/1_000_000:.1f}M")
 display_df['GAP'] = filtered_sorted.apply(
-    lambda r: max(0, int((target / 100.0 * r.get('COCO_ELIGIBLE_UCS', r['TOTAL_USE_CASES'])) - r['COCO_USE_CASES'] + 0.999)), axis=1
+    lambda r: max(0, int((r.get('TARGET_PCT', target) / 100.0 * r.get('COCO_ELIGIBLE_UCS', r['TOTAL_USE_CASES'])) - r['COCO_USE_CASES'] + 0.999)), axis=1
 )
 display_df['COCO_PCT'] = filtered_sorted['COCO_PCT']
 
@@ -685,16 +700,11 @@ if selected_partner:
     # NTT DATA → Japan only, Megazone → Korea only, etc.
     if len(partner_detail) > 0 and 'REGION_NAME' in partner_detail.columns:
         _raw_partner = next((k for k, v in PARTNER_RENAME_MAP.items() if v == selected_partner), selected_partner)
-        if _raw_partner in APJ_RSI_REGION_MAP or selected_partner in APJ_RSI_REGION_MAP:
-            _country = APJ_RSI_REGION_MAP.get(_raw_partner, APJ_RSI_REGION_MAP.get(selected_partner, (None, None)))[1]
-            if _country:
-                partner_detail = partner_detail[partner_detail['REGION_NAME'] == _country]
-        elif _raw_partner in EMEA_RSI_REGION_MAP or selected_partner in EMEA_RSI_REGION_MAP:
-            _country = EMEA_RSI_REGION_MAP.get(_raw_partner, EMEA_RSI_REGION_MAP.get(selected_partner, (None, None)))[1]
-            if _country:
-                partner_detail = partner_detail[partner_detail['REGION_NAME'] == _country]
-        elif _raw_partner in LATAM_RSI_REGION_MAP or selected_partner in LATAM_RSI_REGION_MAP:
-            partner_detail = partner_detail[partner_detail['REGION_NAME'] == 'LATAM']
+        _regional_keys = set(APJ_RSI_REGION_MAP) | set(EMEA_RSI_REGION_MAP) | set(LATAM_RSI_REGION_MAP)
+        _key = _raw_partner if _raw_partner in _regional_keys else selected_partner
+        if _key in _regional_keys:
+            partner_detail = scope_rsi_rows(partner_detail.assign(PARTNER_NAME=_key)).assign(
+                PARTNER_NAME=selected_partner)
 
     if len(partner_detail) > 0:
         # Override IS_COCO_ATTACHED using full confidence scoring (same as summary metrics)
@@ -745,15 +755,16 @@ if selected_partner:
 
         p_stats = filtered_sorted[filtered_sorted['PARTNER_NAME'] == selected_partner].iloc[0]
         coco_pct = p_stats['COCO_PCT']
+        _p_target = _partner_target(selected_partner)
 
         c1, c2, c3, c4, c5, c6 = st.columns(6)
         c1.metric("Total Use Cases", int(p_stats['TOTAL_USE_CASES']))
         c2.metric("CoCo Attached", int(p_stats['COCO_USE_CASES']))
         c3.metric("#notcoco", int(p_stats['NOTCOCO_USE_CASES']) if 'NOTCOCO_USE_CASES' in p_stats else 0,
                   help="Use cases tagged #notcoco by a PSE — excluded from both the CoCo UC count and the CoCo % denominator")
-        c4.metric("CoCo Usecase %", f"{coco_pct:.1f}%", f"{'MET' if coco_pct >= target else 'BELOW'} {target}% target")
+        c4.metric("CoCo Usecase %", f"{coco_pct:.1f}%", f"{'MET' if coco_pct >= _p_target else 'BELOW'} {_p_target}% target")
         _eligible_ucs = p_stats['COCO_ELIGIBLE_UCS'] if 'COCO_ELIGIBLE_UCS' in p_stats else p_stats['TOTAL_USE_CASES']
-        gap = max(0, int((target / 100.0 * _eligible_ucs) - p_stats['COCO_USE_CASES'] + 0.999))
+        gap = max(0, int((_p_target / 100.0 * _eligible_ucs) - p_stats['COCO_USE_CASES'] + 0.999))
         c5.metric("UCs Needed for Target", gap if gap > 0 else "0 (Met!)")
         # Account-only: CoCo attached but no comments/flag (COCO_SOURCE is NULL)
         account_only = int(partner_detail[(partner_detail['IS_COCO_ATTACHED'] == True) & (partner_detail['COCO_SOURCE'].isna())].shape[0])
@@ -984,7 +995,7 @@ if selected_partner:
                 if _notinvolved_count > 0:
                     _note_parts.append(f"{_notinvolved_count} tagged #notinvolved — partner not involved")
                 _blocked_note = f" ({'; '.join(_note_parts)})" if _note_parts else ""
-                st.warning(f"These {len(non_coco_ucs)} use cases do NOT have CoCo attached{_blocked_note}. Adding CoCo to these would help reach the {target}% target.")
+                st.warning(f"These {len(non_coco_ucs)} use cases do NOT have CoCo attached{_blocked_note}. Adding CoCo to these would help reach the {_p_target}% target.")
                 noncoco_display = non_coco_ucs[uc_cols].copy()
                 # Add a visual #notcoco / #notinvolved badge in ATTRIBUTION_FLAGS for flagged UCs
                 if 'IS_NOT_COCO' in non_coco_ucs.columns:
@@ -1064,7 +1075,7 @@ if selected_partner:
 st.divider()
 
 st.divider()
-st.caption(f"OKR Target: {target}% of use cases in Stages 3-7 should have CoCo attached | {start_date} to {end_date} | Min UCs: {min_use_cases}")
+st.caption(f"OKR Target: {target if _uniform_target else f'GSI/NOAM {GSI_NOAM_TARGET}, APJ/EMEA/LATAM {REGIONAL_RSI_TARGET}'}% of use cases in Stages 3-7 should have CoCo attached | {start_date} to {end_date} | Min UCs: {min_use_cases}")
 st.caption("CoCo detection: SE Comments (coco/cortex code) OR Partner Comments (#coco) OR Feature Flag (AI - Cortex Code) OR CoCo Account Level Usage")
 
 st.divider()

@@ -91,7 +91,7 @@ PSE Managed Partners (now merged into NOAM RSIs above — NoAM scope):
   'Spaulding Ridge', 'TEKsystems Global Services, LLC.', 'Blend360, LLC',
   'Tiger Analytics Inc.', 'Atrium', 'Perficient Inc.', 'Ateko','SDK Tek Services Ltd.',
   'Merkle', 'Archetype Consulting', 'Everforth Apex Systems',  'Tata Consultancy Services',
-  'OneSix', 'Icon Analytics', 'Sparq Holdings, Inc.', 'CitiusTech Inc.',
+  'OneSix', 'Sparq Holdings, Inc.', 'CitiusTech Inc.',
   'Hexaware Technologies'
 
 ALL MANAGED (use for "all partners" questions — combine GSI + NOAM RSIs):
@@ -104,7 +104,7 @@ ALL MANAGED (use for "all partners" questions — combine GSI + NOAM RSIs):
   'Spaulding Ridge','TEKsystems Global Services, LLC.','Blend360, LLC',
   'Tiger Analytics Inc.','Atrium','Perficient Inc.','Ateko','SDK Tek Services Ltd.',
   'Merkle','Archetype Consulting','Everforth Apex Systems','Tata Consultancy Services',
-  'OneSix','Icon Analytics','Sparq Holdings, Inc.','CitiusTech Inc.','Hexaware Technologies'
+  'OneSix','Sparq Holdings, Inc.','CitiusTech Inc.','Hexaware Technologies'
 
 KEY CONCEPTS:
 - IS_COCO = TRUE: SE or partner mentioned CoCo in Salesforce notes (keyword detection)
@@ -129,7 +129,7 @@ KEY CONCEPTS:
     S4 (0–15): Relevant skill volume in the period (more than 5 → 15, 1–5 → 5, 0 → 0)
     S1/S2/S4 are scored for every workload tagged on the use case; WORKLOAD_CATEGORY is the highest-scoring one.
 
-- COCO_PCT = COCO_UCS / TOTAL_UCS * 100. OKR target = 75% per partner.
+- COCO_PCT = COCO_UCS / TOTAL_UCS * 100. OKR target per partner = 90% for GSI/NOAM RSI, 50% for APJ/EMEA/LATAM RSI.
 - GSIs (global scope): Accenture, Capgemini, Cognizant, Deloitte, EY, IBM
 - RSIs (NoAM scope): remaining 14 partners
 - Current period: FY27 Q3 (Aug 1 – Oct 31, 2026). FY27 Q2 = May 1 – Jul 31, 2026. FY27 Q1 = Feb 1 – Apr 30, 2026.
@@ -256,7 +256,7 @@ WITH all_partner_ucs AS (
         'Spaulding Ridge','TEKsystems Global Services, LLC.','Blend360, LLC',
         'Tiger Analytics Inc.','Atrium','Perficient Inc.','Ateko','SDK Tek Services Ltd.',
         'Merkle','Archetype Consulting','Everforth Apex Systems','Tata Consultancy Services',
-        'OneSix','Icon Analytics','Sparq Holdings, Inc.','CitiusTech Inc.','Hexaware Technologies'
+        'OneSix','Sparq Holdings, Inc.','CitiusTech Inc.','Hexaware Technologies'
     )
     AND ((USE_CASE_STAGE IN ('3 - Technical / Business Validation','4 - Use Case Won / Migration Plan')
           AND DECISION_DATE >= '2026-05-01' AND DECISION_DATE <= '2026-07-31')
@@ -864,7 +864,7 @@ _NOAM_RSI_PARTNERS = frozenset({
     'Spaulding Ridge','TEKsystems Global Services, LLC.','Blend360, LLC',
     'Tiger Analytics Inc.','Atrium','Perficient Inc.','Ateko','SDK Tek Services Ltd.',
     'Merkle','Archetype Consulting','Everforth Apex Systems','Tata Consultancy Services',
-    'OneSix','Icon Analytics','Sparq Holdings, Inc.','CitiusTech Inc.',
+    'OneSix','Sparq Holdings, Inc.','CitiusTech Inc.',
     'Hexaware Technologies',
 })
 

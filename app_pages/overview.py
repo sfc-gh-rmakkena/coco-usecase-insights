@@ -13,7 +13,11 @@ except ImportError:
     NEW_COCO_WK_LABEL  = "New CoCo UCs (wk)"
     NEW_COCO_DELTA_LABEL = "\u0394 vs prior wk"
 from utils.config import get_schema
+from utils.queries import SNAPSHOT_TABLE_Q4
+from utils import add_managed_group
 from utils import APJ_RSI_REGION_MAP, EMEA_RSI_REGION_MAP, LATAM_RSI_REGION_MAP
+from utils import managed_group, GROUP_GSI, GROUP_NOAM, GROUP_APJ, GROUP_EMEA, GROUP_LATAM
+from utils import GSI_NOAM_TARGET, REGIONAL_RSI_TARGET
 from utils import PARTNER_ALIASES as _PA_EARLY
 
 # Combined set of all managed partner names (GSI + NOAM RSI + APJ RSI + EMEA RSI)
@@ -43,24 +47,30 @@ def _new_coco_geo_filter_sql(alias=''):
     p  = f"{alias}.PARTNER_NAME"  if alias else "PARTNER_NAME"
     th = f"{alias}.THEATER_NAME"  if alias else "THEATER_NAME"
     _noam_th = "'AMSExpansion','USMajors','AMSAcquisition','USPubSec'"
-    _apj_latam_emea = _APJ_RSI_PARTNER_NAMES | _EMEA_RSI_PARTNER_NAMES | _LATAM_RSI_PARTNER_NAMES
+    # Partners also in GSI/NOAM (Slalom, Infosys, Aimpoint, ...): NoAM rows come from the
+    # NOAM term; without REGION_NAME their APJ/EMEA rows are approximated by theater.
+    _unscoped = _GSI_PARTNER_NAMES | _NOAM_RSI_PARTNER_NAMES
+    _regional_only = (_APJ_RSI_PARTNER_NAMES | _EMEA_RSI_PARTNER_NAMES | _LATAM_RSI_PARTNER_NAMES) - _unscoped
     parts = [
-        f"{p} IN ('{_sql_list(_GSI_PARTNER_NAMES)}')",                                    # GSI: global
+        f"{p} IN ('{_sql_list(_GSI_PARTNER_NAMES)}')",                             # GSI: global
         f"({p} IN ('{_sql_list(_NOAM_RSI_PARTNER_NAMES)}') AND {th} IN ({_noam_th}))",    # NOAM RSI: NOAM theaters only
-        f"{p} IN ('{_sql_list(_apj_latam_emea)}')",                                        # APJ/EMEA/LATAM: partner-scoped
+        f"{p} IN ('{_sql_list(_regional_only)}')",                                 # APJ/EMEA/LATAM: partner-scoped
+        f"({p} IN ('{_sql_list(_unscoped & _APJ_RSI_PARTNER_NAMES)}') AND {th} = 'APJ')",
+        f"({p} IN ('{_sql_list(_unscoped & _EMEA_RSI_PARTNER_NAMES)}') AND {th} = 'EMEA')",
     ]
     return "(\n                  " + "\n                  OR ".join(parts) + "\n                )"
 
 
 @st.cache_data(ttl=30 * 60)
-def _get_gsi_noam_snapshot_trend(_conn, gsi_names, noam_names):
-    """Weekly GSI/NOAM adoption trend from the Q3 snapshot table.
+def _get_gsi_noam_snapshot_trend(_conn, gsi_names, noam_names, _refresh_key=None):
+    """Weekly GSI/NOAM adoption trend from the Q4 snapshot table.
 
-    This is the same snapshot basis as the WoW Δ UCs columns: net movement in the
-    Q3-scoped stock of use cases, not CREATED_DATE. GSI is global; NOAM RSI is
-    restricted to REGION='NoAM'.
+    Net movement in the Q4-scoped stock of use cases, not CREATED_DATE. GSI is
+    global; NOAM RSI is REGION='NoAM' (one row per partner and group, so a
+    multi-group partner's APJ/EMEA use cases are not in the NOAM line).
+    `_refresh_key` changes when a new weekly snapshot is saved, to bypass the cache.
     """
-    snapshot_table = f"{get_schema()}.IS_COCO_FINAL_WEEKLY_SNAPSHOT_Q3"
+    snapshot_table = SNAPSHOT_TABLE_Q4
     gsi_sql = _sql_list(gsi_names)
     noam_sql = _sql_list(noam_names)
     return _conn.query(f"""
@@ -90,7 +100,7 @@ def _get_gsi_noam_snapshot_trend(_conn, gsi_names, noam_names):
     """)
 
 
-def _forecast_snapshot_group(rows, q_end, target_pct=75.0):
+def _forecast_snapshot_group(rows, q_end, target_pct=float(GSI_NOAM_TARGET)):
     """Linear quarter-end forecast from recent weekly snapshot deltas."""
     if rows is None or len(rows) == 0:
         return None
@@ -219,6 +229,8 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 with st.expander(":material/info: How Use Cases Are Retrieved", expanded=False):
+    def _rsi_row(region_map):
+        return ", ".join(f"{lbl} ({reg})" for lbl, reg in dict.fromkeys(region_map.values()))
     st.markdown("""
     Use cases must meet **BOTH** criteria below to be included:
     
@@ -251,10 +263,10 @@ with st.expander(":material/info: How Use Cases Are Retrieved", expanded=False):
     | Group | Partners | Scope |
     |---|---|---|
     | **GSI** | Accenture, Capgemini Technologies LLC, Cognizant Technology Solutions US Corp, Deloitte Consulting, EY, IBM | Global |
-    | **NOAM RSI** | 7Rivers, Aimpoint Digital, Everforth Apex Systems, Archetype Consulting, Atrium, Blend360, BlueCloud, CitiusTech, evolv Consulting, Hexaware, Icon Analytics, Infosys, Infostrux, kipi.ai, KPMG, LTM, Merkle, OneSix, Perficient, phData, Ateko, Slalom, Sparq, Spaulding Ridge, Squadron Data, Tata Consultancy Services, TEKsystems, Tiger Analytics, Tredence | NoAM theaters |
-    | **APJ RSI** | NTT Data (Japan), Megazone (Korea), Infinite Lambda (ASEAN), Altis (ANZ), Prolim (India) | Country-scoped |
-    | **EMEA RSI** | Infomotion (CentralEMEA), Civica (SouthEMEA), Kubrick (UK), KPC (SouthEMEA) | Region-scoped |
-    """)
+    | **NOAM RSI** | 7Rivers, Aimpoint Digital, Everforth Apex Systems, Archetype Consulting, Atrium, Blend360, BlueCloud, CitiusTech, evolv Consulting, Hexaware, Infosys, Infostrux, kipi.ai, KPMG, LTM, Merkle, OneSix, Perficient, phData, Ateko, Slalom, Sparq, Spaulding Ridge, Squadron Data, Tata Consultancy Services, TEKsystems, Tiger Analytics, Tredence | NoAM theaters |
+    | **APJ RSI** | __APJ_ROW__ | Region-scoped |
+    | **EMEA RSI** | __EMEA_ROW__ | Region-scoped |
+    """.replace("__APJ_ROW__", _rsi_row(APJ_RSI_REGION_MAP)).replace("__EMEA_ROW__", _rsi_row(EMEA_RSI_REGION_MAP)))
 
 import pandas as pd
 
@@ -613,9 +625,18 @@ if _snapshot_overall:
     )
 
 st.divider()
-st.subheader("Weekly Growth & 75% Forecast")
-_trend = _get_gsi_noam_snapshot_trend(conn, tuple(_GSI_PARTNER_NAMES), tuple(_NOAM_RSI_PARTNER_NAMES))
-if len(_trend) > 0:
+st.subheader(f"Weekly Growth & {GSI_NOAM_TARGET}% Forecast")
+# The weekly snapshot is written by the Executive Email page (the single writer, so two
+# pages loading at once can't both save a week). Overview only reads it.
+_snapshot_saved = False
+try:
+    _trend = _get_gsi_noam_snapshot_trend(conn, tuple(_GSI_PARTNER_NAMES), tuple(_NOAM_RSI_PARTNER_NAMES),
+                                          _refresh_key=_snapshot_saved)
+except Exception as _trend_err:
+    print(f"Q4 snapshot trend unavailable: {_trend_err}")
+    _trend = pd.DataFrame()
+_trend_weeks = _trend['WEEK_START'].nunique() if len(_trend) > 0 else 0
+if _trend_weeks >= 2:
     _trend['WEEK_START'] = pd.to_datetime(_trend['WEEK_START'])
     _trend['COCO_PCT'] = pd.to_numeric(_trend['COCO_PCT'], errors='coerce').fillna(0)
     _trend['COCO_UCS'] = pd.to_numeric(_trend['COCO_UCS'], errors='coerce').fillna(0).astype(int)
@@ -632,10 +653,10 @@ if len(_trend) > 0:
             hovertemplate='%{x|%Y-%m-%d}<br>%{y:.1f}% CoCo<br>%{customdata[0]} / %{customdata[1]} UCs<extra></extra>',
         ))
     _fig.add_hline(
-        y=75,
+        y=GSI_NOAM_TARGET,
         line_dash='dash',
         line_color='#d62728',
-        annotation_text='75% target',
+        annotation_text=f'{GSI_NOAM_TARGET}% target',
         annotation_position='top left',
     )
     _fig.update_layout(
@@ -650,7 +671,7 @@ if len(_trend) > 0:
 
     _card_cols = st.columns(2)
     for _idx, _group in enumerate(['GSI', 'NOAM RSI']):
-        _fc = _forecast_snapshot_group(_trend[_trend['GROUP_NAME'] == _group], end_date, target_pct=75.0)
+        _fc = _forecast_snapshot_group(_trend[_trend['GROUP_NAME'] == _group], end_date, target_pct=float(GSI_NOAM_TARGET))
         if not _fc:
             continue
         with _card_cols[_idx]:
@@ -662,11 +683,24 @@ if len(_trend) > 0:
             st.caption(
                 f"{_fc['status']} | Last-3-week avg: +{_fc['avg_coco_delta']:.1f} CoCo UCs/wk, "
                 f"+{_fc['avg_total_delta']:.1f} total UCs/wk | Need +{_fc['required_weekly']:.1f} CoCo UCs/wk "
-                f"over {_fc['weeks_left']} weeks to reach 75%."
+                f"over {_fc['weeks_left']} weeks to reach {GSI_NOAM_TARGET}%."
             )
     st.caption("Forecast uses weekly snapshot deltas, not CREATED_DATE. It projects both CoCo UCs and total UCs using the last 3 weekly changes.")
 else:
-    st.info("Weekly snapshot trend is not available yet.")
+    # Fewer than 2 Q4 weekly snapshots: no trend yet, so show live Q4 status.
+    _live_cols = st.columns(2)
+    for _idx, (_group, _gname) in enumerate([('GSI', GROUP_GSI), ('NOAM RSI', GROUP_NOAM)]):
+        _g = add_managed_group(_bc_managed) if len(_bc_managed) > 0 else _bc_managed
+        _g = _g[_g['_GROUP'] == _gname] if len(_g) > 0 else _g
+        _tot = len(_g)
+        _coco = int(_g['IS_COCO_FINAL'].sum()) if _tot else 0
+        _pct = round(_coco * 100.0 / _tot, 1) if _tot else 0.0
+        _need = max(0, -(-GSI_NOAM_TARGET * _tot // 100) - _coco)
+        with _live_cols[_idx]:
+            st.metric(f"{_group} current (Q4)", f"{_pct:.1f}%", f"{_coco}/{_tot} UCs · target {GSI_NOAM_TARGET}%")
+            st.caption(f"{_need} more CoCo UCs needed to reach {GSI_NOAM_TARGET}% at today's total.")
+    st.info(f"Q4 weekly snapshots: {_trend_weeks} of 2 needed. The trend and quarter-end "
+            "forecast appear once two weekly snapshots exist (one is saved each week when the Executive Email page is opened).")
 
 
 st.caption(
@@ -675,11 +709,16 @@ st.caption(
 )
 
 # 4 gauges — one per partner group
-def _group_stats(bc, names):
-    """Return (total, coco, pct) for a partner name set from managed bulk_conf."""
+def _group_stats(bc, names, group=None):
+    """Return (total, coco, pct) for a partner name set from managed bulk_conf.
+    `group` keeps only rows that managed_group() assigns to it, so a partner in two
+    groups (Slalom, Infosys: NOAM and APJ) has each use case counted in one gauge."""
     if bc is None or len(bc) == 0 or 'IS_COCO_FINAL' not in bc.columns:
         return 0, 0, 0.0
     _g = bc[bc['PARTNER_NAME'].isin(names)]
+    if group and len(_g) > 0 and {'THEATER_NAME', 'REGION_NAME'} <= set(_g.columns):
+        _g = _g[[managed_group(p, t, r) == group for p, t, r in
+                 zip(_g['PARTNER_NAME'], _g['THEATER_NAME'], _g['REGION_NAME'])]]
     total = len(_g)
     coco  = int(_g['IS_COCO_FINAL'].sum())
     pct   = round(coco * 100.0 / total, 1) if total > 0 else 0.0
@@ -727,14 +766,14 @@ def _make_gauge(label, pct, total, coco, target):
     )
     return fig
 
-_gsi_total,  _gsi_coco,  _gsi_pct  = _group_stats(_gauge_bc, _GSI_PARTNER_NAMES)
-_noam_total, _noam_coco, _noam_pct = _group_stats(_gauge_bc, _NOAM_RSI_PARTNER_NAMES)
-_apj_total,  _apj_coco,  _apj_pct  = _group_stats(_gauge_bc, _APJ_RSI_PARTNER_NAMES)
-_emea_total, _emea_coco, _emea_pct = _group_stats(_gauge_bc, _EMEA_RSI_PARTNER_NAMES)
-_latam_total, _latam_coco, _latam_pct = _group_stats(_gauge_bc, _LATAM_RSI_PARTNER_NAMES)
+_gsi_total,  _gsi_coco,  _gsi_pct  = _group_stats(_gauge_bc, _GSI_PARTNER_NAMES, GROUP_GSI)
+_noam_total, _noam_coco, _noam_pct = _group_stats(_gauge_bc, _NOAM_RSI_PARTNER_NAMES, GROUP_NOAM)
+_apj_total,  _apj_coco,  _apj_pct  = _group_stats(_gauge_bc, _APJ_RSI_PARTNER_NAMES, GROUP_APJ)
+_emea_total, _emea_coco, _emea_pct = _group_stats(_gauge_bc, _EMEA_RSI_PARTNER_NAMES, GROUP_EMEA)
+_latam_total, _latam_coco, _latam_pct = _group_stats(_gauge_bc, _LATAM_RSI_PARTNER_NAMES, GROUP_LATAM)
 _gc1, _gc2, _gc3, _gc4, _gc5 = st.columns(5)
-_gc1.plotly_chart(_make_gauge("GSI",      _gsi_pct,  _gsi_total,  _gsi_coco,  75), use_container_width=True)
-_gc2.plotly_chart(_make_gauge("NOAM RSI", _noam_pct, _noam_total, _noam_coco, 75), use_container_width=True)
+_gc1.plotly_chart(_make_gauge("GSI",      _gsi_pct,  _gsi_total,  _gsi_coco,  GSI_NOAM_TARGET), use_container_width=True)
+_gc2.plotly_chart(_make_gauge("NOAM RSI", _noam_pct, _noam_total, _noam_coco, GSI_NOAM_TARGET), use_container_width=True)
 _gc3.plotly_chart(_make_gauge("APJ RSI",  _apj_pct,  _apj_total,  _apj_coco,  50), use_container_width=True)
 _gc4.plotly_chart(_make_gauge("EMEA RSI", _emea_pct, _emea_total, _emea_coco, 50), use_container_width=True)
 _gc5.plotly_chart(_make_gauge("LATAM RSI", _latam_pct, _latam_total, _latam_coco, 50), use_container_width=True)
@@ -1097,7 +1136,7 @@ def _add_totals_row(display_df, partner_col='Partner', scope_col='Scope',
     return pd.concat([display_df, pd.DataFrame([row])], ignore_index=True)
 
 
-def _build_token_usage(bc: pd.DataFrame, partner_map: dict) -> pd.DataFrame:
+def _build_token_usage(bc: pd.DataFrame, partner_map: dict, group=None) -> pd.DataFrame:
     """Compute per-partner token stats from bulk_conf — mirrors partner scorecard logic exactly.
     Filters to IS_COCO_FINAL, removes own-account rows, deduplicates by (PARTNER_NAME, ACCOUNT).
     """
@@ -1106,6 +1145,10 @@ def _build_token_usage(bc: pd.DataFrame, partner_map: dict) -> pd.DataFrame:
         return pd.DataFrame(columns=['PARTNER_LABEL', 'Tokens Consumed', 'Last 7d Tokens', '7D Tokens WoW%'])
     # Step 1: IS_COCO_FINAL only + restrict to this partner group (same as scorecard)
     _bc = bc[bc['IS_COCO_FINAL'] & bc['PARTNER_NAME'].isin(partner_map.keys())].copy()
+    # Dual-group partners (Slalom, Infosys): keep only this group's rows.
+    if group and len(_bc) > 0 and {'THEATER_NAME', 'REGION_NAME'} <= set(_bc.columns):
+        _bc = _bc[[managed_group(p, t, r) == group for p, t, r in
+                   zip(_bc['PARTNER_NAME'], _bc['THEATER_NAME'], _bc['REGION_NAME'])]]
     if len(_bc) == 0:
         return pd.DataFrame(columns=['PARTNER_LABEL', 'Tokens Consumed', 'Last 7d Tokens', '7D Tokens WoW%'])
     # Step 2: remove partner's own accounts (same as scorecard)
@@ -1173,7 +1216,8 @@ def _render_coco_funnel(total: int, coco: int, s3: int, s4: int, s5: int, s6: in
     st.html(html)
 
 
-def _render_partner_section(base_df, bc, bc_partner_map, skeleton_df, target_pct, section_label, detail_label):
+def _render_partner_section(base_df, bc, bc_partner_map, skeleton_df, target_pct, section_label, detail_label,
+                             group=None):
     """Render 6 bordered KPI metrics + collapsible table for any partner group.
     bc_partner_map: dict {partner_name: (label, region_or_None)} or None for no geo filter.
     skeleton_df: DataFrame with PARTNER_LABEL, COUNTRY columns (all expected rows).
@@ -1217,6 +1261,11 @@ def _render_partner_section(base_df, bc, bc_partner_map, skeleton_df, target_pct
                 lambda r: r['REGION_NAME'] == r['_country'] if pd.notna(r['_country']) else True,
                 axis=1,
             )]
+        # Multi-group partners (Slalom, Aimpoint, Infosys): count only the rows this
+        # group owns, matching the gauge and the section's SQL totals.
+        if group and len(_bc) > 0 and {'THEATER_NAME', 'REGION_NAME'} <= set(_bc.columns):
+            _bc = _bc[[managed_group(p, t, r) == group for p, t, r in
+                       zip(_bc['PARTNER_NAME'], _bc['THEATER_NAME'], _bc['REGION_NAME'])]]
         _bc['_s3']  = _bc['IS_COCO_FINAL'] & (_bc['USE_CASE_STAGE'] == '3 - Technical / Business Validation')
         _bc['_s4']  = _bc['IS_COCO_FINAL'] & (_bc['USE_CASE_STAGE'] == '4 - Use Case Won / Migration Plan')
         _bc['_s5']  = _bc['IS_COCO_FINAL'] & (_bc['USE_CASE_STAGE'] == '5 - Implementation In Progress')
@@ -1276,7 +1325,7 @@ def _render_partner_section(base_df, bc, bc_partner_map, skeleton_df, target_pct
         _disp = df[['PARTNER_LABEL','COUNTRY','TOTAL_UCS','COCO_FINAL_UCS','NOTCOCO_UCS','COCO_PCT','TOTAL_EACV','COCO_EACV']].copy()
         _disp = _apply_snapshot_wow(_disp)
         # Merge token usage
-        _tok = _build_token_usage(bc, bc_partner_map) if bc_partner_map else pd.DataFrame(columns=['PARTNER_LABEL'])
+        _tok = _build_token_usage(bc, bc_partner_map, group) if bc_partner_map else pd.DataFrame(columns=['PARTNER_LABEL'])
         if len(_tok) > 0:
             _disp = _disp.merge(_tok, on='PARTNER_LABEL', how='left')
         _disp = _disp.sort_values('COCO_PCT', ascending=False)
@@ -1308,7 +1357,7 @@ def _render_partner_section(base_df, bc, bc_partner_map, skeleton_df, target_pct
         }
         st.dataframe(_disp, column_config=_col_cfg, hide_index=True, use_container_width=True)
 
-# ── GSI Adoption (75% Target) ─────────────────────────────────────────────────
+# ── GSI Adoption (90% Target) ─────────────────────────────────────────────────
 _GSI_NAMES_MAP = {
     'Accenture': ('Accenture', None), 'Capgemini Technologies LLC': ('Capgemini Technologies LLC', None),
     'Cognizant Technology Solutions US Corp': ('Cognizant Technology Solutions US Corp', None),
@@ -1321,7 +1370,7 @@ _GSI_SKELETON = pd.DataFrame([
     for p in ['Accenture','Capgemini Technologies LLC','Cognizant Technology Solutions US Corp',
               'Deloitte Consulting','EY','IBM']
 ])
-with st.expander(":material/groups: GSI CoCo Adoption (75% Target)", expanded=True):
+with st.expander(f":material/groups: GSI CoCo Adoption ({GSI_NOAM_TARGET}% Target)", expanded=True):
     st.caption(f"{'Region: ' + region if _sidebar_theaters else 'Global scope'} — {'theater-filtered' if _sidebar_theaters else 'all theaters included'}")
     _gsi_base = get_gsi_adoption(conn, start_date, end_date, theaters=_sidebar_theaters)
     if _selected_partner_names and 'PARTNER_LABEL' in _gsi_base.columns:
@@ -1335,9 +1384,10 @@ with st.expander(":material/groups: GSI CoCo Adoption (75% Target)", expanded=Tr
         else:
             _gsi_base = _gsi_base.iloc[0:0]
     _render_partner_section(_gsi_base, _managed_bc, _GSI_NAMES_MAP, _GSI_SKELETON,
-                            target_pct=75, section_label="GSI", detail_label="Partner detail")
+                            target_pct=GSI_NOAM_TARGET, section_label="GSI", detail_label="Partner detail",
+                            group=GROUP_GSI)
 
-# ── NOAM RSI Adoption (75% Target) ───────────────────────────────────────────
+# ── NOAM RSI Adoption (90% Target) ───────────────────────────────────────────
 from utils import PARTNER_ALIASES as _PA
 _NOAM_RSI_NAMES = [p for p in _PA.get('--- NOAM RSIs ---', [])
                    if not p.startswith('---')]
@@ -1349,7 +1399,7 @@ _NOAM_RSI_SKELETON = pd.DataFrame([
     {'PARTNER_LABEL': p, 'COUNTRY': 'NoAM'}
     for p in sorted({v[0] for v in _NOAM_RSI_MAP.values()})
 ])
-with st.expander(":material/location_on: NOAM RSI CoCo Adoption (75% Target)", expanded=True):
+with st.expander(f":material/location_on: NOAM RSI CoCo Adoption ({GSI_NOAM_TARGET}% Target)", expanded=True):
     st.caption("NoAM scope — AMSExpansion, USMajors, AMSAcquisition, USPubSec theaters")
     _noam_base = get_noam_rsi_adoption(conn, start_date, end_date, theaters=_sidebar_theaters)
     if _selected_partner_names:
@@ -1367,27 +1417,29 @@ with st.expander(":material/location_on: NOAM RSI CoCo Adoption (75% Target)", e
         else:
             _noam_base = _noam_base.iloc[0:0]
     _render_partner_section(_noam_base, _managed_bc, _NOAM_RSI_MAP, _NOAM_RSI_SKELETON,
-                            target_pct=75, section_label="NOAM RSI", detail_label="Partner detail")
+                            target_pct=GSI_NOAM_TARGET, section_label="NOAM RSI", detail_label="Partner detail",
+                            group=GROUP_NOAM)
 
 # ── APJ RSI Adoption (50% CoCo Target) ───────────────────────────────────────
 with st.expander(":material/language: APJ RSI CoCo Adoption (50% Target)", expanded=True):
-    st.caption("Each partner scoped to their assigned country — NTT Data→Japan | Megazone→Korea | Infinite Lambda→ASEAN | Altis→ANZ | Prolim→India")
+    _apj_by_region = {}
+    for _lbl, _reg in dict.fromkeys(APJ_RSI_REGION_MAP.values()):
+        _apj_by_region.setdefault(_reg, []).append(_lbl)
+    st.caption("Each partner scoped to their assigned country — " + " | ".join(
+        f"{_reg}: {', '.join(_lbls)}" for _reg, _lbls in sorted(_apj_by_region.items())))
     _apj_base = get_apj_rsi_adoption(conn, start_date, end_date)
     if _selected_partner_names and 'PARTNER_LABEL' in _apj_base.columns:
-        # Translate raw DT_OKR names → canonical APJ labels (e.g. 'NTT DATA Group Corporation' → 'NTT Data')
+        # Translate raw DT_OKR names → canonical APJ labels (e.g. 'NTT DATA Group Corporation' → 'NTT DATA')
         _apj_canonical_sel = {v[0] for k, v in APJ_RSI_REGION_MAP.items() if k in _selected_partner_names}
         if _apj_canonical_sel:
             _apj_base = _apj_base[_apj_base['PARTNER_LABEL'].isin(_apj_canonical_sel)]
         else:
             _apj_base = _apj_base.iloc[0:0]
 
-    # Canonical 5-partner skeleton — all partners always appear even with 0 UCs
+    # Skeleton from APJ_RSI_REGION_MAP — all partners always appear even with 0 UCs
     _APJ_SKELETON = pd.DataFrame([
-        {'PARTNER_LABEL': 'Altis',           'COUNTRY': 'ANZ'},
-        {'PARTNER_LABEL': 'Infinite Lambda', 'COUNTRY': 'ASEAN'},
-        {'PARTNER_LABEL': 'Megazone',        'COUNTRY': 'Korea'},
-        {'PARTNER_LABEL': 'NTT Data',        'COUNTRY': 'Japan'},
-        {'PARTNER_LABEL': 'Prolim',          'COUNTRY': 'India'},
+        {'PARTNER_LABEL': _lbl, 'COUNTRY': _reg}
+        for _lbl, _reg in sorted(dict.fromkeys(APJ_RSI_REGION_MAP.values()))
     ])
 
     # Aggregate SQL results (may be missing partners with 0 UCs)
@@ -1478,7 +1530,7 @@ with st.expander(":material/language: APJ RSI CoCo Adoption (50% Target)", expan
     with st.expander(":material/table_chart: Partner detail", expanded=False):
         _apj_display = _apj_df[['PARTNER_LABEL','COUNTRY','TOTAL_UCS','COCO_FINAL_UCS','NOTCOCO_UCS','COCO_PCT','TOTAL_EACV','COCO_EACV','Status']].copy()
         _apj_display = _apply_snapshot_wow(_apj_display)
-        _apj_tok = _build_token_usage(_bc_managed, APJ_RSI_REGION_MAP)
+        _apj_tok = _build_token_usage(_bc_managed, APJ_RSI_REGION_MAP, GROUP_APJ)
         if len(_apj_tok) > 0:
             _apj_display = _apj_display.merge(_apj_tok, on='PARTNER_LABEL', how='left')
         _apj_display = _apj_display.sort_values('COCO_PCT', ascending=False)
@@ -1617,7 +1669,7 @@ with st.expander("🌎 LATAM RSI CoCo Adoption (50% Target)", expanded=True):
     with st.expander(":material/table_chart: Partner detail", expanded=False):
         _latam_display = _latam_df[['PARTNER_LABEL','COUNTRY','TOTAL_UCS','COCO_FINAL_UCS','NOTCOCO_UCS','COCO_PCT','TOTAL_EACV','COCO_EACV','Status']].copy()
         _latam_display = _apply_snapshot_wow(_latam_display)
-        _latam_tok = _build_token_usage(_bc_managed, LATAM_RSI_REGION_MAP)
+        _latam_tok = _build_token_usage(_bc_managed, LATAM_RSI_REGION_MAP, GROUP_LATAM)
         if len(_latam_tok) > 0:
             _latam_display = _latam_display.merge(_latam_tok, on='PARTNER_LABEL', how='left')
         _latam_display = _latam_display.sort_values('COCO_PCT', ascending=False)
@@ -1654,7 +1706,11 @@ st.divider()
 
 # ── EMEA RSI Adoption (50% CoCo Target) ──────────────────────────────────────
 with st.expander(":material/globe_uk: EMEA RSI CoCo Adoption (50% Target)", expanded=True):
-    st.caption("Each partner scoped to their assigned region — Infomotion→CentralEMEA | Civica→SouthEMEA (Spain) | Kubrick→UK | KPC→SouthEMEA (France)")
+    _emea_by_region = {}
+    for _lbl, _reg in dict.fromkeys(EMEA_RSI_REGION_MAP.values()):
+        _emea_by_region.setdefault(_reg, []).append(_lbl)
+    st.caption("Each partner scoped to their assigned region — " + " | ".join(
+        f"{_reg}: {', '.join(_lbls)}" for _reg, _lbls in sorted(_emea_by_region.items())))
     _emea_base = get_emea_rsi_adoption(conn, start_date, end_date)
     if _selected_partner_names and 'PARTNER_LABEL' in _emea_base.columns:
         # Translate raw DT_OKR names → canonical EMEA labels (e.g. 'INFOMOTION GMBH' → 'Infomotion')
@@ -1664,12 +1720,10 @@ with st.expander(":material/globe_uk: EMEA RSI CoCo Adoption (50% Target)", expa
         else:
             _emea_base = _emea_base.iloc[0:0]
 
-    # Canonical 4-partner skeleton — all partners always appear even with 0 UCs
+    # Skeleton from EMEA_RSI_REGION_MAP — all partners always appear even with 0 UCs
     _EMEA_SKELETON = pd.DataFrame([
-        {'PARTNER_LABEL': 'Civica',     'COUNTRY': 'SouthEMEA (Spain)'},
-        {'PARTNER_LABEL': 'Infomotion', 'COUNTRY': 'CentralEMEA'},
-        {'PARTNER_LABEL': 'KPC',        'COUNTRY': 'SouthEMEA (France)'},
-        {'PARTNER_LABEL': 'Kubrick',    'COUNTRY': 'UK'},
+        {'PARTNER_LABEL': _lbl, 'COUNTRY': _reg}
+        for _lbl, _reg in sorted(dict.fromkeys(EMEA_RSI_REGION_MAP.values()))
     ])
 
     if len(_emea_base) > 0:
@@ -1758,7 +1812,7 @@ with st.expander(":material/globe_uk: EMEA RSI CoCo Adoption (50% Target)", expa
     with st.expander(":material/table_chart: Partner detail", expanded=False):
         _emea_display = _emea_df[['PARTNER_LABEL','COUNTRY','TOTAL_UCS','COCO_FINAL_UCS','NOTCOCO_UCS','COCO_PCT','TOTAL_EACV','COCO_EACV','Status']].copy()
         _emea_display = _apply_snapshot_wow(_emea_display)
-        _emea_tok = _build_token_usage(_bc_managed, EMEA_RSI_REGION_MAP)
+        _emea_tok = _build_token_usage(_bc_managed, EMEA_RSI_REGION_MAP, GROUP_EMEA)
         if len(_emea_tok) > 0:
             _emea_display = _emea_display.merge(_emea_tok, on='PARTNER_LABEL', how='left')
         _emea_display = _emea_display.sort_values('COCO_PCT', ascending=False)
@@ -1796,7 +1850,7 @@ st.divider()
 # Inject context for Ask AI
 st.session_state.ask_ai_context = (
     f"Current page: Adoption Metrics (Overview). Region: {region}. Partner filter: {selected_partners or 'All'}.\n"
-    f"CoCo adoption: {coco_pct:.1f}% ({coco_count}/{int(s['TOTAL_USE_CASES'])} UCs). OKR target: 75%."
+    f"CoCo adoption: {coco_pct:.1f}% ({coco_count}/{int(s['TOTAL_USE_CASES'])} UCs). OKR target: GSI/NOAM {GSI_NOAM_TARGET}%, APJ/EMEA/LATAM {REGIONAL_RSI_TARGET}%."
     + build_filter_context()
 )
 

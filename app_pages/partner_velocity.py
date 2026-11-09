@@ -26,7 +26,7 @@ _MANAGED_PARTNERS_SQL = (
     "'PT Merkle Inovasi Teknologi','Davanti a Merkle Company',"
     "'Archetype Consulting','Everforth Apex Systems',"
     "'Tata Consultancy Services','TCS','Tata Consultancy Services (TCS)',"
-    "'OneSix','Icon Analytics','Sparq Holdings, Inc.',"
+    "'OneSix','Sparq Holdings, Inc.',"
     "'CitiusTech Inc.','CITIUS TECH',"
     "'Hexaware Technologies','Hexaware Technologies Limited','Hexaware Technologies Inc',"
     "'Hexaware Technologies UK Limited','Hexaware Technolgies'"
