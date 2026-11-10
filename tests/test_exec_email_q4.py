@@ -169,3 +169,14 @@ def test_inactive_partners_ignore_alias_spellings():
     block = SRC[SRC.index("_ACTIVE_ALIASES = {"):SRC.index("managed_inactive_partners = len(managed_inactive_names)")]
     assert "_ACTIVE_ALIASES.get(p, p) for p in managed_bulk_conf['PARTNER_NAME']" in block
     assert "len(MANAGED_PARTNERS) - managed_total_partners" not in SRC
+
+
+def test_email_scorecard_headings_and_output_budget():
+    src = (ROOT / "app_pages" / "executive_email.py").read_text()
+    assert "APJ RSI (APJ geo-restricted, target {APJ_EMEA_TARGET}%)" in src
+    assert "EMEA RSI (EMEA geo-restricted, target {APJ_EMEA_TARGET}%)" in src
+    assert "LATAM RSI (LATAM geo-restricted, target {LATAM_RSI_TARGET}%)" in src
+    assert "target 50%)" not in src
+    # Five 14-column scorecards (98 partner rows) need more than 8K output tokens,
+    # or the last (LATAM) scorecard is cut off.
+    assert "full_prompt, max_tokens=16384)" in src

@@ -112,3 +112,12 @@ def test_overview_latam_section_has_subregions():
     assert "LATAM_SUBREGION.get(_lbl, 'LATAM')" in src
     assert "_latam_df.groupby('COUNTRY', sort=False)" in src
     assert "'LATAM (CALA)'" not in src
+
+
+def test_region_breakdown_buckets_latam_by_region_not_partner():
+    # Deloitte/Accenture are on the LATAM list; their non-LATAM use cases must
+    # stay in their own theatre in the Overview "Breakdown by Region" table.
+    src = (ROOT / "app_pages" / "overview.py").read_text()
+    fn = src[src.index("def _build_partner_region_from_bulk"):][:1500]
+    assert "r.get('REGION_NAME') == 'LATAM'" in fn
+    assert "_latam_partner_set" not in fn
