@@ -123,7 +123,7 @@ _GROUP_PARTNER_COUNTS = {
 _PARTNER_SLOTS = sum(_GROUP_PARTNER_COUNTS.values())
 _UNIQUE_MANAGED = len({key.split(' | ')[0] for _, key in HEATMAP_PARTNERS})
 _GROUP_COUNT_STR = ', '.join(f"{g}={n}" for g, n in _GROUP_PARTNER_COUNTS.items())
-# Group target thresholds for heatmap colouring (GSI/NOAM=90%, APJ/EMEA/LATAM=50%)
+# Group target thresholds for heatmap colouring (GSI/NOAM=90%, APJ/EMEA=75%, LATAM=50%)
 _HEATMAP_GSI_KEYS  = {k for _, k in _HEATMAP_GSI}
 _HEATMAP_NOAM_KEYS = {k for _, k in _HEATMAP_NOAM}
 _APJ_KEYS_HEATMAP  = {k for _, k in _HEATMAP_APJ}
@@ -2463,19 +2463,19 @@ Follow this EXACT structure with 9 sections:
 - The number of rows MUST equal the EXPECTED ROWS value stated for this group in the context. Include every partner listed, including any with 0 UCs. Do not omit, merge or summarise rows.
 - Every partner row must include WoW Δ% and WoW Δ UCs. After table: one sentence naming the biggest weekly CoCo UC gainer and any flat/declining partner using these two columns, then tie the group to the NOAM RSI line-chart trend.
 
-## PARTNER SCORECARD — APJ RSI (APJ geo-restricted, target 50%)
+## PARTNER SCORECARD — APJ RSI (APJ geo-restricted, target {APJ_EMEA_TARGET}%)
 | Partner | Total UCs | CoCo UCs | CoCo% | WoW Δ% | WoW Δ UCs | EACV | AI | DE | Analytics | {OKR_QUARTER} Tokens | {OKR_QUARTER} Credits | Last 7d Credits | 7D Credits WoW% |
 - Show ALL APJ RSI partners. Sort by EACV descending. UCs are each partner's respective APJ region.
 - The number of rows MUST equal the EXPECTED ROWS value stated for this group in the context. Include every partner listed, including any with 0 UCs. Do not omit, merge or summarise rows.
 - Every partner row must include WoW Δ% and WoW Δ UCs. After table: one sentence naming the biggest weekly CoCo UC gainer and any flat/declining partner using these two columns.
 
-## PARTNER SCORECARD — EMEA RSI (EMEA geo-restricted, target 50%)
+## PARTNER SCORECARD — EMEA RSI (EMEA geo-restricted, target {APJ_EMEA_TARGET}%)
 | Partner | Total UCs | CoCo UCs | CoCo% | WoW Δ% | WoW Δ UCs | EACV | AI | DE | Analytics | {OKR_QUARTER} Tokens | {OKR_QUARTER} Credits | Last 7d Credits | 7D Credits WoW% |
 - Show ALL EMEA RSI partners. Sort by EACV descending. UCs are each partner's respective EMEA region.
 - The number of rows MUST equal the EXPECTED ROWS value stated for this group in the context. Include every partner listed, including any with 0 UCs. Do not omit, merge or summarise rows.
 - Every partner row must include WoW Δ% and WoW Δ UCs. After table: one sentence naming the biggest weekly CoCo UC gainer and any flat/declining partner using these two columns.
 
-## PARTNER SCORECARD — LATAM RSI (LATAM geo-restricted, target 50%)
+## PARTNER SCORECARD — LATAM RSI (LATAM geo-restricted, target {LATAM_RSI_TARGET}%)
 | Partner | Total UCs | CoCo UCs | CoCo% | WoW Δ% | WoW Δ UCs | EACV | AI | DE | Analytics | {OKR_QUARTER} Tokens | {OKR_QUARTER} Credits | Last 7d Credits | 7D Credits WoW% |
 - Show ALL LATAM RSI partners. Sort by EACV descending. UCs are LATAM geo only.
 - The number of rows MUST equal the EXPECTED ROWS value stated for this group in the context. Include every partner listed, including any with 0 UCs. Do not omit, merge or summarise rows.
@@ -2685,7 +2685,7 @@ Write the executive briefing:"""
     else:
         response_placeholder = st.empty()
         response_placeholder.info("Generating executive briefing with Cortex Complete...")
-        full_response = cortex_complete(conn, "claude-sonnet-4-5", full_prompt, max_tokens=8192)
+        full_response = cortex_complete(conn, "claude-sonnet-4-5", full_prompt, max_tokens=16384)
         full_response = _replace_notable_wins(full_response, notable_wins_markdown)
         full_response = _ensure_wow_summary_bullet(full_response, _book_delta_coco, _book_delta_total, _book_delta_pct)
         import re as _re
