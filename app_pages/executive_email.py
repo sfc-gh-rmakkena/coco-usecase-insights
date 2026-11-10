@@ -19,8 +19,8 @@ from utils.queries import (
 )
 from utils.cortex_helpers import cortex_complete
 from utils import APJ_RSI_REGION_MAP, EMEA_RSI_REGION_MAP, LATAM_RSI_REGION_MAP, PARTNER_ALIASES as _PA_EMAIL, apply_coco_final
-from utils import region_map_sql, partner_groups
-from utils import GSI_NOAM_TARGET, REGIONAL_RSI_TARGET, GROUP_TARGET_PCT
+from utils import region_map_sql, partner_groups, LATAM_GSI_OVERLAP, LATAM_SUBREGION
+from utils import GSI_NOAM_TARGET, APJ_EMEA_TARGET, LATAM_RSI_TARGET, TARGETS_TEXT, GROUP_TARGET_PCT
 from utils import OKR_QUARTER, OKR_QUARTER_LABEL, OKR_Q_START, OKR_Q_END, OKR_Q_MONTHS
 from utils.queries import SNAPSHOT_TABLE_Q4
 
@@ -130,7 +130,11 @@ _APJ_KEYS_HEATMAP  = {k for _, k in _HEATMAP_APJ}
 _EMEA_KEYS_HEATMAP = {k for _, k in _HEATMAP_EMEA}
 _LATAM_KEYS_HEATMAP = {k for _, k in _HEATMAP_LATAM}
 def _partner_target(data_key):
-    return REGIONAL_RSI_TARGET if (data_key in _APJ_KEYS_HEATMAP or data_key in _EMEA_KEYS_HEATMAP or data_key in _LATAM_KEYS_HEATMAP) else GSI_NOAM_TARGET
+    if data_key in _APJ_KEYS_HEATMAP or data_key in _EMEA_KEYS_HEATMAP:
+        return APJ_EMEA_TARGET
+    if data_key in _LATAM_KEYS_HEATMAP:
+        return LATAM_RSI_TARGET
+    return GSI_NOAM_TARGET
 
 
 def _fmt_tokens(n):
@@ -250,7 +254,7 @@ def generate_heatmap_html(adoption_wow_data: pd.DataFrame, managed_q2_partners: 
 
     return (
         '<div style="margin:14px 0;">'
-        f'<div style="font-size:13px;font-weight:700;margin-bottom:8px;">Partner OKR Heat Map &#8212; All {n_partners} (GSI/NOAM goal={GSI_NOAM_TARGET}% &middot; APJ/EMEA/LATAM goal={REGIONAL_RSI_TARGET}% &middot; &#9733; = WoW change)</div>'
+        f'<div style="font-size:13px;font-weight:700;margin-bottom:8px;">Partner OKR Heat Map &#8212; All {n_partners} (GSI/NOAM goal={GSI_NOAM_TARGET}% &middot; APJ/EMEA goal={APJ_EMEA_TARGET}% &middot; LATAM goal={LATAM_RSI_TARGET}% &middot; &#9733; = WoW change)</div>'
         '<table width="100%" cellpadding="6" cellspacing="4" style="border-collapse:separate;table-layout:fixed;">'
         f'{legend_row}{" ".join(row_htmls)}'
         '</table></div>'
@@ -510,7 +514,7 @@ def generate_partners_target_chart_html(trend_data: list, total_partners: int = 
         '<table width="100%" border="0" cellpadding="0" cellspacing="0"><tr>'
         '<td style="font-size:10px;color:#6b7280;">'
         f'# of {MAX} managed partners meeting their group goal '
-        f'(GSI/NOAM &#8805;{GSI_NOAM_TARGET}%, APJ/EMEA/LATAM &#8805;{REGIONAL_RSI_TARGET}%) &nbsp;&middot;&nbsp; '
+        f'(GSI/NOAM &#8805;{GSI_NOAM_TARGET}%, APJ/EMEA &#8805;{APJ_EMEA_TARGET}%, LATAM &#8805;{LATAM_RSI_TARGET}%) &nbsp;&middot;&nbsp; '
         '<span style="color:#16a34a;font-weight:bold;">&#9646;</span> = current week'
         '</td></tr></table></td></tr>'
         '</table>'
@@ -606,7 +610,7 @@ def generate_partners_target_chart_html(trend_data: list, total_partners: int = 
         '<table width="100%" border="0" cellpadding="0" cellspacing="0">'
         '<tr><td style="font-size:10px;color:#6b7280;">'
         f'# of {MAX} managed partners meeting their group goal '
-        f'(GSI/NOAM &#8805;{GSI_NOAM_TARGET}%, APJ/EMEA/LATAM &#8805;{REGIONAL_RSI_TARGET}%) &nbsp;&middot;&nbsp;'
+        f'(GSI/NOAM &#8805;{GSI_NOAM_TARGET}%, APJ/EMEA &#8805;{APJ_EMEA_TARGET}%, LATAM &#8805;{LATAM_RSI_TARGET}%) &nbsp;&middot;&nbsp;'
         '<span style="color:#16a34a;font-weight:bold;"> &#9646;</span> = current week'
         '</td></tr></table></td></tr>'
         '</table>'
@@ -1045,12 +1049,22 @@ with st.spinner("Loading data..."):
         if 'REGION_NAME' in _emea_rsi_rows.columns and len(_emea_rsi_rows) > 0:
             _emea_rsi_rows['_c'] = _emea_rsi_rows['PARTNER_NAME'].map({k: v[1] for k, v in EMEA_RSI_REGION_MAP.items()})
             _emea_rsi_rows = _emea_rsi_rows[_emea_rsi_rows['REGION_NAME'] == _emea_rsi_rows['_c']].drop(columns=['_c'])
-        _latam_rsi_rows = managed_bulk_conf[managed_bulk_conf['PARTNER_NAME'].isin(_LATAM_RSI_NAMES_EMAIL)].copy()
+        # GSIs that are also LATAM RSIs (Deloitte, Accenture) stay in the GSI slice so each
+        # use case is one row here; their LATAM rows are added to group views below.
+        _latam_rsi_rows = managed_bulk_conf[managed_bulk_conf['PARTNER_NAME'].isin(_LATAM_RSI_NAMES_EMAIL - set(_GSI_NAMES))].copy()
         if 'REGION_NAME' in _latam_rsi_rows.columns and len(_latam_rsi_rows) > 0:
             _latam_rsi_rows = _latam_rsi_rows[_latam_rsi_rows['REGION_NAME'] == 'LATAM']
         # Merge aliases into canonical names
         _gsi_rows['PARTNER_NAME'] = _gsi_rows['PARTNER_NAME'].replace({'Ernst & Young (EY)': 'EY', 'IBM Consulting': 'IBM'})
         _noam_rsi_rows['PARTNER_NAME'] = _noam_rsi_rows['PARTNER_NAME'].replace({'Kipi.ai': 'kipi.ai', 'LTI Mindtree': 'LTM'})
+        # Regional RSIs: spellings that share a display label (Triggo, ZEAL) become one
+        # partner, named by the first map entry (same as the scorecard roster).
+        for _rows, _map in ((_apj_rsi_rows, APJ_RSI_REGION_MAP), (_emea_rsi_rows, EMEA_RSI_REGION_MAP),
+                            (_latam_rsi_rows, LATAM_RSI_REGION_MAP)):
+            _first = {}
+            for _raw, (_lbl, _r) in _map.items():
+                _first.setdefault(_lbl, _raw)
+            _rows['PARTNER_NAME'] = _rows['PARTNER_NAME'].map(lambda n: _first.get(_map.get(n, (n,))[0], n))
         # Tag group for each row
         _gsi_rows['_GROUP'] = 'GSI'
         _noam_rsi_rows['_GROUP'] = 'NOAM RSI'
@@ -1059,6 +1073,7 @@ with st.spinner("Loading data..."):
         _latam_rsi_rows['_GROUP'] = 'LATAM RSI'
         managed_bulk_conf = pd.concat([_gsi_rows, _noam_rsi_rows, _apj_rsi_rows, _emea_rsi_rows, _latam_rsi_rows], ignore_index=True)
 
+    _group_view = managed_bulk_conf
     if len(managed_bulk_conf) > 0:
         managed_bulk_conf['IS_COCO_FINAL'] = apply_coco_final(managed_bulk_conf, _EMAIL_BANDS)
         managed_bulk_conf['REGION'] = managed_bulk_conf['THEATER_NAME'].map(
@@ -1066,6 +1081,16 @@ with st.spinner("Loading data..."):
                       else 'EMEA' if t == 'EMEA' else 'APJ' if t == 'APJ' else 'Other'
         )
         coco_mask = managed_bulk_conf['IS_COCO_FINAL']
+        # Group view for per-group figures (scorecards, heatmap, goal counts): one row per
+        # use case per group it counts in. Adds the LATAM-region rows of GSIs that are
+        # also LATAM RSIs (Deloitte, Accenture) as LATAM RSI rows. Headline totals keep
+        # using managed_bulk_conf, so those use cases are still counted once overall.
+        _overlap = managed_bulk_conf[
+            (managed_bulk_conf['_GROUP'] == 'GSI')
+            & managed_bulk_conf['PARTNER_NAME'].isin(LATAM_GSI_OVERLAP)
+            & (managed_bulk_conf['REGION_NAME'] == 'LATAM')
+        ].assign(_GROUP='LATAM RSI') if '_GROUP' in managed_bulk_conf.columns else managed_bulk_conf.iloc[0:0]
+        _group_view = pd.concat([managed_bulk_conf, _overlap], ignore_index=True)
 
         # Q2 Credit consumption — same approach as OKR Coverage page:
         # fetch account-level credits for IS_COCO_FINAL accounts, aggregate per partner
@@ -1129,13 +1154,14 @@ with st.spinner("Loading data..."):
         # Per-partner breakdown
         # Heatmap key: the partner name, suffixed for a multi-group partner's rows
         # outside its first group (see _tile_key_for).
+        _gv_mask = _group_view['IS_COCO_FINAL']
         _tile_key = pd.Series(
-            [_tile_key_for(p, g) for p, g in zip(managed_bulk_conf['PARTNER_NAME'], managed_bulk_conf['_GROUP'])],
-            index=managed_bulk_conf.index,
-        ) if '_GROUP' in managed_bulk_conf.columns else managed_bulk_conf['PARTNER_NAME']
-        p_coco_eacv = managed_bulk_conf.loc[coco_mask].groupby(_tile_key[coco_mask])['USE_CASE_EACV'].sum().reset_index()
+            [_tile_key_for(p, g) for p, g in zip(_group_view['PARTNER_NAME'], _group_view['_GROUP'])],
+            index=_group_view.index,
+        ) if '_GROUP' in _group_view.columns else _group_view['PARTNER_NAME']
+        p_coco_eacv = _group_view.loc[_gv_mask].groupby(_tile_key[_gv_mask])['USE_CASE_EACV'].sum().reset_index()
         p_coco_eacv.columns = ['PARTNER_NAME', 'COCO_EACV']
-        managed_q2_partners = managed_bulk_conf.assign(PARTNER_NAME=_tile_key).groupby('PARTNER_NAME').agg(
+        managed_q2_partners = _group_view.assign(PARTNER_NAME=_tile_key).groupby('PARTNER_NAME').agg(
             TOTAL_UCS=('USE_CASE_ID', 'count'),
             COCO_UCS=('IS_COCO_FINAL', 'sum'),
             TOTAL_EACV=('USE_CASE_EACV', 'sum'),
@@ -1213,7 +1239,12 @@ _managed_non_coco_pipeline = int((~managed_bulk_conf['IS_COCO_FINAL']).sum()) if
 # Active / inactive partners on the same basis as the scorecards: alias spellings merged,
 # a partner counts as active when it has any in-scope use case this quarter.
 _ACTIVE_ALIASES = {'Ernst & Young (EY)': 'EY', 'IBM Consulting': 'IBM', 'Kipi.ai': 'kipi.ai',
-                   'LTI Mindtree': 'LTM', 'ZEAL CORPORATION': 'ZEAL Corporation'}
+                   'LTI Mindtree': 'LTM'}
+for _map in (APJ_RSI_REGION_MAP, EMEA_RSI_REGION_MAP, LATAM_RSI_REGION_MAP):
+    _first = {}
+    for _raw, (_lbl, _r) in _map.items():   # spellings sharing a label (ZEAL, Triggo)
+        _ACTIVE_ALIASES.setdefault(_raw, _first.setdefault(_lbl, _raw))
+_ACTIVE_ALIASES = {k: v for k, v in _ACTIVE_ALIASES.items() if k != v}
 _all_managed_unique = {_ACTIVE_ALIASES.get(p, p) for p in MANAGED_PARTNERS}
 _active_unique = ({_ACTIVE_ALIASES.get(p, p) for p in managed_bulk_conf['PARTNER_NAME'].dropna()}
                   if len(managed_bulk_conf) > 0 else set()) & _all_managed_unique
@@ -1222,9 +1253,9 @@ managed_inactive_names = sorted(_all_managed_unique - _active_unique)
 managed_inactive_partners = len(managed_inactive_names)
 
 # Compute full per-partner OKR summary — count each partner against their group target
-# GSI/NOAM RSI target = 90%; APJ/EMEA/LATAM RSI target = 50%
+# GSI/NOAM RSI target = 90%; APJ/EMEA RSI target = 75%; LATAM RSI target = 50%
 if len(managed_bulk_conf) > 0 and '_GROUP' in managed_bulk_conf.columns:
-    _full_partner_summary = managed_bulk_conf.groupby(['PARTNER_NAME', '_GROUP']).agg(
+    _full_partner_summary = _group_view.groupby(['PARTNER_NAME', '_GROUP']).agg(
         TOTAL_UCS=('USE_CASE_ID', 'count'),
         COCO_UCS=('IS_COCO_FINAL', 'sum'),
     ).reset_index()
@@ -1251,7 +1282,7 @@ else:
 # Inject context for Ask AI
 st.session_state.ask_ai_context = (
     f"Current page: Executive Email. GSI + NOAM/APJ/EMEA RSI managed partners. Period: {OKR_QUARTER_LABEL} ({OKR_Q_MONTHS}).\n"
-    f"Partners meeting goal ({GSI_NOAM_TARGET}%/{REGIONAL_RSI_TARGET}%): {partners_meeting_75}/{_PARTNER_SLOTS}. Partners at goal: {partners_meeting_list}.\n"
+    f"Partners meeting goal ({TARGETS_TEXT}): {partners_meeting_75}/{_PARTNER_SLOTS}. Partners at goal: {partners_meeting_list}.\n"
     f"Partners below goal (closest first): {_below_str}."
 )
 
@@ -1394,7 +1425,7 @@ _EXPECTED_GROUP_PARTNERS = {
 def _group_partners(group_tag):
     if not _has_group or len(managed_bulk_conf) == 0:
         return pd.DataFrame()
-    _g = managed_bulk_conf[managed_bulk_conf['_GROUP'] == group_tag]
+    _g = _group_view[_group_view['_GROUP'] == group_tag]
     if len(_g) == 0:
         _expected = _EXPECTED_GROUP_PARTNERS.get(group_tag, [])
         if not _expected:
@@ -1703,7 +1734,7 @@ okr_headline_ctx = (
     f"  Target CoCo Adoption %: {_okr_target_pct}%\n"
     f"  Gap (UCs): {_okr_gap_ucs:+d}\n"
     f"  Gap (Adoption %): {_okr_gap_pct:+.1f}pp\n"
-    f"  Partners Meeting 50% Adoption: {_p_meeting_50}/{_UNIQUE_MANAGED}\n"
+    f"  Partners Meeting Their Group Goal ({TARGETS_TEXT}): {partners_meeting_75}/{_PARTNER_SLOTS}\n"
     f"  Weekly snapshot comparison: {_bn_weeks}\n"
     f"  WoW Δ Total UCs: {_book_delta_total}\n"
     f"  WoW Δ CoCo UCs: {_book_delta_coco}\n"
@@ -1799,11 +1830,11 @@ def _group_cumulative_wow(partner_names):
     return _out
 
 if len(managed_bulk_conf) > 0 and '_GROUP' in managed_bulk_conf.columns:
-    regional_okr_ctx += _okr_row(managed_bulk_conf[managed_bulk_conf['_GROUP'] == 'GSI'],       'GSI (Global, all regions)', GSI_NOAM_TARGET, 'GSI')
-    regional_okr_ctx += _okr_row(managed_bulk_conf[managed_bulk_conf['_GROUP'] == 'NOAM RSI'],  'NOAM RSI (NoAM only)',       GSI_NOAM_TARGET, 'NOAM RSI')
-    regional_okr_ctx += _okr_row(managed_bulk_conf[managed_bulk_conf['_GROUP'] == 'APJ RSI'],   'APJ RSI (APJ geo)',          50, 'APJ RSI')
-    regional_okr_ctx += _okr_row(managed_bulk_conf[managed_bulk_conf['_GROUP'] == 'EMEA RSI'],  'EMEA RSI (EMEA geo)',        50, 'EMEA RSI')
-    regional_okr_ctx += _okr_row(managed_bulk_conf[managed_bulk_conf['_GROUP'] == 'LATAM RSI'], 'LATAM RSI (LATAM geo)',      50, 'LATAM RSI')
+    regional_okr_ctx += _okr_row(_group_view[_group_view['_GROUP'] == 'GSI'],       'GSI (Global, all regions)', GSI_NOAM_TARGET, 'GSI')
+    regional_okr_ctx += _okr_row(_group_view[_group_view['_GROUP'] == 'NOAM RSI'],  'NOAM RSI (NoAM only)',       GSI_NOAM_TARGET, 'NOAM RSI')
+    regional_okr_ctx += _okr_row(_group_view[_group_view['_GROUP'] == 'APJ RSI'],   'APJ RSI (APJ geo)',          APJ_EMEA_TARGET, 'APJ RSI')
+    regional_okr_ctx += _okr_row(_group_view[_group_view['_GROUP'] == 'EMEA RSI'],  'EMEA RSI (EMEA geo)',        APJ_EMEA_TARGET, 'EMEA RSI')
+    regional_okr_ctx += _okr_row(_group_view[_group_view['_GROUP'] == 'LATAM RSI'], 'LATAM RSI (LATAM geo)',      LATAM_RSI_TARGET, 'LATAM RSI')
 
 # Quarter-progress trend — is the number of CoCo use cases still climbing, and how much
 # runway is left? Deliberately expressed as weeks remaining rather than calendar dates.
@@ -2010,7 +2041,7 @@ MANAGED PARTNERS {OKR_QUARTER} HEADLINE:
   CoCo Deployed: {managed_coco_deployed}
   Non-CoCo Convertible Pipeline: {_managed_non_coco_pipeline} (← USE THIS EXACT NUMBER for any mention of non-CoCo or convertible pipeline UCs in the narrative)
   Partners Meeting Group Target: {partners_meeting_75} ({partners_meeting_list})
-  Partners Below 50% Target: {partners_below_50}
+  Partners Below Their Group Goal: {partners_below_50}
 No {OKR_QUARTER} Activity ({managed_inactive_partners} partners): {', '.join(managed_inactive_names)}
 
 OKR HEADLINE — WEEKLY SNAPSHOT ROLLUPS:
@@ -2019,14 +2050,14 @@ OKR HEADLINE — WEEKLY SNAPSHOT ROLLUPS:
 PIPELINE (Managed Partners, {OKR_QUARTER}, all UCs — weekly columns are stage movement from FACT_USE_CASE_STAGE_MOVEMENT.MOVEIN_DATE):
 {stage_ctx}
 
-PARTNER SCORECARD BY GROUP (targets: GSI/NOAM {GSI_NOAM_TARGET}%, APJ/EMEA/LATAM {REGIONAL_RSI_TARGET}% CoCo adoption):
+PARTNER SCORECARD BY GROUP (targets: {TARGETS_TEXT} CoCo adoption):
 {gsi_partner_ctx}
 {noam_partner_ctx}
 {apj_partner_ctx}
 {emea_partner_ctx}
 {latam_partner_ctx}
 
-OKR PROGRESS — REGIONAL BREAKDOWN (5 groups; GSI/NOAM goal={GSI_NOAM_TARGET}%, APJ/EMEA/LATAM goal={REGIONAL_RSI_TARGET}%.
+OKR PROGRESS — REGIONAL BREAKDOWN (5 groups; GSI/NOAM goal={GSI_NOAM_TARGET}%, APJ/EMEA goal={APJ_EMEA_TARGET}%, LATAM goal={LATAM_RSI_TARGET}%.
 Weekly rollups come from the latest two IS_COCO_FINAL weekly snapshots and are net changes in
 the {OKR_QUARTER}-scoped use-case stock):
 {regional_okr_ctx}
@@ -2402,7 +2433,7 @@ Follow this EXACT structure with 9 sections:
 - Show 5 rows: GSI (Global), NOAM RSI, APJ RSI, EMEA RSI, LATAM RSI
 - Use "OKR PROGRESS — REGIONAL BREAKDOWN" data from context (each row has group name, total partners in scope, total UCs, CoCo UCs, CoCo %, partners meeting goal, plus weekly snapshot rollups)
 - Total Partners = total partners in scope for that group (irrelevant of CoCo adoption)
-- Goal% is {GSI_NOAM_TARGET}% for GSI and NOAM RSI, {REGIONAL_RSI_TARGET}% for APJ RSI and EMEA RSI — reflect the correct target per row
+- Goal% is {GSI_NOAM_TARGET}% for GSI and NOAM RSI, {APJ_EMEA_TARGET}% for APJ RSI and EMEA RSI, {LATAM_RSI_TARGET}% for LATAM RSI — reflect the correct target per row
 - "WoW Δ Total UCs" = the row's `WoW Δ Total UCs=` value; "WoW Δ CoCo UCs" = the row's `WoW Δ CoCo UCs=` value; "WoW Δ CoCo %" = the row's `WoW Δ CoCo Adoption %=` value
 - Write "-" wherever the context says n/a. Never compute or infer any of these three weekly values yourself.
 - Immediately after the table, one sentence naming the group with the strongest weekly gain and the group that went backwards or flat, citing the actual numbers. If every group is n/a, say the weekly comparison is not yet available instead.

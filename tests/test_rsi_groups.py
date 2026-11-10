@@ -175,9 +175,9 @@ def test_q4_okr_targets():
     from utils import GROUP_TARGET_PCT, GSI_NOAM_TARGET
     from utils.verified_metrics import GROUP_TARGETS
     assert GSI_NOAM_TARGET == 90
-    assert GROUP_TARGET_PCT == {GROUP_GSI: 90, GROUP_NOAM: 90, GROUP_APJ: 50,
-                                GROUP_EMEA: 50, 'LATAM RSI': 50}
-    assert GROUP_TARGETS == {"GSI": 90, "NOAM": 90, "APJ": 50, "EMEA": 50, "LATAM": 50}
+    assert GROUP_TARGET_PCT == {GROUP_GSI: 90, GROUP_NOAM: 90, GROUP_APJ: 75,
+                                GROUP_EMEA: 75, 'LATAM RSI': 50}
+    assert GROUP_TARGETS == {"GSI": 90, "NOAM": 90, "APJ": 75, "EMEA": 75, "LATAM": 50}
     for page in ("pse_email_hybrid.py", "pse_email_hybrid_rest.py"):
         src = (ROOT / "app_pages" / page).read_text()
         assert 'None, 75, "GSIs"' not in src and 'NOAM_THEATERS, 75' not in src, page

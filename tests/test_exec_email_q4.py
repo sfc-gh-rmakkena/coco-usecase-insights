@@ -97,10 +97,11 @@ def test_multigroup_partners_get_one_tile_per_group(email_ns):
 def test_group_counts_match_rosters(email_ns):
     counts = email_ns["_GROUP_PARTNER_COUNTS"]
     assert counts["GSI"] == 6 and counts["APJ RSI"] == 26
-    assert counts["EMEA RSI"] == 20 and counts["LATAM RSI"] == 5
+    assert counts["EMEA RSI"] == 20 and counts["LATAM RSI"] == 17   # Triggo's two names = one
     assert email_ns["_PARTNER_SLOTS"] == sum(counts.values())
-    # Multi-group partners are counted once in the unique total.
-    assert email_ns["_UNIQUE_MANAGED"] == email_ns["_PARTNER_SLOTS"] - 6  # Slalom x2, Billigence, Vivanti, Aimpoint, Infosys
+    # Multi-group partners are counted once in the unique total: Slalom x2, Billigence,
+    # Vivanti, Aimpoint, Infosys, plus Deloitte and Accenture (GSI + LATAM).
+    assert email_ns["_UNIQUE_MANAGED"] == email_ns["_PARTNER_SLOTS"] - 8
 
 
 def test_no_stale_hardcoded_counts():
@@ -112,13 +113,15 @@ def test_no_stale_hardcoded_counts():
     assert "_CANONICAL_TOTAL = _PARTNER_SLOTS" in SRC
 
 
-# --- Q4 targets (90% / 50%) ------------------------------------------------
+# --- Q4 targets (90% / 75% / 50%) ------------------------------------------------
 
 def test_heatmap_targets(email_ns):
     target = email_ns["_partner_target"]
     for _, key in email_ns["_HEATMAP_GSI"] + email_ns["_HEATMAP_NOAM"]:
         assert target(key) == 90, key
-    for _, key in email_ns["_HEATMAP_APJ"] + email_ns["_HEATMAP_EMEA"] + email_ns["_HEATMAP_LATAM"]:
+    for _, key in email_ns["_HEATMAP_APJ"] + email_ns["_HEATMAP_EMEA"]:
+        assert target(key) == 75, key
+    for _, key in email_ns["_HEATMAP_LATAM"]:
         assert target(key) == 50, key
 
 
@@ -138,8 +141,8 @@ def test_stage_sql_scopes_regional_rsis_by_region():
 
 
 def test_scorecards_and_tiles_are_per_group():
-    assert "managed_bulk_conf['_GROUP'] == group_tag" in SRC
-    assert "_tile_key_for(p, g) for p, g in zip(managed_bulk_conf['PARTNER_NAME'], managed_bulk_conf['_GROUP'])" in SRC
+    assert "_group_view[_group_view['_GROUP'] == group_tag]" in SRC
+    assert "_tile_key_for(p, g) for p, g in zip(_group_view['PARTNER_NAME'], _group_view['_GROUP'])" in SRC
 
 
 def test_heatmap_tiles_match_scorecard_rosters(email_ns):
@@ -156,7 +159,8 @@ def test_heatmap_tiles_match_scorecard_rosters(email_ns):
 
 def test_unique_partner_count_matches_alias_merged_roster(email_ns):
     aliases = {'Ernst & Young (EY)': 'EY', 'IBM Consulting': 'IBM', 'Kipi.ai': 'kipi.ai',
-               'LTI Mindtree': 'LTM', 'ZEAL CORPORATION': 'ZEAL Corporation'}
+               'LTI Mindtree': 'LTM', 'ZEAL CORPORATION': 'ZEAL Corporation',
+               'Triggo.ai': 'TRIGGO.AI TECNOLOGIA E INTELIGENCIA DE DADOS LTDA.'}
     merged = {aliases.get(p, p) for p in email_ns["MANAGED_PARTNERS"]}
     assert email_ns["_UNIQUE_MANAGED"] == len(merged)
 

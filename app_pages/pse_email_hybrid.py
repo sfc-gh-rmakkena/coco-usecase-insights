@@ -36,6 +36,7 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 from reportlab.graphics.shapes import Drawing, Rect
 
+from utils import GSI_NOAM_TARGET, APJ_EMEA_TARGET, LATAM_RSI_TARGET
 from utils import (
     APJ_RSI_REGION_MAP, EMEA_RSI_REGION_MAP, LATAM_RSI_REGION_MAP,
     PARTNER_RENAME_MAP, apply_coco_final,
@@ -123,22 +124,22 @@ def _peer_group_for(partner: str):
     for the group `partner` belongs to. region_filter_kind is one of
     'none' (global), 'theater' (NoAM RSIs), 'region' (APJ/EMEA/LATAM RSIs)."""
     if partner in GSI_NAMES:
-        return ([p for p in GSI_LIST if p != partner], "none", None, 90, "GSIs")
+        return ([p for p in GSI_LIST if p != partner], "none", None, GSI_NOAM_TARGET, "GSIs")
     if partner in NOAM_RSI_NAMES:
-        return ([p for p in NOAM_RSI_NAMES if p != partner], "theater", NOAM_THEATERS, 90, "NoAM RSIs")
+        return ([p for p in NOAM_RSI_NAMES if p != partner], "theater", NOAM_THEATERS, GSI_NOAM_TARGET, "NoAM RSIs")
     if partner in APJ_RSI_REGION_MAP:
         label, region = APJ_RSI_REGION_MAP[partner]
         # Skip aliases of the same partner (same display label), e.g. both Altis names
         peers = [p for p, v in APJ_RSI_REGION_MAP.items() if v[0] != label and v[1] == region]
-        return (peers, "region", region, 50, f"{region} RSIs")
+        return (peers, "region", region, APJ_EMEA_TARGET, f"{region} RSIs")
     if partner in EMEA_RSI_REGION_MAP:
         label, region = EMEA_RSI_REGION_MAP[partner]
         peers = [p for p, v in EMEA_RSI_REGION_MAP.items() if v[0] != label and v[1] == region]
-        return (peers, "region", region, 50, f"{region} RSIs")
+        return (peers, "region", region, APJ_EMEA_TARGET, f"{region} RSIs")
     if partner in LATAM_RSI_REGION_MAP:
         peers = [p for p in LATAM_RSI_REGION_MAP if p != partner]
-        return (peers, "region", "LATAM", 50, "LATAM RSIs")
-    return ([], "none", None, 90, "partners")
+        return (peers, "region", "LATAM", LATAM_RSI_TARGET, "LATAM RSIs")
+    return ([], "none", None, GSI_NOAM_TARGET, "partners")
 
 
 def _compute_peer_benchmark(conn, partner, q_start, q_end, coco_pct, bands):

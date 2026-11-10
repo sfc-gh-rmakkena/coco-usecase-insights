@@ -52,7 +52,7 @@ GROUP_CANONICAL = {
     for group, raw in GROUP_RAW_NAMES.items()
 }
 
-GROUP_TARGETS = {"GSI": 90, "NOAM": 90, "APJ": 50, "EMEA": 50, "LATAM": 50}
+GROUP_TARGETS = {"GSI": 90, "NOAM": 90, "APJ": 75, "EMEA": 75, "LATAM": 50}
 DEFAULT_TARGET = 50
 
 # LATAM RSIs are GEO-RESTRICTED: only use cases in REGION_NAME = 'LATAM' count

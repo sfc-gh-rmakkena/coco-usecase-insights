@@ -17,7 +17,8 @@ from utils.queries import SNAPSHOT_TABLE_Q4
 from utils import add_managed_group
 from utils import APJ_RSI_REGION_MAP, EMEA_RSI_REGION_MAP, LATAM_RSI_REGION_MAP
 from utils import managed_group, GROUP_GSI, GROUP_NOAM, GROUP_APJ, GROUP_EMEA, GROUP_LATAM
-from utils import GSI_NOAM_TARGET, REGIONAL_RSI_TARGET
+from utils import in_group, LATAM_SUBREGION
+from utils import GSI_NOAM_TARGET, APJ_EMEA_TARGET, LATAM_RSI_TARGET, TARGETS_TEXT
 from utils import PARTNER_ALIASES as _PA_EARLY
 
 # Combined set of all managed partner names (GSI + NOAM RSI + APJ RSI + EMEA RSI)
@@ -366,7 +367,8 @@ def _build_managed_bc(bc):
         _emea = bc[bc['PARTNER_NAME'].isin(_pf(_EMEA_RSI_PARTNER_NAMES))].copy()
         _emea['_c'] = _emea['PARTNER_NAME'].map({k: v[1] for k, v in EMEA_RSI_REGION_MAP.items()})
         parts.append(_emea[_emea['REGION_NAME'] == _emea['_c']].drop(columns=['_c']))
-        _latam = bc[bc['PARTNER_NAME'].isin(_pf(_LATAM_RSI_PARTNER_NAMES))].copy()
+        # GSIs that are also LATAM RSIs are already in the GSI slice: keep each row once.
+        _latam = bc[bc['PARTNER_NAME'].isin(_pf(_LATAM_RSI_PARTNER_NAMES - _GSI_PARTNER_NAMES))].copy()
         parts.append(_latam[_latam['REGION_NAME'] == 'LATAM'])
     return pd.concat([p for p in parts if len(p) > 0], ignore_index=True) if parts else pd.DataFrame()
 
@@ -717,7 +719,7 @@ def _group_stats(bc, names, group=None):
         return 0, 0, 0.0
     _g = bc[bc['PARTNER_NAME'].isin(names)]
     if group and len(_g) > 0 and {'THEATER_NAME', 'REGION_NAME'} <= set(_g.columns):
-        _g = _g[[managed_group(p, t, r) == group for p, t, r in
+        _g = _g[[in_group(p, t, r, group) for p, t, r in
                  zip(_g['PARTNER_NAME'], _g['THEATER_NAME'], _g['REGION_NAME'])]]
     total = len(_g)
     coco  = int(_g['IS_COCO_FINAL'].sum())
@@ -774,9 +776,9 @@ _latam_total, _latam_coco, _latam_pct = _group_stats(_gauge_bc, _LATAM_RSI_PARTN
 _gc1, _gc2, _gc3, _gc4, _gc5 = st.columns(5)
 _gc1.plotly_chart(_make_gauge("GSI",      _gsi_pct,  _gsi_total,  _gsi_coco,  GSI_NOAM_TARGET), use_container_width=True)
 _gc2.plotly_chart(_make_gauge("NOAM RSI", _noam_pct, _noam_total, _noam_coco, GSI_NOAM_TARGET), use_container_width=True)
-_gc3.plotly_chart(_make_gauge("APJ RSI",  _apj_pct,  _apj_total,  _apj_coco,  50), use_container_width=True)
-_gc4.plotly_chart(_make_gauge("EMEA RSI", _emea_pct, _emea_total, _emea_coco, 50), use_container_width=True)
-_gc5.plotly_chart(_make_gauge("LATAM RSI", _latam_pct, _latam_total, _latam_coco, 50), use_container_width=True)
+_gc3.plotly_chart(_make_gauge("APJ RSI",  _apj_pct,  _apj_total,  _apj_coco,  APJ_EMEA_TARGET), use_container_width=True)
+_gc4.plotly_chart(_make_gauge("EMEA RSI", _emea_pct, _emea_total, _emea_coco, APJ_EMEA_TARGET), use_container_width=True)
+_gc5.plotly_chart(_make_gauge("LATAM RSI", _latam_pct, _latam_total, _latam_coco, LATAM_RSI_TARGET), use_container_width=True)
 
 st.divider()
 
@@ -1147,7 +1149,7 @@ def _build_token_usage(bc: pd.DataFrame, partner_map: dict, group=None) -> pd.Da
     _bc = bc[bc['IS_COCO_FINAL'] & bc['PARTNER_NAME'].isin(partner_map.keys())].copy()
     # Dual-group partners (Slalom, Infosys): keep only this group's rows.
     if group and len(_bc) > 0 and {'THEATER_NAME', 'REGION_NAME'} <= set(_bc.columns):
-        _bc = _bc[[managed_group(p, t, r) == group for p, t, r in
+        _bc = _bc[[in_group(p, t, r, group) for p, t, r in
                    zip(_bc['PARTNER_NAME'], _bc['THEATER_NAME'], _bc['REGION_NAME'])]]
     if len(_bc) == 0:
         return pd.DataFrame(columns=['PARTNER_LABEL', 'Tokens Consumed', 'Last 7d Tokens', '7D Tokens WoW%'])
@@ -1264,7 +1266,7 @@ def _render_partner_section(base_df, bc, bc_partner_map, skeleton_df, target_pct
         # Multi-group partners (Slalom, Aimpoint, Infosys): count only the rows this
         # group owns, matching the gauge and the section's SQL totals.
         if group and len(_bc) > 0 and {'THEATER_NAME', 'REGION_NAME'} <= set(_bc.columns):
-            _bc = _bc[[managed_group(p, t, r) == group for p, t, r in
+            _bc = _bc[[in_group(p, t, r, group) for p, t, r in
                        zip(_bc['PARTNER_NAME'], _bc['THEATER_NAME'], _bc['REGION_NAME'])]]
         _bc['_s3']  = _bc['IS_COCO_FINAL'] & (_bc['USE_CASE_STAGE'] == '3 - Technical / Business Validation')
         _bc['_s4']  = _bc['IS_COCO_FINAL'] & (_bc['USE_CASE_STAGE'] == '4 - Use Case Won / Migration Plan')
@@ -1420,8 +1422,8 @@ with st.expander(f":material/location_on: NOAM RSI CoCo Adoption ({GSI_NOAM_TARG
                             target_pct=GSI_NOAM_TARGET, section_label="NOAM RSI", detail_label="Partner detail",
                             group=GROUP_NOAM)
 
-# ── APJ RSI Adoption (50% CoCo Target) ───────────────────────────────────────
-with st.expander(":material/language: APJ RSI CoCo Adoption (50% Target)", expanded=True):
+# ── APJ RSI Adoption (APJ_EMEA_TARGET CoCo Target) ───────────────────────────────────────
+with st.expander(f":material/language: APJ RSI CoCo Adoption ({APJ_EMEA_TARGET}% Target)", expanded=True):
     _apj_by_region = {}
     for _lbl, _reg in dict.fromkeys(APJ_RSI_REGION_MAP.values()):
         _apj_by_region.setdefault(_reg, []).append(_lbl)
@@ -1512,7 +1514,7 @@ with st.expander(":material/language: APJ RSI CoCo Adoption (50% Target)", expan
         _apj_df['COCO_ELIGIBLE_UCS'].replace(0, float('nan'))
     ).round(1).fillna(0)
 
-    APJ_TARGET = 50
+    APJ_TARGET = APJ_EMEA_TARGET
     _apj_df['Status'] = _apj_df['COCO_PCT'].apply(
         lambda p: '✅ On target' if p >= APJ_TARGET else (f'⚠️ {APJ_TARGET-p:.0f}% to go' if p > 0 else '— No UCs')
     )
@@ -1542,16 +1544,16 @@ with st.expander(":material/language: APJ RSI CoCo Adoption (50% Target)", expan
                 'PARTNER_LABEL': 'Partner', 'COUNTRY': 'Country',
                 'TOTAL_UCS': 'Total UCs', 'COCO_FINAL_UCS': 'CoCo UCs',
                 'NOTCOCO_UCS': '#notcoco',
-                'COCO_PCT': 'CoCo % vs 50% Target',
+                'COCO_PCT': f'CoCo % vs {APJ_EMEA_TARGET}% Target',
                 'WOW_COCO_UCS': 'WoW Δ UCs', 'WOW_COCO_PCT': 'WoW Δ%',
                 'TOTAL_EACV': 'Total EACV ($)', 'COCO_EACV': 'CoCo EACV ($)',
             }),
-            scope_col='Country', pct_col='CoCo % vs 50% Target',
+            scope_col='Country', pct_col=f'CoCo % vs {APJ_EMEA_TARGET}% Target',
         )
         st.dataframe(
             _apj_display,
             column_config={
-                'CoCo % vs 50% Target': st.column_config.ProgressColumn(min_value=0, max_value=100, format="%.1f%%"),
+                f'CoCo % vs {APJ_EMEA_TARGET}% Target': st.column_config.ProgressColumn(min_value=0, max_value=100, format="%.1f%%"),
                 'Total UCs':       st.column_config.NumberColumn(format="%d"),
                 'CoCo UCs':        st.column_config.NumberColumn(format="%d"),
                 '#notcoco':        st.column_config.NumberColumn(format="%d", help="Use cases tagged #notcoco by a PSE — excluded from both the CoCo UC count and the CoCo % denominator"),
@@ -1567,7 +1569,7 @@ with st.expander(":material/language: APJ RSI CoCo Adoption (50% Target)", expan
         )
 
 # ─── LATAM RSI Section ───────────────────────────────────────────────────────
-with st.expander("🌎 LATAM RSI CoCo Adoption (50% Target)", expanded=True):
+with st.expander(f"🌎 LATAM RSI CoCo Adoption ({LATAM_RSI_TARGET}% Target)", expanded=True):
     _latam_base = get_latam_rsi_adoption(conn, start_date, end_date)
     if _selected_partner_names and 'PARTNER_LABEL' in _latam_base.columns:
         _latam_canonical_sel = {v[0] for k, v in LATAM_RSI_REGION_MAP.items() if k in _selected_partner_names}
@@ -1576,12 +1578,11 @@ with st.expander("🌎 LATAM RSI CoCo Adoption (50% Target)", expanded=True):
         else:
             _latam_base = _latam_base.iloc[0:0]
 
+    # Skeleton from LATAM_RSI_REGION_MAP; COUNTRY shows the sub-region label (DT_OKR has
+    # no country field, so counts are all LATAM-region use cases per partner).
     _LATAM_SKELETON = pd.DataFrame([
-        {'PARTNER_LABEL': 'EgosBi',   'COUNTRY': 'LATAM (Mexico)'},
-        {'PARTNER_LABEL': 'IVCISA',   'COUNTRY': 'LATAM (CALA)'},
-        {'PARTNER_LABEL': 'Keyrus',   'COUNTRY': 'LATAM (Brazil)'},
-        {'PARTNER_LABEL': 'Seidor',   'COUNTRY': 'LATAM (CALA)'},
-        {'PARTNER_LABEL': 'Viewnear', 'COUNTRY': 'LATAM (Mexico)'},
+        {'PARTNER_LABEL': _lbl, 'COUNTRY': LATAM_SUBREGION.get(_lbl, 'LATAM')}
+        for _lbl in dict.fromkeys(v[0] for v in LATAM_RSI_REGION_MAP.values())
     ])
 
     if len(_latam_base) > 0:
@@ -1651,7 +1652,7 @@ with st.expander("🌎 LATAM RSI CoCo Adoption (50% Target)", expanded=True):
         _latam_df['COCO_ELIGIBLE_UCS'].replace(0, float('nan'))
     ).round(1).fillna(0)
 
-    LATAM_TARGET = 50
+    LATAM_TARGET = LATAM_RSI_TARGET
     _latam_df['Status'] = _latam_df['COCO_PCT'].apply(
         lambda p: '✅ On target' if p >= LATAM_TARGET else (f'⚠️ {LATAM_TARGET-p:.0f}% to go' if p > 0 else '— No UCs')
     )
@@ -1666,6 +1667,22 @@ with st.expander("🌎 LATAM RSI CoCo Adoption (50% Target)", expanded=True):
         s7=int(_latam_df['S7_COCO'].sum()) if 'S7_COCO' in _latam_df.columns else 0,
     )
 
+    # Sub-region subtotals (Mexico & CALA North / Colombia & CALA South / Brazil)
+    _latam_sub = _latam_df.groupby('COUNTRY', sort=False).agg(
+        Partners=('PARTNER_LABEL', 'count'),
+        Total_UCs=('TOTAL_UCS', 'sum'), CoCo_UCs=('COCO_FINAL_UCS', 'sum'),
+        Eligible=('COCO_ELIGIBLE_UCS', 'sum'),
+    ).reset_index()
+    _latam_sub['CoCo %'] = (_latam_sub['CoCo_UCs'] * 100.0
+                            / _latam_sub['Eligible'].replace(0, float('nan'))).round(1).fillna(0)
+    st.dataframe(
+        _latam_sub.drop(columns=['Eligible']).rename(columns={
+            'COUNTRY': 'Sub-region', 'Total_UCs': 'Total UCs', 'CoCo_UCs': 'CoCo UCs'}),
+        column_config={'CoCo %': st.column_config.ProgressColumn(
+            f'CoCo % vs {LATAM_RSI_TARGET}% Target', min_value=0, max_value=100, format="%.1f%%")},
+        hide_index=True, width='stretch',
+    )
+
     with st.expander(":material/table_chart: Partner detail", expanded=False):
         _latam_display = _latam_df[['PARTNER_LABEL','COUNTRY','TOTAL_UCS','COCO_FINAL_UCS','NOTCOCO_UCS','COCO_PCT','TOTAL_EACV','COCO_EACV','Status']].copy()
         _latam_display = _apply_snapshot_wow(_latam_display)
@@ -1678,16 +1695,16 @@ with st.expander("🌎 LATAM RSI CoCo Adoption (50% Target)", expanded=True):
                 'PARTNER_LABEL': 'Partner', 'COUNTRY': 'Country',
                 'TOTAL_UCS': 'Total UCs', 'COCO_FINAL_UCS': 'CoCo UCs',
                 'NOTCOCO_UCS': '#notcoco',
-                'COCO_PCT': 'CoCo % vs 50% Target',
+                'COCO_PCT': f'CoCo % vs {LATAM_RSI_TARGET}% Target',
                 'WOW_COCO_UCS': 'WoW Δ UCs', 'WOW_COCO_PCT': 'WoW Δ%',
                 'TOTAL_EACV': 'Total EACV ($)', 'COCO_EACV': 'CoCo EACV ($)',
             }),
-            scope_col='Country', pct_col='CoCo % vs 50% Target',
+            scope_col='Country', pct_col=f'CoCo % vs {LATAM_RSI_TARGET}% Target',
         )
         st.dataframe(
             _latam_display,
             column_config={
-                'CoCo % vs 50% Target': st.column_config.ProgressColumn(min_value=0, max_value=100, format="%.1f%%"),
+                f'CoCo % vs {LATAM_RSI_TARGET}% Target': st.column_config.ProgressColumn(min_value=0, max_value=100, format="%.1f%%"),
                 'Total UCs':       st.column_config.NumberColumn(format="%d"),
                 'CoCo UCs':        st.column_config.NumberColumn(format="%d"),
                 '#notcoco':        st.column_config.NumberColumn(format="%d", help="Use cases tagged #notcoco by a PSE — excluded from both the CoCo UC count and the CoCo % denominator"),
@@ -1704,8 +1721,8 @@ with st.expander("🌎 LATAM RSI CoCo Adoption (50% Target)", expanded=True):
 
 st.divider()
 
-# ── EMEA RSI Adoption (50% CoCo Target) ──────────────────────────────────────
-with st.expander(":material/globe_uk: EMEA RSI CoCo Adoption (50% Target)", expanded=True):
+# ── EMEA RSI Adoption (APJ_EMEA_TARGET CoCo Target) ──────────────────────────────────────
+with st.expander(f":material/globe_uk: EMEA RSI CoCo Adoption ({APJ_EMEA_TARGET}% Target)", expanded=True):
     _emea_by_region = {}
     for _lbl, _reg in dict.fromkeys(EMEA_RSI_REGION_MAP.values()):
         _emea_by_region.setdefault(_reg, []).append(_lbl)
@@ -1794,7 +1811,7 @@ with st.expander(":material/globe_uk: EMEA RSI CoCo Adoption (50% Target)", expa
         _emea_df['COCO_ELIGIBLE_UCS'].replace(0, float('nan'))
     ).round(1).fillna(0)
 
-    EMEA_TARGET = 50
+    EMEA_TARGET = APJ_EMEA_TARGET
     _emea_df['Status'] = _emea_df['COCO_PCT'].apply(
         lambda p: '✅ On target' if p >= EMEA_TARGET else (f'⚠️ {EMEA_TARGET-p:.0f}% to go' if p > 0 else '— No UCs')
     )
@@ -1821,16 +1838,16 @@ with st.expander(":material/globe_uk: EMEA RSI CoCo Adoption (50% Target)", expa
                 'PARTNER_LABEL': 'Partner', 'COUNTRY': 'Country',
                 'TOTAL_UCS': 'Total UCs', 'COCO_FINAL_UCS': 'CoCo UCs',
                 'NOTCOCO_UCS': '#notcoco',
-                'COCO_PCT': 'CoCo % vs 50% Target',
+                'COCO_PCT': f'CoCo % vs {APJ_EMEA_TARGET}% Target',
                 'WOW_COCO_UCS': 'WoW Δ UCs', 'WOW_COCO_PCT': 'WoW Δ%',
                 'TOTAL_EACV': 'Total EACV ($)', 'COCO_EACV': 'CoCo EACV ($)',
             }),
-            scope_col='Country', pct_col='CoCo % vs 50% Target',
+            scope_col='Country', pct_col=f'CoCo % vs {APJ_EMEA_TARGET}% Target',
         )
         st.dataframe(
             _emea_display,
             column_config={
-                'CoCo % vs 50% Target': st.column_config.ProgressColumn(min_value=0, max_value=100, format="%.1f%%"),
+                f'CoCo % vs {APJ_EMEA_TARGET}% Target': st.column_config.ProgressColumn(min_value=0, max_value=100, format="%.1f%%"),
                 'Total UCs':       st.column_config.NumberColumn(format="%d"),
                 'CoCo UCs':        st.column_config.NumberColumn(format="%d"),
                 '#notcoco':        st.column_config.NumberColumn(format="%d", help="Use cases tagged #notcoco by a PSE — excluded from both the CoCo UC count and the CoCo % denominator"),
@@ -1850,7 +1867,7 @@ st.divider()
 # Inject context for Ask AI
 st.session_state.ask_ai_context = (
     f"Current page: Adoption Metrics (Overview). Region: {region}. Partner filter: {selected_partners or 'All'}.\n"
-    f"CoCo adoption: {coco_pct:.1f}% ({coco_count}/{int(s['TOTAL_USE_CASES'])} UCs). OKR target: GSI/NOAM {GSI_NOAM_TARGET}%, APJ/EMEA/LATAM {REGIONAL_RSI_TARGET}%."
+    f"CoCo adoption: {coco_pct:.1f}% ({coco_count}/{int(s['TOTAL_USE_CASES'])} UCs). OKR target: GSI/NOAM {GSI_NOAM_TARGET}%, APJ/EMEA {APJ_EMEA_TARGET}%, LATAM {LATAM_RSI_TARGET}%."
     + build_filter_context()
 )
 

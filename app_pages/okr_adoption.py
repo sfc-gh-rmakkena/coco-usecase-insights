@@ -20,7 +20,7 @@ except ImportError:
     NEW_COCO_WOW_HELP = "Newly created CoCo use cases week-over-week (unavailable on this runtime version)."
 from utils import APJ_RSI_REGION_MAP, EMEA_RSI_REGION_MAP, LATAM_RSI_REGION_MAP, PARTNER_ALIASES as _PA_OKR
 from utils import scope_rsi_rows
-from utils import GSI_NOAM_TARGET, REGIONAL_RSI_TARGET, group_target_for
+from utils import GSI_NOAM_TARGET, APJ_EMEA_TARGET, LATAM_RSI_TARGET, TARGETS_TEXT, group_target_for
 
 # Managed partner universe — same as Adoption Metrics default scope
 _GSI_OKR = {'Accenture','Capgemini Technologies LLC','Cognizant Technology Solutions US Corp',
@@ -49,12 +49,13 @@ st.title(":material/check_circle: OKR: CoCo Adoption per Partner")
 
 TARGET_PCT = GSI_NOAM_TARGET
 
-# Auto-set target based on region: EMEA/APJ/LATAM → 50%, all others (GSI/NOAM) → 90%
+# Auto-set target based on region: APJ/EMEA → 75%, LATAM → 50%, all others (GSI/NOAM) → 90%
 _apj_emea_regions = {'EMEA', 'APJ', 'Korea', 'Japan', 'ASEAN', 'ANZ', 'India',
-                     'CentralEMEA', 'SouthEMEA', 'NorthEMEA', 'UK', 'META', 'EMEACommercial',
-                     'LATAM'}
-target = REGIONAL_RSI_TARGET if region in _apj_emea_regions else TARGET_PCT
-_uniform_target = region in _apj_emea_regions
+                     'CentralEMEA', 'SouthEMEA', 'NorthEMEA', 'UK', 'META', 'EMEACommercial'}
+_latam_regions = {'LATAM'}
+target = (APJ_EMEA_TARGET if region in _apj_emea_regions
+          else LATAM_RSI_TARGET if region in _latam_regions else TARGET_PCT)
+_uniform_target = region in _apj_emea_regions or region in _latam_regions
 
 
 def _partner_target(name):
@@ -199,7 +200,8 @@ def _apply_managed_geo_filter(bc):
         _emea = bc[bc['PARTNER_NAME'].isin(set(EMEA_RSI_REGION_MAP.keys()))].copy()
         _emea['_c'] = _emea['PARTNER_NAME'].map({k: v[1] for k, v in EMEA_RSI_REGION_MAP.items()})
         parts.append(_emea[_emea['REGION_NAME'] == _emea['_c']].drop(columns=['_c']))
-        _latam = bc[bc['PARTNER_NAME'].isin(set(LATAM_RSI_REGION_MAP.keys()))].copy()
+        # GSIs that are also LATAM RSIs are already in the GSI slice: keep each row once.
+        _latam = bc[bc['PARTNER_NAME'].isin(set(LATAM_RSI_REGION_MAP.keys()) - _GSI_OKR)].copy()
         parts.append(_latam[_latam['REGION_NAME'] == 'LATAM'] if 'REGION_NAME' in _latam.columns else _latam)
     else:
         # No REGION_NAME: name-only scoping; partners also in GSI/NOAM are already counted.
@@ -399,7 +401,7 @@ _bot_partners = filtered[~filtered['MEETS_TARGET']].sort_values('COCO_PCT', asce
 _bot_str = "; ".join(f"{r.PARTNER_NAME} {r.COCO_PCT:.1f}%" for _, r in _bot_partners.iterrows())
 _st_ctx.session_state.ask_ai_context = (
     f"Current page: OKR CoCo Adoption. Region: {region}. Period: {start_date} to {end_date}.\n"
-    f"Partners tracked: {total_partners}. Meeting {_target_label} (GSI/NOAM {GSI_NOAM_TARGET}%, APJ/EMEA/LATAM {REGIONAL_RSI_TARGET}%): {int(meeting_target)}. Below target: {int(not_meeting)}.\n"
+    f"Partners tracked: {total_partners}. Meeting {_target_label} ({TARGETS_TEXT}): {int(meeting_target)}. Below target: {int(not_meeting)}.\n"
     f"Overall CoCo%: {overall_pct}% ({int(overall_coco)}/{int(overall_total)} UCs).\n"
     f"Top partners by CoCo%: {_top_str}.\n"
     f"Partners below target (closest first): {_bot_str}."
@@ -425,7 +427,7 @@ if wow_overall is not None and len(wow_overall) > 0:
         wow_coco_pct_delta = f"{float(row['WOW_COCO_PCT']):+.1f}% vs last week"
 
 conf_desc = 'High' if confidence_filter == ['High'] else 'High + Medium' if confidence_filter else 'All account-level'
-c4.metric("Overall CoCo %", f"{overall_pct}%", wow_coco_pct_delta if wow_coco_pct_delta else (f"Target: {target}%" if _uniform_target else f"Targets: GSI/NOAM {GSI_NOAM_TARGET}%, RSIs {REGIONAL_RSI_TARGET}%"),
+c4.metric("Overall CoCo %", f"{overall_pct}%", wow_coco_pct_delta if wow_coco_pct_delta else (f"Target: {target}%" if _uniform_target else f"Targets: {TARGETS_TEXT}"),
     help=f"SE/PSE/Flag always + Account Level at {conf_desc} confidence (full scoring)")
 c5.metric("CoCo Use Cases", f"{int(overall_coco)}/{int(overall_total)}", wow_coco_ucs_delta,
     help=f"Total IS_COCO_FINAL use cases vs total tracked")
@@ -1075,7 +1077,7 @@ if selected_partner:
 st.divider()
 
 st.divider()
-st.caption(f"OKR Target: {target if _uniform_target else f'GSI/NOAM {GSI_NOAM_TARGET}, APJ/EMEA/LATAM {REGIONAL_RSI_TARGET}'}% of use cases in Stages 3-7 should have CoCo attached | {start_date} to {end_date} | Min UCs: {min_use_cases}")
+st.caption(f"OKR Target: {f'{target}%' if _uniform_target else TARGETS_TEXT} of use cases in Stages 3-7 should have CoCo attached | {start_date} to {end_date} | Min UCs: {min_use_cases}")
 st.caption("CoCo detection: SE Comments (coco/cortex code) OR Partner Comments (#coco) OR Feature Flag (AI - Cortex Code) OR CoCo Account Level Usage")
 
 st.divider()

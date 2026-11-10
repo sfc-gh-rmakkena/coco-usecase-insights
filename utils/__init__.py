@@ -147,11 +147,16 @@ PARTNER_ALIASES = {
         'Vivanti USA LLC',
     ],
     '--- LATAM RSIs ---': [
-        'Viewnear - Partner',                                   # Mexico
-        'EGOS BI SA DE CV',                                     # Mexico
-        'IVCISA',                                               # CALA
-        'SEIDOR ANALYTICS NORTH AMERICA CORP',                  # CALA
-        'Keyrus Brasil Serviços de Informatica Ltda.',          # Brazil
+        # Partner names as stored in DT_OKR_USE_CASES; sub-region per LATAM_SUBREGION.
+        # Names with no use cases yet (Stratify, BeData/Objective, Jump Label, Dataside,
+        # DataSoluTec) are listed as given and show 0 until data appears under them.
+        'Viewnear - Partner', 'EGOS BI SA DE CV', 'SEIDOR ANALYTICS NORTH AMERICA CORP',
+        'Datateam Consulting SA de CV', 'IVCISA',
+        'Triario International Group LLC', 'All For Analytics', 'Stratify',
+        'Deloitte Consulting', 'Accenture',
+        'Keyrus Brasil Serviços de Informatica Ltda.',
+        'TRIGGO.AI TECNOLOGIA E INTELIGENCIA DE DADOS LTDA.', 'Triggo.ai',
+        'BeData/Objective', 'Jump Label', 'IBLUE CONSULTING', 'Dataside', 'DataSoluTec',
     ],
 }
 
@@ -193,14 +198,46 @@ APJ_RSI_REGION_MAP = {
     'Classmethod':                              ('Classmethod',       'Japan'),
 }
 
-# Per-partner geo restriction for LATAM RSIs (REGION_NAME in DT_OKR)
+# Per-partner geo restriction for LATAM RSIs (REGION_NAME in DT_OKR). DT_OKR has no
+# country field, so every LATAM use case is REGION_NAME='LATAM'; the sub-region is a
+# label (LATAM_SUBREGION). Deloitte and Accenture are GSIs too: their GSI totals stay
+# global and their LATAM-region use cases also count in LATAM RSI (see in_group()).
 LATAM_RSI_REGION_MAP = {
-    'Viewnear - Partner':                               ('Viewnear',  'LATAM'),
-    'EGOS BI SA DE CV':                                 ('EgosBi',    'LATAM'),
-    'IVCISA':                                           ('IVCISA',    'LATAM'),
-    'SEIDOR ANALYTICS NORTH AMERICA CORP':              ('Seidor',    'LATAM'),
-    'Keyrus Brasil Serviços de Informatica Ltda.':      ('Keyrus',    'LATAM'),
+    'Viewnear - Partner':                                   ('Viewnear',          'LATAM'),
+    'EGOS BI SA DE CV':                                     ('EgosBI',            'LATAM'),
+    'SEIDOR ANALYTICS NORTH AMERICA CORP':                  ('Seidor',            'LATAM'),
+    'Datateam Consulting SA de CV':                         ('Datateam',          'LATAM'),
+    'IVCISA':                                               ('IVCISA',            'LATAM'),
+    'Triario International Group LLC':                      ('Triario',           'LATAM'),
+    'All For Analytics':                                    ('All For Analytics', 'LATAM'),
+    'Stratify':                                             ('Stratify',          'LATAM'),
+    'Deloitte Consulting':                                  ('Deloitte (LATAM)',  'LATAM'),
+    'Accenture':                                            ('Accenture (LATAM)', 'LATAM'),
+    'Keyrus Brasil Serviços de Informatica Ltda.':          ('Keyrus',            'LATAM'),
+    'TRIGGO.AI TECNOLOGIA E INTELIGENCIA DE DADOS LTDA.':   ('Triggo.ai',         'LATAM'),
+    'Triggo.ai':                                            ('Triggo.ai',         'LATAM'),
+    'BeData/Objective':                                     ('BeData/Objective',  'LATAM'),
+    'Jump Label':                                           ('Jump Label',        'LATAM'),
+    'IBLUE CONSULTING':                                     ('iBlue Consulting',  'LATAM'),
+    'Dataside':                                             ('Dataside',          'LATAM'),
+    'DataSoluTec':                                          ('DataSoluTec',       'LATAM'),
 }
+
+# GSIs that are also LATAM RSIs: their LATAM-region rows count in both groups.
+LATAM_GSI_OVERLAP = set(LATAM_RSI_REGION_MAP) & set(PARTNER_ALIASES['--- GSIs ---'])
+
+LATAM_SUBREGION = {  # display label -> sub-region
+    'Viewnear': 'Mexico & CALA North', 'EgosBI': 'Mexico & CALA North',
+    'Seidor': 'Mexico & CALA North', 'Datateam': 'Mexico & CALA North',
+    'IVCISA': 'Mexico & CALA North',
+    'Triario': 'Colombia & CALA South', 'All For Analytics': 'Colombia & CALA South',
+    'Stratify': 'Colombia & CALA South', 'Deloitte (LATAM)': 'Colombia & CALA South',
+    'Accenture (LATAM)': 'Colombia & CALA South',
+    'Keyrus': 'Brazil', 'Triggo.ai': 'Brazil', 'BeData/Objective': 'Brazil',
+    'Jump Label': 'Brazil', 'iBlue Consulting': 'Brazil', 'Dataside': 'Brazil',
+    'DataSoluTec': 'Brazil',
+}
+
 
 # Per-partner country restriction for EMEA RSIs (REGION_NAME in DT_OKR)
 # Some partners are in several groups (Aimpoint, Slalom: NOAM; Billigence, Vivanti,
@@ -239,13 +276,18 @@ OKR_Q_START = '2026-11-01'
 OKR_Q_END = '2027-01-31'
 OKR_Q_MONTHS = 'Nov 2026 – Jan 2027'
 
-# Q4 FY27 OKR CoCo adoption targets (%): GSI and NOAM RSI 90, regional RSIs 50.
+# Q4 FY27 OKR CoCo adoption targets (%): GSI and NOAM RSI 90, APJ and EMEA RSI 75,
+# LATAM RSI 50. Every page reads these, so a target change is made here only.
 GSI_NOAM_TARGET = 90
-REGIONAL_RSI_TARGET = 50
+APJ_EMEA_TARGET = 75
+LATAM_RSI_TARGET = 50
 GROUP_TARGET_PCT = {
     GROUP_GSI: GSI_NOAM_TARGET, GROUP_NOAM: GSI_NOAM_TARGET,
-    GROUP_APJ: REGIONAL_RSI_TARGET, GROUP_EMEA: REGIONAL_RSI_TARGET, GROUP_LATAM: REGIONAL_RSI_TARGET,
+    GROUP_APJ: APJ_EMEA_TARGET, GROUP_EMEA: APJ_EMEA_TARGET, GROUP_LATAM: LATAM_RSI_TARGET,
 }
+# One-line description of all targets, for captions and AI prompts.
+TARGETS_TEXT = (f"GSI/NOAM {GSI_NOAM_TARGET}%, APJ/EMEA {APJ_EMEA_TARGET}%, "
+                f"LATAM {LATAM_RSI_TARGET}%")
 
 
 def managed_group(partner, theater, region):
@@ -265,6 +307,20 @@ def managed_group(partner, theater, region):
         if partner in region_map and region == region_map[partner][1]:
             return group
     return None
+
+
+def in_group(partner, theater, region, group):
+    """Whether a use-case row counts toward `group`'s own figures.
+
+    Same as managed_group(...) == group, plus one overlap: a GSI that is also a LATAM
+    RSI (Deloitte, Accenture) has its LATAM-region rows counted in LATAM RSI too,
+    while GSI totals stay global. Use managed_group() for anything summed across
+    groups (headline totals), so those rows are still counted once.
+    """
+    if managed_group(partner, theater, region) == group:
+        return True
+    return (group == GROUP_LATAM and partner in LATAM_RSI_REGION_MAP
+            and region == LATAM_RSI_REGION_MAP[partner][1])
 
 
 def add_managed_group(df, partner_col='PARTNER_NAME', theater_col='THEATER_NAME',
@@ -320,7 +376,7 @@ def scope_rsi_rows(df, partner_col='PARTNER_NAME', theater_col='THEATER_NAME',
     def keep(partner, theater, region):
         groups = partner_groups(partner)
         regional = [g for g in groups if g in (GROUP_APJ, GROUP_EMEA, GROUP_LATAM)]
-        if not regional:
+        if not regional or GROUP_GSI in groups:   # GSIs (e.g. Deloitte) stay global
             return True
         if managed_group(partner, theater, region) in regional:
             return True
