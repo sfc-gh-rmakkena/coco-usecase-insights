@@ -129,7 +129,7 @@ KEY CONCEPTS:
     S4 (0–15): Relevant skill volume in the period (more than 5 → 15, 1–5 → 5, 0 → 0)
     S1/S2/S4 are scored for every workload tagged on the use case; WORKLOAD_CATEGORY is the highest-scoring one.
 
-- COCO_PCT = COCO_UCS / TOTAL_UCS * 100. OKR target per partner = 90% for GSI/NOAM RSI, 50% for APJ/EMEA/LATAM RSI.
+- COCO_PCT = COCO_UCS / TOTAL_UCS * 100. OKR target per partner = 90% for GSI/NOAM RSI, 75% for APJ/EMEA RSI, 50% for LATAM RSI.
 - GSIs (global scope): Accenture, Capgemini, Cognizant, Deloitte, EY, IBM
 - RSIs (NoAM scope): remaining 14 partners
 - Current period: FY27 Q3 (Aug 1 – Oct 31, 2026). FY27 Q2 = May 1 – Jul 31, 2026. FY27 Q1 = Feb 1 – Apr 30, 2026.

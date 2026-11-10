@@ -24,7 +24,7 @@ OKR = (ROOT / "app_pages" / "okr_adoption.py").read_text()
 
 def test_section_card_filters_by_group():
     fn = OVERVIEW[OVERVIEW.index("def _render_partner_section"):][:6000]
-    assert "managed_group(p, t, r) == group" in fn
+    assert "in_group(p, t, r, group)" in fn
 
 
 def test_gsi_and_noam_sections_pass_their_group():
@@ -53,9 +53,9 @@ def test_group_target_for():
     assert group_target_for('Accenture') == 90
     assert group_target_for('phData, Inc.') == 90
     assert group_target_for('Slalom, LLC.') == 90          # first group: NOAM
-    assert group_target_for('Billigence APAC') == 50        # APJ and EMEA
-    assert group_target_for('Devoteam') == 50
-    assert group_target_for('NTT DATA Group Corporation') == 50
+    assert group_target_for('Billigence APAC') == 75        # APJ and EMEA
+    assert group_target_for('Devoteam') == 75
+    assert group_target_for('NTT DATA Group Corporation') == 75
     assert group_target_for('Viewnear - Partner') == 50
     assert group_target_for('Not A Partner') is None
 
