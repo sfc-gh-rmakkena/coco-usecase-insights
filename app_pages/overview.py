@@ -836,11 +836,11 @@ def _build_partner_region_from_bulk(bc):
     """Derive per-region partner CoCo metrics from bulk_conf (IS_COCO_FINAL). Includes
     transition-based NEW_COCO_WK / NEW_COCO_DELTA columns from UC_COCO_STATUS_WEEKLY."""
     _bc = bc.copy()
-    # LATAM RSI partners must be bucketed as 'LATAM' regardless of their THEATER_NAME
-    # (e.g. SEIDOR ANALYTICS has a NoAM theater but is LATAM-scoped)
-    _latam_partner_set = set(LATAM_RSI_REGION_MAP.keys())
+    # LATAM rows are bucketed by REGION_NAME (LATAM sits under a NoAM theater), the
+    # same rule as the LATAM gauge. Bucketing by partner name would move every
+    # Deloitte/Accenture use case worldwide into LATAM, since both are on the LATAM list.
     _bc['REGION'] = _bc.apply(
-        lambda r: 'LATAM' if r['PARTNER_NAME'] in _latam_partner_set
+        lambda r: 'LATAM' if r.get('REGION_NAME') == 'LATAM'
         else ('NoAM' if r['THEATER_NAME'] in _NOAM_THEATERS
               else ('EMEA' if r['THEATER_NAME'] == 'EMEA'
                     else ('APJ' if r['THEATER_NAME'] == 'APJ' else 'Other'))),
