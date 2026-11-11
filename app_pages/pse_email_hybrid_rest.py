@@ -59,7 +59,6 @@ from utils.queries import (
     get_okr_coco_adoption, get_usecase_confidence_scores, get_bulk_confidence_scores,
 )
 from utils.cortex_rest_helpers import cortex_complete_rest as cortex_complete
-from utils.config import get_env
 from utils import judge_cache
 from utils.report import copy_rich_text_button
 from utils.coco_skill_map_v2 import (
@@ -2186,66 +2185,62 @@ else:
 
         action_plan = _build_action_plan(regional_breakdown, gap_rows_by_region, selected_partner)
 
-        # DEV only: hide already-deployed use cases from the report tables and
-        # append per-use-case workshop plans. Outside DEV, workshops stays None
-        # and the builders receive the original gap_rows_by_region unchanged.
-        workshops = None
-        display_rows_by_region = gap_rows_by_region
-        if get_env() == "dev":
-            from utils.workshop import filter_not_deployed, generate_workshops
-            from utils.cortex_rest_helpers import cortex_complete_rest_stream
-            display_rows_by_region = filter_not_deployed(gap_rows_by_region)
-            ws_rows = [r for rows in display_rows_by_region.values() for r in rows]
-            # Same background-thread + polling pattern as _run_gap_rows above,
-            # so the live call log keeps updating during workshop generation.
-            _ws_result = {}
-            # Account-context reads run as the viewer (caller's rights); cache,
-            # audit and LLM calls stay on the owner connection.
-            _ws_data_conn = st.session_state.get("caller_conn") or conn
-            _ws_diagnostics = []
-            if st.session_state.get("caller_conn") is None and st.session_state.get("caller_conn_error"):
-                st.caption("Caller's-rights connection unavailable; account context is read with the app's role.")
-            def _run_workshops():
-                try:
-                    _ws_result["workshops"] = generate_workshops(
-                        # Session 2 plans are long (~12K tokens): stream with retries.
-                        conn, ws_rows, selected_partner, cortex_complete_rest_stream,
-                        call_log=call_log, log_wrap=_logged_rest_call,
-                        data_conn=_ws_data_conn, diagnostics=_ws_diagnostics,
-                    )
-                except Exception as e:
-                    _ws_result["error"] = e
-            st.caption(f"Preparing workshop plans for {len(ws_rows)} use cases…")
-            _ws_thread = threading.Thread(target=_run_workshops, daemon=True)
-            add_script_run_ctx(_ws_thread, get_script_run_ctx())
-            _ws_thread.start()
-            while _ws_thread.is_alive():
-                _render_call_log(call_log_ph, call_log, done=False)
-                time.sleep(0.4)
-            _ws_thread.join()
-            _render_call_log(call_log_ph, call_log, done=True)
-            if "error" in _ws_result or _ws_result.get("workshops") is None:
-                st.warning(f"Workshop plans unavailable this run: {_ws_result.get('error', 'no result')}")
-                workshops = []
-            else:
-                workshops = _ws_result["workshops"]
-            # Tag each plan with its report region and order NoAM, EMEA, APJ
-            # (others last); within a region generation order is kept.
-            _ws_region = {r.get("uc_id"): reg for reg, rows in display_rows_by_region.items() for r in rows}
-            _ws_order = {"NoAM": 0, "EMEA": 1, "APJ": 2}
-            for _w in workshops:
-                if isinstance(_w, dict):
-                    _w["region"] = _ws_region.get(_w.get("uc_id"), "")
-            workshops = sorted(workshops, key=lambda w: _ws_order.get(
-                w.get("region", "") if isinstance(w, dict) else "", 3))
-            _ws_degraded = [d for d in _ws_diagnostics if d.startswith("degraded: ")]
-            if any(d.split(":")[0] in ("listed", "a360", "context") for d in _ws_diagnostics):
-                st.caption("Some account context was unavailable for your role; "
-                           "workshop plans used the use-case summary.")
-            if _ws_degraded:
-                _n, _m = _ws_degraded[-1][len("degraded: "):].split("/")
-                if int(_n):
-                    st.caption(f"Workshop plans: {_n} of {_m} used fallback content")
+        # Hide already-deployed use cases from the report tables and append
+        # per-use-case workshop plans (DEV and PROD).
+        from utils.workshop import filter_not_deployed, generate_workshops
+        from utils.cortex_rest_helpers import cortex_complete_rest_stream
+        display_rows_by_region = filter_not_deployed(gap_rows_by_region)
+        ws_rows = [r for rows in display_rows_by_region.values() for r in rows]
+        # Same background-thread + polling pattern as _run_gap_rows above,
+        # so the live call log keeps updating during workshop generation.
+        _ws_result = {}
+        # Account-context reads run as the viewer (caller's rights); cache,
+        # audit and LLM calls stay on the owner connection.
+        _ws_data_conn = st.session_state.get("caller_conn") or conn
+        _ws_diagnostics = []
+        if st.session_state.get("caller_conn") is None and st.session_state.get("caller_conn_error"):
+            st.caption("Caller's-rights connection unavailable; account context is read with the app's role.")
+        def _run_workshops():
+            try:
+                _ws_result["workshops"] = generate_workshops(
+                    # Session 2 plans are long (~12K tokens): stream with retries.
+                    conn, ws_rows, selected_partner, cortex_complete_rest_stream,
+                    call_log=call_log, log_wrap=_logged_rest_call,
+                    data_conn=_ws_data_conn, diagnostics=_ws_diagnostics,
+                )
+            except Exception as e:
+                _ws_result["error"] = e
+        st.caption(f"Preparing workshop plans for {len(ws_rows)} use cases…")
+        _ws_thread = threading.Thread(target=_run_workshops, daemon=True)
+        add_script_run_ctx(_ws_thread, get_script_run_ctx())
+        _ws_thread.start()
+        while _ws_thread.is_alive():
+            _render_call_log(call_log_ph, call_log, done=False)
+            time.sleep(0.4)
+        _ws_thread.join()
+        _render_call_log(call_log_ph, call_log, done=True)
+        if "error" in _ws_result or _ws_result.get("workshops") is None:
+            st.warning(f"Workshop plans unavailable this run: {_ws_result.get('error', 'no result')}")
+            workshops = []
+        else:
+            workshops = _ws_result["workshops"]
+        # Tag each plan with its report region and order NoAM, EMEA, APJ
+        # (others last); within a region generation order is kept.
+        _ws_region = {r.get("uc_id"): reg for reg, rows in display_rows_by_region.items() for r in rows}
+        _ws_order = {"NoAM": 0, "EMEA": 1, "APJ": 2}
+        for _w in workshops:
+            if isinstance(_w, dict):
+                _w["region"] = _ws_region.get(_w.get("uc_id"), "")
+        workshops = sorted(workshops, key=lambda w: _ws_order.get(
+            w.get("region", "") if isinstance(w, dict) else "", 3))
+        _ws_degraded = [d for d in _ws_diagnostics if d.startswith("degraded: ")]
+        if any(d.split(":")[0] in ("listed", "a360", "context") for d in _ws_diagnostics):
+            st.caption("Some account context was unavailable for your role; "
+                       "workshop plans used the use-case summary.")
+        if _ws_degraded:
+            _n, _m = _ws_degraded[-1][len("degraded: "):].split("/")
+            if int(_n):
+                st.caption(f"Workshop plans: {_n} of {_m} used fallback content")
 
         report_html = _build_report_html(
             selected_partner, q_start, q_end, target, coco_count, total_ucs, coco_pct,
@@ -2317,4 +2312,4 @@ else:
             )
 
         st.divider()
-        components.html(_html, height=2200 if get_env() == "dev" else 1400, scrolling=True)
+        components.html(_html, height=2200, scrolling=True)
